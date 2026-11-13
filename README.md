@@ -82,6 +82,26 @@ npx cdk synth -c env=dev --no-lookups
 
 The `env` context is required and must be `dev` or `prod`; the app reads `config/<env>.json`.
 
+### What local verification proves
+
+`npm run verify` runs entirely on the local machine with invented data; it never deploys, bootstraps or calls AWS. Besides the per-handler tests, `test/lambda/test_core_pipeline.py` runs the Core pipeline end to end through the real handlers: scheduled discovery, the account-list S3 notification, the account reader, case retrieval and annotation, the workflow starter, every CaseAnalysis task and the processed-record commit, plus run completion and cleanup. `test/support/pipeline_kit.py` stands in only for the AWS services: moto S3, SQS and DynamoDB, SQS event source mapping semantics (batches, partial-batch failures, visibility timeouts, dead-letter redrive), the state machine's task order, retries and Catch, and paginated synthetic Organizations, Support and Bedrock responses. It covers pagination, excluded and skipped accounts, unresolved and already-processed cases, complete conversations, duplicate deliveries, stage and commit faults, redrive and next-run recovery, cleanup of abandoned work next to running work, and when the daily-completion heartbeat is emitted.
+
+`enableAnalytics` and `enableMcp` (both `true` in `config/dev.json`) are validated but do not create any stacks yet, so the Core and member-role stacks synthesise and are tested on their own.
+
+### Deferred live verification
+
+None of the following has been run. Local tests, snapshots, synth and cdk-nag results are not evidence for them; each needs a real AWS deployment:
+
+- [ ] Clean deployment of the dev configuration (`npx cdk deploy -c env=dev`) after bootstrapping and enabling StackSets trusted access.
+- [ ] A second deployment with no changes reports no differences (`npx cdk diff -c env=dev`).
+- [ ] The member-role StackSet reaches `CURRENT` and `Support-Case-Analysis-Role-<uniqueId>` exists in the targeted member accounts with the expected trust.
+- [ ] Member accounts with Business, Enterprise On-Ramp or Enterprise Support return cases; accounts without that entitlement are skipped as `SubscriptionRequired`.
+- [ ] A scheduled or manual run processes real cases through Bedrock (model access and Marketplace subscription in place) and writes processed records.
+- [ ] Every dead-letter queue and the terminal failure queues stay empty after a normal run.
+- [ ] The dashboard shows data, the alarms are in the expected state and the alarm email subscription is confirmed; `DailyRunCompleted` arrives after a run.
+- [ ] Athena queries over the processed records (once the Analytics stack exists).
+- [ ] MCP client connectivity, including Kiro, and rejection of unsigned requests with HTTP 403 (once the MCP server exists).
+
 ## Configuration
 
 `config/schema.json` is the published contract for `config/<env>.json`. The loader in `lib/config/` validates each file against it, applies its defaults, then checks the cross-field rules listed in the schema `$comment`. Synthesis stops with a list of problems if anything is invalid.

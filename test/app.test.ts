@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { aws_s3 as s3 } from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import {
   addCaseInsightsStacks,
   CaseInsightsCoreStack,
@@ -29,14 +29,33 @@ describe('Support Case Insights app', () => {
     expect(app.node.children.filter((child) => child instanceof CaseInsightsMemberRoleStack)).toHaveLength(1);
   });
 
-  test.each(['dev', 'prod'] as const)('%s configuration synthesises with validation plugins passing', (env) => {
+  test.each(['dev', 'prod'] as const)('%s configuration synthesises with cdk-nag enforcing and no findings left', (env) => {
     const app = testApp();
-    addCaseInsightsStacks(app, { env });
-    const assembly = app.synth();
+    const { config, core, memberRole } = addCaseInsightsStacks(app, { env });
+    // cdk-nag is registered by addCaseInsightsStacks, so an unacknowledged finding makes synth throw
+    // (proved by 'cdk-nag findings fail synthesis'). A passing synth writes a report with no plugin
+    // entries at all, so the report cannot be the evidence on its own.
+    let assembly: ReturnType<typeof app.synth> | undefined;
+    expect(() => {
+      assembly = app.synth();
+    }).not.toThrow();
+    if (assembly === undefined) {
+      throw new Error('synthesis produced no cloud assembly');
+    }
     const report = JSON.parse(fs.readFileSync(path.join(assembly.directory, 'validation-report.json'), 'utf8')) as {
+      title: string;
       pluginReports: { pluginName: string; conclusion: string }[];
     };
-    expect(report.pluginReports.every((plugin) => plugin.conclusion === 'success')).toBe(true);
+    expect(report.title).toBe('Validation Report');
+    expect(report.pluginReports.filter((plugin) => plugin.conclusion !== 'success')).toEqual([]);
+    for (const stack of [core, memberRole]) {
+      Annotations.fromStack(stack).hasNoError('*', Match.anyValue());
+    }
+    // Only the Core and member-role stacks exist; Analytics and MCP flags (enabled in dev) do not
+    // create stacks yet, so Core synthesises and is tested on its own.
+    expect(assembly.stacks.map((stack) => stack.stackName).sort()).toEqual(
+      [`CaseInsightsCoreStack-${config.uniqueId}`, `CaseInsightsMemberRoleStack-${config.uniqueId}`].sort(),
+    );
   });
 
   test.each(['dev', 'prod'] as const)('%s core stack template snapshot', (env) => {
