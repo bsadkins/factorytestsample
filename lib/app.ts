@@ -1,6 +1,7 @@
 import { type App, Tags } from 'aws-cdk-lib';
 import { type CaseInsightsConfig, type EnvironmentName, loadEnvironmentConfig, resourceNames } from './config';
 import { enableNagChecks } from './nag';
+import { CaseInsightsAnalyticsStack } from './stacks/analytics-stack';
 import { CaseInsightsCoreStack } from './stacks/core-stack';
 import { CaseInsightsMemberRoleStack } from './stacks/member-role-stack';
 
@@ -14,6 +15,8 @@ export interface CaseInsightsAppStacks {
   readonly config: CaseInsightsConfig;
   readonly core: CaseInsightsCoreStack;
   readonly memberRole: CaseInsightsMemberRoleStack;
+  /** Present only when enableAnalytics is true. */
+  readonly analytics?: CaseInsightsAnalyticsStack;
 }
 
 /**
@@ -48,5 +51,17 @@ export function addCaseInsightsStacks(app: App, options: CaseInsightsAppOptions)
   // roles must be created before any StackSet instance.
   memberRole.addStackDependency(core, 'Member role trusts core execution roles');
 
-  return { config, core, memberRole };
+  const analytics = config.enableAnalytics
+    ? new CaseInsightsAnalyticsStack(app, names.analyticsStack, {
+        stackName: names.analyticsStack,
+        description: `Support Case Insights Glue catalog, crawler and Athena workgroup (${config.uniqueId})`,
+        env,
+        config,
+        processedBucket: core.storage.processedBucket,
+        accessLogsBucket: core.storage.accessLogsBucket,
+      })
+    : undefined;
+  analytics?.addStackDependency(core, 'Analytics reads the Core processed and access-log buckets');
+
+  return { config, core, memberRole, analytics };
 }

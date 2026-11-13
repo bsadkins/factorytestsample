@@ -90,7 +90,7 @@ describe('defaults', () => {
         workflow: { executionTimeoutMinutes: 60, starterMaxConcurrency: 2, taskMaxAttempts: 3 },
         cleanup: { graceHours: 24 },
         storage: { processedInfrequentAccessDays: 90, noncurrentVersionRetentionDays: 30, accessLogRetentionDays: 365 },
-        athena: { bytesScannedCutoffPerQuery: 10737418240 },
+        athena: { bytesScannedCutoffPerQuery: 10737418240, resultsRetentionDays: 30 },
         mcp: { reservedConcurrency: 20, throttleRateLimit: 10, throttleBurstLimit: 20, wafRateLimitPer5Minutes: 300 },
       },
     });
@@ -167,6 +167,9 @@ describe('rejected configurations', () => {
     ['consumer timeout above Lambda maximum', withOperations({ functions: { consumerTimeoutSeconds: 901 } }), /must be <= 900/],
     ['starter concurrency below SQS minimum', withOperations({ workflow: { starterMaxConcurrency: 1 } }), /must be >= 2/],
     ['Athena cutoff below service minimum', withOperations({ athena: { bytesScannedCutoffPerQuery: 1024 } }), /must be >= 10485760/],
+    ['Athena cutoff above 1 TiB', withOperations({ athena: { bytesScannedCutoffPerQuery: 1099511627777 } }), /must be <= 1099511627776/],
+    ['Athena results kept for zero days', withOperations({ athena: { resultsRetentionDays: 0 } }), /must be >= 1/],
+    ['fractional Athena results retention', withOperations({ athena: { resultsRetentionDays: 1.5 } }), /must be integer/],
     ['IA transition before 30 days', withOperations({ storage: { processedInfrequentAccessDays: 7 } }), /must be >= 30/],
     ['unknown operations group', withOperations({ vpc: {} }), /unsupported property "vpc"/],
     [

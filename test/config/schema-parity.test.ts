@@ -49,7 +49,7 @@ const OPERATIONS_KEYS = {
   workflow: { executionTimeoutMinutes: true, starterMaxConcurrency: true, taskMaxAttempts: true },
   cleanup: { graceHours: true },
   storage: { processedInfrequentAccessDays: true, noncurrentVersionRetentionDays: true, accessLogRetentionDays: true },
-  athena: { bytesScannedCutoffPerQuery: true },
+  athena: { bytesScannedCutoffPerQuery: true, resultsRetentionDays: true },
   mcp: { reservedConcurrency: true, throttleRateLimit: true, throttleBurstLimit: true, wafRateLimitPer5Minutes: true },
 } satisfies { [G in keyof OperationsConfig]: Record<keyof OperationsConfig[G], true> };
 

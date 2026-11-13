@@ -16,10 +16,11 @@ This branch currently contains the project foundation and the shared Python runt
 - observability (`Observability`): the hourly run completion check that emits the daily-completion heartbeat, the alarm topic, the alarms and the operations dashboard, described in [Observability and daily completion](#observability-and-daily-completion);
 - reusable constructs for later pipeline stages: a standard Python function factory (`PipelineFunction`) and the Bedrock model allowlist policy (`BedrockInvokePolicy`);
 - the shared Python package `src/lambda/common/` (taxonomies, prompt rendering, model-output validation, Bedrock, STS, S3, SQS and retry helpers) and the prompt templates in `src/templates/`, packaged as two Lambda layers;
+- the optional Analytics stack (`enableAnalytics`), described in [Analytics](#analytics);
 - strict TypeScript and Python tooling, exact dependency pins, an npm lockfile and hash-locked Python requirements;
 - local lint, type-check, test, synth and security commands.
 
-The Analytics stack, MCP server, CDK pipeline and full documentation are **not implemented yet**; [docs/runbook.md](docs/runbook.md) is a provisional alarm runbook. Nothing has been deployed to AWS; StackSet instance creation is untested until a real deployment.
+The MCP server, CDK pipeline and full documentation are **not implemented yet**; [docs/runbook.md](docs/runbook.md) is a provisional alarm runbook. Nothing has been deployed to AWS; StackSet instance creation is untested until a real deployment.
 
 ## Security foundation
 
@@ -29,7 +30,7 @@ The Analytics stack, MCP server, CDK pipeline and full documentation are **not i
 - The member role trusts only `CaseInsights-CaseRetrieval-<uniqueId>` and `CaseInsights-CaseAnnotation-<uniqueId>` in the management account, with an `aws:PrincipalOrgID` condition, and grants only `support:DescribeCases` and `support:DescribeCommunications`. Those two roles can assume only that role name, in accounts of the configured organization. Service-managed StackSets never deploy to the management account. StackSets trusted access must be enabled before deployment.
 - `BedrockInvokePolicy` allows the configured global inference profile plus its Regional and global foundation-model ARNs (only through that profile), explicitly denies every other model, limits `aws-marketplace:Subscribe` to the approved product IDs (`prod-xdkflymybwmvi` for Claude Haiku 4.5, `prod-mxcfnwvpd6kb4` for Claude Sonnet 4.5) and allows `aws-marketplace:ViewSubscriptions`, which has no resource or condition scoping. IAM cannot complete Anthropic's first-time-use form; that remains an account prerequisite.
 - Each schedule (account lookup, cleanup, run completion) has its own execution role that can invoke only its target function. The roles trust `scheduler.amazonaws.com` only with `aws:SourceAccount` equal to the management account and `aws:SourceArn` equal to the `default` schedule group ARN. Scheduler always sends the schedule group ARN, so a trust policy cannot name an individual schedule.
-- cdk-nag acknowledgements are made with `acknowledgeNagFinding` on the narrowest construct and finding ID, each with a written reason; `test/app.test.ts` lists every acknowledgement in the app.
+- cdk-nag acknowledgements are made with `acknowledgeNagFinding` on the narrowest construct and finding ID, each with a written reason; `test/app.test.ts` lists every Core acknowledgement and `test/stacks/analytics-stack.test.ts` every Analytics acknowledgement.
 
 ## Case analysis and recovery
 
@@ -49,6 +50,13 @@ The Analytics stack, MCP server, CDK pipeline and full documentation are **not i
 - **Alarms.** All alarms notify the SNS topic `CaseInsights-Alarms-<uniqueId>`: errors of every function, CaseAnalysis executions failed, timed out or aborted, any visible message in each dead-letter queue and in the workflow-failure and discovery-failure terminal queues, failure records written (including conversations too large to summarise and reconciled records), failure-delivery errors, cleanup errors, persistent run completion errors, and no `DailyRunCompleted` for 30 hours (missing data counts as breaching). Each alarm has an entry in [docs/runbook.md](docs/runbook.md).
 - **Email notifications.** Set `alarmEmail` to subscribe an address (required in prod). AWS emails a confirmation link after deployment; notifications are delivered only after the recipient confirms. The topic requires TLS but is not encrypted at rest: CloudWatch alarms can publish to an encrypted topic only through a customer managed KMS key, which this solution does not use. Notifications carry alarm names and states, never case content. The topic policy lets `cloudwatch.amazonaws.com` publish only for alarms in the management account named `CaseInsights-<uniqueId>-*`.
 - **Dashboard.** `CaseInsights-<uniqueId>` shows accounts discovered, excluded and skipped; cases retrieved, annotated, processed and failed; Bedrock latency, tokens, throttles and failures; workflow executions and success rate; dead-letter and terminal queue depth; run completion; cleanup and failure-record reconciliation; Lambda errors; and the state of every alarm.
+
+## Analytics
+
+- **Stack.** With `enableAnalytics` set (the default in both shipped configurations), `CaseInsightsAnalyticsStack-<uniqueId>` is deployed after Core. It reads the Core processed and access-log buckets through CDK weak cross-stack references (no exports); Core never references it. With the flag off no Glue, Athena or results-bucket resources exist anywhere.
+- **Catalog.** Glue database `case_insights_<uniqueId>` (hyphens become underscores) holds the external table `case_summary` over `s3://<processed bucket>/`, partitioned by `account_number` and `case_number` (`account_number=<id>/case_number=<displayId>/data.json`). It uses the OpenX JSON SerDe with case-sensitive matching: Glue column names are lower case, and each column maps explicitly to its mixed-case JSON key (for example `rca_category` reads `RCA_Category`). Every column is a string; dates stay ISO-8601 text. A Jest test checks the columns against `common.processed_record.PROCESSED_FIELDS`.
+- **Partition refresh.** The crawler `case-insights-partition-crawler-<uniqueId>` runs on `schedules.crawler` (default `cron(0 9 * * ? *)`, 09:00 UTC). It targets the existing table, adds new partitions and only logs schema changes, so newly processed cases become queryable after the next crawl. Run it sooner with the `ManualCrawlerStartCommand` stack output (`aws glue start-crawler --name case-insights-partition-crawler-<uniqueId> --region <region>`). Its role, trusted only by Glue, can read processed records and refresh partitions of this table; it cannot write or delete records.
+- **Workgroup.** `CaseInsights-<uniqueId>` (Athena engine version 3) enforces its configuration: results go to `query-results/` in a dedicated private, versioned, SSE-S3 results bucket (`SSE_S3` result encryption, no KMS key) that expires results after `operations.athena.resultsRetentionDays` (default 30), and each query stops after `operations.athena.bytesScannedCutoffPerQuery` bytes (default 10 GiB, minimum 10 MiB). The results bucket logs to the Core access-log bucket under `athena-results/`.
 
 ## Prerequisites
 
@@ -87,7 +95,7 @@ The `env` context is required and must be `dev` or `prod`; the app reads `config
 
 `npm run verify` runs entirely on the local machine with invented data; it never deploys, bootstraps or calls AWS. Besides the per-handler tests, `test/lambda/test_core_pipeline.py` runs the Core pipeline end to end through the real handlers: scheduled discovery, the account-list S3 notification, the account reader, case retrieval and annotation, the workflow starter, every CaseAnalysis task and the processed-record commit, plus run completion and cleanup. `test/support/pipeline_kit.py` stands in only for the AWS services: moto S3, SQS and DynamoDB, SQS event source mapping semantics (batches, partial-batch failures, visibility timeouts, dead-letter redrive), the state machine's task order, retries and Catch, and paginated synthetic Organizations, Support and Bedrock responses. It covers pagination, excluded and skipped accounts, unresolved and already-processed cases, complete conversations, duplicate deliveries, stage and commit faults, redrive and next-run recovery, cleanup of abandoned work next to running work, and when the daily-completion heartbeat is emitted.
 
-`enableAnalytics` and `enableMcp` (both `true` in `config/dev.json`) are validated but do not create any stacks yet, so the Core and member-role stacks synthesise and are tested on their own.
+`enableAnalytics` adds the Analytics stack; `enableMcp` (also `true` in `config/dev.json`) is validated but does not create a stack yet. `test/stacks/analytics-stack.test.ts` synthesises Analytics on and MCP off, and Analytics off, from validated configuration overrides.
 
 ### Deferred live verification
 
@@ -100,7 +108,7 @@ None of the following has been run. Local tests, snapshots, synth and cdk-nag re
 - [ ] A scheduled or manual run processes real cases through Bedrock (model access and Marketplace subscription in place) and writes processed records.
 - [ ] Every dead-letter queue and the terminal failure queues stay empty after a normal run.
 - [ ] The dashboard shows data, the alarms are in the expected state and the alarm email subscription is confirmed; `DailyRunCompleted` arrives after a run.
-- [ ] Athena queries over the processed records (once the Analytics stack exists).
+- [ ] The crawler adds partitions for real processed records, and Athena queries in `CaseInsights-<uniqueId>` return them with results encrypted in the results bucket.
 - [ ] MCP client connectivity, including Kiro, and rejection of unsigned requests with HTTP 403 (once the MCP server exists).
 
 ## Configuration

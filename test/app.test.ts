@@ -31,7 +31,7 @@ describe('Support Case Insights app', () => {
 
   test.each(['dev', 'prod'] as const)('%s configuration synthesises with cdk-nag enforcing and no findings left', (env) => {
     const app = testApp();
-    const { config, core, memberRole } = addCaseInsightsStacks(app, { env });
+    const { config, core, memberRole, analytics } = addCaseInsightsStacks(app, { env });
     // cdk-nag is registered by addCaseInsightsStacks, so an unacknowledged finding makes synth throw
     // (proved by 'cdk-nag findings fail synthesis'). A passing synth writes a report with no plugin
     // entries at all, so the report cannot be the evidence on its own.
@@ -48,13 +48,19 @@ describe('Support Case Insights app', () => {
     };
     expect(report.title).toBe('Validation Report');
     expect(report.pluginReports.filter((plugin) => plugin.conclusion !== 'success')).toEqual([]);
-    for (const stack of [core, memberRole]) {
-      Annotations.fromStack(stack).hasNoError('*', Match.anyValue());
+    expect(analytics).toBeDefined();
+    for (const stack of [core, memberRole, analytics]) {
+      if (stack !== undefined) {
+        Annotations.fromStack(stack).hasNoError('*', Match.anyValue());
+      }
     }
-    // Only the Core and member-role stacks exist; Analytics and MCP flags (enabled in dev) do not
-    // create stacks yet, so Core synthesises and is tested on its own.
+    // Both shipped configurations enable Analytics; the MCP flag (enabled in dev) does not create a stack yet.
     expect(assembly.stacks.map((stack) => stack.stackName).sort()).toEqual(
-      [`CaseInsightsCoreStack-${config.uniqueId}`, `CaseInsightsMemberRoleStack-${config.uniqueId}`].sort(),
+      [
+        `CaseInsightsCoreStack-${config.uniqueId}`,
+        `CaseInsightsMemberRoleStack-${config.uniqueId}`,
+        `CaseInsightsAnalyticsStack-${config.uniqueId}`,
+      ].sort(),
     );
   });
 
@@ -86,8 +92,10 @@ describe('Support Case Insights app', () => {
 
   test('every cdk-nag acknowledgement is listed here with a specific reason', () => {
     const app = testApp();
-    const { config, core: coreStack } = addCaseInsightsStacks(app, { env: 'dev' });
-    const acknowledged = acknowledgedRules(app).map(({ path: constructPath, id, reason }) => ({
+    const { config, core: coreStack, analytics } = addCaseInsightsStacks(app, { env: 'dev' });
+    // Analytics acknowledgements are listed in test/stacks/analytics-stack.test.ts.
+    const analyticsPrefix = `${analytics?.stackName ?? 'missing'}/`;
+    const acknowledged = acknowledgedRules(app).filter(({ path: constructPath }) => !constructPath.startsWith(analyticsPrefix)).map(({ path: constructPath, id, reason }) => ({
       path: constructPath,
       id: id.replace(/^.*::(?=AwsSolutions-)/, ''),
       reason,

@@ -284,6 +284,13 @@
               "minimum": 10485760,
               "maximum": 1099511627776,
               "default": 10737418240
+            },
+            "resultsRetentionDays": {
+              "type": "integer",
+              "description": "Days Athena query results (which can contain case content) are kept in the Analytics results bucket.",
+              "minimum": 1,
+              "maximum": 3650,
+              "default": 30
             }
           }
         },

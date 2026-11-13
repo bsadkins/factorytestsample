@@ -3,6 +3,26 @@
 exports[`Support Case Insights app dev core stack template snapshot 1`] = `
 {
   "Description": "Support Case Insights core pipeline (scidev)",
+  "Outputs": {
+    "PublishOutputFnGetAttStorageProcessedBucket69BE6922ArnCAED39FC": {
+      "Value": {
+        "Fn::GetAtt": [
+          "StorageProcessedBucket69BE6922",
+          "Arn",
+        ],
+      },
+    },
+    "PublishOutputRefStorageAccessLogsBucketFEE4D6FB763CD76F": {
+      "Value": {
+        "Ref": "StorageAccessLogsBucketFEE4D6FB",
+      },
+    },
+    "PublishOutputRefStorageProcessedBucket69BE692206355CC2": {
+      "Value": {
+        "Ref": "StorageProcessedBucket69BE6922",
+      },
+    },
+  },
   "Parameters": {
     "BootstrapVersion": {
       "Default": "/cdk-bootstrap/hnb659fds/version",
@@ -6533,6 +6553,33 @@ def sort_filter_rules(json_obj):
                 ],
               },
             },
+            {
+              "Action": "s3:PutObject",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": "111111111111",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "logging.s3.amazonaws.com",
+              },
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageAccessLogsBucketFEE4D6FB",
+                        "Arn",
+                      ],
+                    },
+                    "/athena-results/*",
+                  ],
+                ],
+              },
+              "Sid": "AllowAthenaResultsAccessLogs",
+            },
           ],
           "Version": "2012-10-17",
         },
@@ -7350,6 +7397,26 @@ def sort_filter_rules(json_obj):
 exports[`Support Case Insights app prod core stack template snapshot 1`] = `
 {
   "Description": "Support Case Insights core pipeline (sciprod)",
+  "Outputs": {
+    "PublishOutputFnGetAttStorageProcessedBucket69BE6922ArnCAED39FC": {
+      "Value": {
+        "Fn::GetAtt": [
+          "StorageProcessedBucket69BE6922",
+          "Arn",
+        ],
+      },
+    },
+    "PublishOutputRefStorageAccessLogsBucketFEE4D6FB763CD76F": {
+      "Value": {
+        "Ref": "StorageAccessLogsBucketFEE4D6FB",
+      },
+    },
+    "PublishOutputRefStorageProcessedBucket69BE692206355CC2": {
+      "Value": {
+        "Ref": "StorageProcessedBucket69BE6922",
+      },
+    },
+  },
   "Parameters": {
     "BootstrapVersion": {
       "Default": "/cdk-bootstrap/hnb659fds/version",
@@ -13771,6 +13838,33 @@ def sort_filter_rules(json_obj):
                   ],
                 ],
               },
+            },
+            {
+              "Action": "s3:PutObject",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": "111111111111",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "logging.s3.amazonaws.com",
+              },
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageAccessLogsBucketFEE4D6FB",
+                        "Arn",
+                      ],
+                    },
+                    "/athena-results/*",
+                  ],
+                ],
+              },
+              "Sid": "AllowAthenaResultsAccessLogs",
             },
           ],
           "Version": "2012-10-17",

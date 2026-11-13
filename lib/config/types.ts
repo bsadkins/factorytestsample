@@ -54,6 +54,7 @@ export interface StorageOperationsConfig {
 
 export interface AthenaOperationsConfig {
   readonly bytesScannedCutoffPerQuery: number;
+  readonly resultsRetentionDays: number;
 }
 
 export interface McpOperationsConfig {

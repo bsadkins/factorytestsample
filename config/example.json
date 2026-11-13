@@ -45,7 +45,8 @@
       "accessLogRetentionDays": 365
     },
     "athena": {
-      "bytesScannedCutoffPerQuery": 10737418240
+      "bytesScannedCutoffPerQuery": 10737418240,
+      "resultsRetentionDays": 30
     },
     "mcp": {
       "reservedConcurrency": 20,
