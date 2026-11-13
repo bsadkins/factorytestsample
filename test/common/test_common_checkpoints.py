@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import boto3
@@ -129,3 +130,25 @@ def test_invalid_checkpoint_is_never_stored(bucket: str) -> None:
     s3 = boto3.client("s3", region_name="us-east-1")
     with pytest.raises(ValueError, match="invalid rca checkpoint"):
         save_checkpoint(s3, bucket, rca("Not a category"), REF)
+
+
+SUMMARY_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "prompts" / "summaries.json"
+
+
+def summary_fixture(case_id: str) -> str:
+    cases: list[dict[str, Any]] = json.loads(SUMMARY_FIXTURES.read_text(encoding="utf-8"))["cases"]
+    return str(next(case["text"] for case in cases if case["id"] == case_id))
+
+
+@pytest.mark.parametrize(
+    ("fixture", "issue"),
+    [
+        ("markdown-emphasis-asterisk", "summary_invalid"),
+        ("markdown-emphasis-underscore", "summary_invalid"),
+        ("technical-underscore-arithmetic", None),
+    ],
+)
+def test_summary_checkpoints_follow_the_summary_format_contract(
+    fixture: str, issue: str | None
+) -> None:
+    assert output_issue("summary", {"Case_Summary": summary_fixture(fixture)}) == issue

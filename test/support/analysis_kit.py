@@ -191,6 +191,7 @@ class AnalysisEnv:
     log_stream: io.StringIO
     capsys: pytest.CaptureFixture[str]
     sleeps: list[float]
+    during_sleep: dict[int, Callable[[], None]]
     make_context: Callable[[], LambdaContext]
     parse_metrics: Callable[[str], dict[str, float]]
     stdout: str = field(default="")
@@ -345,7 +346,16 @@ def analysis_env(
     update_clients = update_app.Clients(s3=s3)
     monkeypatch.setattr(update_app, "clients", lambda: update_clients)
     sleeps: list[float] = []
-    monkeypatch.setattr(analysis, "sleep", sleeps.append)
+    during_sleep: dict[int, Callable[[], None]] = {}
+
+    def backoff(delay: float) -> None:
+        """Record a retry delay and run the side effect queued for that backoff, if any."""
+        sleeps.append(delay)
+        effect = during_sleep.pop(len(sleeps), None)
+        if effect is not None:
+            effect()
+
+    monkeypatch.setattr(analysis, "sleep", backoff)
 
     stream = io.StringIO()
     service_logger = logging.getLogger("handler-test")
@@ -358,6 +368,7 @@ def analysis_env(
         log_stream=stream,
         capsys=capsys,
         sleeps=sleeps,
+        during_sleep=during_sleep,
         make_context=make_context,
         parse_metrics=metrics_in,
     )

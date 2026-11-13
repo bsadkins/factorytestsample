@@ -119,3 +119,45 @@ def test_issue_descriptions_are_safe_generic_text() -> None:
     assert described
     assert all("SENTINEL" not in line for line in described)
     assert any("600" in line for line in described)
+
+
+@pytest.mark.parametrize(
+    ("plain", "emphasised"),
+    [
+        ("customer reported", "*customer* reported"),
+        ("customer reported", "_customer_ reported"),
+        ("customer reported", "(*customer*) reported"),
+        ("in us-east-1 after", "in _us-east-1_, after"),
+        ("customer reported", "*customer reported*"),
+    ],
+    ids=["asterisk", "underscore", "asterisk-in-parentheses", "underscore-before-comma", "phrase"],
+)
+def test_single_delimiter_emphasis_is_markdown(plain: str, emphasised: str) -> None:
+    text = valid_summary().replace(plain, emphasised, 1)
+    assert emphasised in text
+    result = check_summary(text)
+    assert "markdown" in result.issues
+    assert SUMMARY_MIN_CHARS <= result.length <= SUMMARY_MAX_CHARS
+
+
+@pytest.mark.parametrize(
+    "technical",
+    [
+        "the ec2_instance_id tag",
+        "a * b/2*3 tasks",
+        "my_var and other_var values",
+        "the *.log and *.txt files",
+        "an s3:Get* action",
+        "2*3*4 hosts",
+    ],
+    ids=["snake-case", "arithmetic", "two-identifiers", "globs", "iam-wildcard", "product"],
+)
+def test_technical_underscores_and_asterisks_are_not_markdown(technical: str) -> None:
+    text = valid_summary().replace("port 8081", technical, 1)
+    assert technical in text
+    assert "markdown" not in check_summary(text).issues
+
+
+def test_markdown_issue_description_mentions_emphasis() -> None:
+    (description,) = describe_issues(["markdown"])
+    assert "emphasis" in description

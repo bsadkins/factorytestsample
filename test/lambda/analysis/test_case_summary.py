@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import json
 import unicodedata
+from typing import Any
 
 import pytest
-from analysis_kit import AnalysisEnv
+from analysis_kit import AnalysisEnv, summary_fixture
 from common.analysis import IncompleteAnalysisError, InvalidWorkflowInputError
 from common.bedrock import BedrockThrottlingError, UnsupportedModelError
 from common.conversation import (
@@ -161,6 +162,9 @@ def test_token_limit_outside_the_supported_range_is_rejected_before_any_call(
         (prose(620).replace("Sentence 2", "**Sentence 2**"), False),
         (prose(600).replace(". Sentence 3", ".\nSentence 3"), False),
         (prose(610) + " (610 characters)", False),
+        (summary_fixture("markdown-emphasis-asterisk"), False),
+        (summary_fixture("markdown-emphasis-underscore"), False),
+        (summary_fixture("technical-underscore-arithmetic"), True),
     ],
     ids=[
         "600-chars",
@@ -177,6 +181,9 @@ def test_token_limit_outside_the_supported_range_is_rejected_before_any_call(
         "markdown",
         "line-break",
         "self-audit",
+        "emphasis-asterisk",
+        "emphasis-underscore",
+        "technical-underscore-arithmetic",
     ],
 )
 def test_summary_constraints_are_enforced_through_the_handler(
@@ -462,3 +469,165 @@ def test_missing_or_mismatched_conversation_is_an_incomplete_analysis(
     with pytest.raises(IncompleteAnalysisError, match="ConversationMissing"):
         env.summary({"case": {**case, "communicationsVersionId": None}})
     assert env.bedrock.requests == []
+
+
+@pytest.mark.parametrize("fixture", ["markdown-emphasis-asterisk", "markdown-emphasis-underscore"])
+def test_inline_emphasis_gets_a_markdown_correction(
+    analysis_env: AnalysisEnv, fixture: str
+) -> None:
+    env = analysis_env
+    state = env.seed_case()
+    emphasised = summary_fixture(fixture)
+    env.bedrock.reply(emphasised, env.valid_summary)
+
+    assert env.summary(state)["status"] == "completed"
+
+    correction = render_summary_correction(describe_issues(["markdown"]), directory=env.templates)
+    assert env.bedrock.prompts(1) == [
+        user(expected_prompt(env)),
+        assistant(emphasised),
+        user(correction),
+    ]
+    checkpoint = env.checkpoint("summary")
+    assert checkpoint is not None
+    assert checkpoint["output"]["Case_Summary"] == env.valid_summary
+    assert '"markdown"' in env.logs()
+    assert emphasised[:60] not in env.logs()
+
+
+@pytest.mark.parametrize("fixture", ["markdown-emphasis-asterisk", "markdown-emphasis-underscore"])
+def test_repeated_inline_emphasis_fails_without_checkpoint_or_processed_record(
+    analysis_env: AnalysisEnv, fixture: str
+) -> None:
+    env = analysis_env
+    state = env.seed_case()
+    emphasised = summary_fixture(fixture)
+    env.bedrock.reply(emphasised, emphasised)
+
+    with pytest.raises(Exception, match="markdown") as info:
+        env.summary(state)
+
+    assert type(info.value).__name__ == "SummaryValidationError"
+    assert len(env.bedrock.requests) == 2
+    assert env.checkpoint("summary") is None
+    with pytest.raises(IncompleteAnalysisError):
+        env.update(state)
+    assert env.processed() is None
+
+
+def winning_checkpoint(env: AnalysisEnv, state: dict[str, Any]) -> dict[str, Any]:
+    """Produce a valid summary checkpoint, then remove it so a 'concurrent attempt' can
+    write it back later."""
+    env.bedrock.reply(env.valid_summary)
+    env.summary(state)
+    winner = env.checkpoint("summary")
+    assert winner is not None
+    env.s3.delete_object(Bucket=env.raw_bucket, Key=CHECKPOINT_KEY)
+    env.bedrock.requests.clear()
+    env.metrics()
+    return winner
+
+
+RETRYABLE_ERRORS = [("ThrottlingException", 429), ("ModelTimeoutException", 408)]
+
+
+@pytest.mark.parametrize(("code", "status"), RETRYABLE_ERRORS)
+def test_record_committed_during_backoff_stops_the_retry(
+    analysis_env: AnalysisEnv, code: str, status: int
+) -> None:
+    env = analysis_env
+    state = env.seed_case()
+    env.bedrock.error(code, status)
+    env.during_sleep[1] = env.mark_processed
+
+    result = env.summary(state)
+
+    assert result == {
+        "stage": "summary",
+        "status": "alreadyProcessed",
+        "accountId": env.account,
+        "displayId": env.display,
+        "processedKey": env.processed_key(),
+    }
+    assert len(env.bedrock.requests) == 1
+    assert len(env.sleeps) == 1
+    assert env.checkpoint("summary") is None
+    metrics = env.metrics()
+    assert metrics["StagesSkippedAlreadyProcessed"] == 1
+    assert "BedrockInvocations" not in metrics
+    assert "BedrockInvocationFailures" not in metrics
+    if code == "ThrottlingException":
+        assert metrics["BedrockThrottles"] == 1
+    output = env.logs() + env.stdout
+    for secret in env.sentinels:
+        assert secret not in output
+
+
+@pytest.mark.parametrize(("code", "status"), RETRYABLE_ERRORS)
+def test_checkpoint_saved_during_backoff_is_reused_instead_of_retrying(
+    analysis_env: AnalysisEnv, code: str, status: int
+) -> None:
+    env = analysis_env
+    state = env.seed_case()
+    winner = winning_checkpoint(env, state)
+    env.bedrock.error(code, status)
+    env.during_sleep[1] = lambda: env.put_checkpoint("summary", winner)
+
+    result = env.summary(state)
+
+    assert result["status"] == "reused"
+    assert result["checkpointKey"] == CHECKPOINT_KEY
+    assert len(env.bedrock.requests) == 1
+    assert env.checkpoint("summary") == winner
+    assert env.metrics()["CheckpointsReused"] == 1
+
+
+def test_checkpoint_saved_during_correction_backoff_is_reused(
+    analysis_env: AnalysisEnv,
+) -> None:
+    env = analysis_env
+    state = env.seed_case()
+    winner = winning_checkpoint(env, state)
+    env.bedrock.reply("Too short.")
+    env.bedrock.error("ThrottlingException", 429)
+    env.during_sleep[1] = lambda: env.put_checkpoint("summary", winner)
+
+    assert env.summary(state)["status"] == "reused"
+
+    assert len(env.bedrock.requests) == 2
+    assert env.bedrock.prompts(1)[1] == assistant("Too short.")
+    assert len(env.sleeps) == 1
+    assert env.checkpoint("summary") == winner
+
+
+def test_record_committed_during_correction_backoff_stops_the_correction(
+    analysis_env: AnalysisEnv,
+) -> None:
+    env = analysis_env
+    state = env.seed_case()
+    env.bedrock.reply("Too short.")
+    env.bedrock.error("ServiceUnavailableException", 503)
+    env.during_sleep[1] = env.mark_processed
+
+    assert env.summary(state)["status"] == "alreadyProcessed"
+
+    assert len(env.bedrock.requests) == 2
+    assert env.checkpoint("summary") is None
+
+
+@pytest.mark.parametrize(("code", "status"), RETRYABLE_ERRORS)
+def test_retry_without_durable_state_is_still_attempted_within_bounds(
+    analysis_env: AnalysisEnv, code: str, status: int
+) -> None:
+    env = analysis_env
+    state = env.seed_case()
+    env.bedrock.error(code, status, times=2)
+    env.bedrock.reply(env.valid_summary)
+
+    assert env.summary(state)["status"] == "completed"
+
+    assert len(env.bedrock.requests) == 3
+    assert len(env.sleeps) == 2
+    checkpoint = env.checkpoint("summary")
+    assert checkpoint is not None
+    assert checkpoint["output"] == {"Case_Summary": env.valid_summary}

@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from analysis_kit import AnalysisEnv
 from common.analysis import IncompleteAnalysisError, text_digest
+from common.bedrock import BedrockThrottlingError
 from common.classification import parse_classification
 from common.taxonomy import LIFECYCLE, RCA, UNCLASSIFIED, Taxonomy
 from common.templates import (
@@ -303,4 +304,141 @@ def test_record_committed_during_first_call_stops_the_correction(
 
     assert run(env, stage)(state)["status"] == "alreadyProcessed"
     assert len(env.bedrock.requests) == 1
+    assert env.checkpoint(stage) is None
+
+
+RETRYABLE_ERRORS = [("ThrottlingException", 429), ("ModelTimeoutException", 408)]
+
+
+def classified_winner(env: AnalysisEnv, stage: str, state: dict[str, Any]) -> dict[str, Any]:
+    """Produce a valid classification checkpoint, then remove it so a 'concurrent attempt' can
+    write it back later."""
+    env.bedrock.reply(reply_for(stage))
+    run(env, stage)(state)
+    winner = env.checkpoint(stage)
+    assert winner is not None
+    env.s3.delete_object(
+        Bucket=env.raw_bucket,
+        Key=f"account_number={env.account}/case_number={env.display}/checkpoints/{stage}.json",
+    )
+    env.bedrock.requests.clear()
+    env.metrics()
+    return winner
+
+
+@pytest.mark.parametrize("stage", STAGES)
+@pytest.mark.parametrize(("code", "status"), RETRYABLE_ERRORS)
+def test_record_committed_during_backoff_stops_the_retry(
+    analysis_env: AnalysisEnv, stage: str, code: str, status: int
+) -> None:
+    env = analysis_env
+    state = summarised(env)
+    env.bedrock.error(code, status)
+    env.during_sleep[1] = env.mark_processed
+
+    result = run(env, stage)(state)
+
+    assert result == {
+        "stage": stage,
+        "status": "alreadyProcessed",
+        "accountId": env.account,
+        "displayId": env.display,
+        "processedKey": env.processed_key(),
+    }
+    assert len(env.bedrock.requests) == 1
+    assert len(env.sleeps) == 1
+    assert env.checkpoint(stage) is None
+    metrics = env.metrics()
+    assert metrics["StagesSkippedAlreadyProcessed"] == 1
+    assert "BedrockInvocations" not in metrics
+    output = env.logs() + env.stdout
+    assert env.valid_summary[:60] not in output
+    assert env.sentinels[0] not in output
+
+
+@pytest.mark.parametrize("stage", STAGES)
+@pytest.mark.parametrize(("code", "status"), RETRYABLE_ERRORS)
+def test_checkpoint_saved_during_backoff_is_reused_instead_of_retrying(
+    analysis_env: AnalysisEnv, stage: str, code: str, status: int
+) -> None:
+    env = analysis_env
+    state = summarised(env)
+    winner = classified_winner(env, stage, state)
+    env.bedrock.error(code, status)
+    env.during_sleep[1] = lambda: env.put_checkpoint(stage, winner)
+
+    result = run(env, stage)(state)
+
+    assert result["status"] == "reused"
+    assert len(env.bedrock.requests) == 1
+    assert env.checkpoint(stage) == winner
+    assert env.metrics()["CheckpointsReused"] == 1
+
+
+@pytest.mark.parametrize("stage", STAGES)
+def test_record_committed_during_correction_backoff_stops_the_correction(
+    analysis_env: AnalysisEnv, stage: str
+) -> None:
+    env = analysis_env
+    state = summarised(env)
+    env.bedrock.reply("not json")
+    env.bedrock.error("ThrottlingException", 429)
+    env.during_sleep[1] = env.mark_processed
+
+    assert run(env, stage)(state)["status"] == "alreadyProcessed"
+
+    assert len(env.bedrock.requests) == 2
+    assert env.bedrock.prompts(1)[1] == assistant("not json")
+    assert env.checkpoint(stage) is None
+
+
+@pytest.mark.parametrize("stage", STAGES)
+def test_checkpoint_saved_during_correction_backoff_is_reused(
+    analysis_env: AnalysisEnv, stage: str
+) -> None:
+    env = analysis_env
+    state = summarised(env)
+    winner = classified_winner(env, stage, state)
+    env.bedrock.reply("not json")
+    env.bedrock.error("ServiceUnavailableException", 503)
+    env.during_sleep[1] = lambda: env.put_checkpoint(stage, winner)
+
+    assert run(env, stage)(state)["status"] == "reused"
+
+    assert len(env.bedrock.requests) == 2
+    assert env.checkpoint(stage) == winner
+
+
+@pytest.mark.parametrize("stage", STAGES)
+@pytest.mark.parametrize(("code", "status"), RETRYABLE_ERRORS)
+def test_retry_without_durable_state_is_still_attempted_within_bounds(
+    analysis_env: AnalysisEnv, stage: str, code: str, status: int
+) -> None:
+    env = analysis_env
+    state = summarised(env)
+    env.bedrock.error(code, status, times=2)
+    env.bedrock.reply(reply_for(stage))
+
+    assert run(env, stage)(state)["status"] == "completed"
+
+    assert len(env.bedrock.requests) == 3
+    assert len(env.sleeps) == 2
+    checkpoint = env.checkpoint(stage)
+    assert checkpoint is not None
+    assert checkpoint["output"]["fallback"] is False
+
+
+@pytest.mark.parametrize("stage", STAGES)
+def test_persistent_throttling_without_durable_state_fails_after_bounded_retries(
+    analysis_env: AnalysisEnv, stage: str
+) -> None:
+    env = analysis_env
+    state = summarised(env)
+    env.bedrock.error("ThrottlingException", 429, times=4)
+
+    with pytest.raises(BedrockThrottlingError):
+        run(env, stage)(state)
+
+    assert len(env.bedrock.requests) == 4
+    assert len(env.sleeps) == 3
     assert env.checkpoint(stage) is None

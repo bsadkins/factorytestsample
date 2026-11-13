@@ -22,6 +22,7 @@ from common.analysis import (
     AnalysisClients,
     AnalysisSettings,
     IncompleteAnalysisError,
+    StageSupersededError,
     SummaryValidationError,
     invocation_deadline,
     invoke_stage_model,
@@ -124,9 +125,8 @@ def summarise_case(
     version = prompt_version()
     expected = Expectation(STAGE_SUMMARY, ref, settings.model_id, version, text_digest(annotation))
     deadline = invocation_deadline(context)
-    messages = [Message("user", render_summary_prompt(annotation))]
-    issues: tuple[str, ...] = ()
-    for attempt in range(MAX_SUMMARY_CORRECTIONS + 1):
+
+    def durable_result() -> dict[str, Any] | None:
         if is_processed(aws.s3, settings.processed_bucket, ref):
             return already_processed()
         existing = load_checkpoint(aws.s3, settings.raw_bucket, expected)
@@ -134,9 +134,27 @@ def summarise_case(
             metrics.add_metric(name="CheckpointsReused", unit=MetricUnit.Count, value=1)
             logger.info("Valid summary checkpoint reused", extra=fields)
             return stage_result(STAGE_SUMMARY, "reused", ref, key=existing.key)
+        return None
+
+    messages = [Message("user", render_summary_prompt(annotation))]
+    issues: tuple[str, ...] = ()
+    for attempt in range(MAX_SUMMARY_CORRECTIONS + 1):
+        found = durable_result()
+        if found is not None:
+            return found
         if attempt:
             metrics.add_metric(name="SummaryCorrections", unit=MetricUnit.Count, value=1)
-        reply = invoke_stage_model(aws, settings, messages, metrics=metrics, deadline=deadline)
+        try:
+            reply = invoke_stage_model(
+                aws,
+                settings,
+                messages,
+                metrics=metrics,
+                deadline=deadline,
+                durable_result=durable_result,
+            )
+        except StageSupersededError as superseded:
+            return superseded.result
         check = check_summary(reply.text)
         if check.ok:
             checkpoint = Checkpoint(

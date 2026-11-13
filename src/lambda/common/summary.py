@@ -29,6 +29,13 @@ _SELF_AUDIT = re.compile(
     re.IGNORECASE,
 )
 _MARKDOWN = re.compile(r"(\*\*|__|`|^#{1,6}\s|\[[^\]]+\]\([^)]+\))", re.MULTILINE)
+# Single-delimiter emphasis such as *word* or _word_: the delimiters must sit at word boundaries
+# and hug the emphasised text, so snake_case identifiers, "a * b", "2*3*4" and globs such as
+# "*.log" are not mistaken for Markdown.
+_EMPHASIS = re.compile(
+    r"(?<![\w*])\*(?![\s*])[^*\n]*?(?<![\s*])\*(?![\w*])"
+    r"|(?<!\w)_(?![\s_])[^_\n]*?(?<![\s_])_(?!\w)"
+)
 _LIST = re.compile(r"^\s*(?:[-*\u2022]|\d+[.)])\s")
 
 _DESCRIPTIONS: Final = {
@@ -37,7 +44,9 @@ _DESCRIPTIONS: Final = {
     "too_few_sentences": f"The summary must contain at least {SUMMARY_MIN_SENTENCES} sentences.",
     "too_many_sentences": f"The summary must contain at most {SUMMARY_MAX_SENTENCES} sentences.",
     "line_breaks": "The summary must be a single paragraph without line breaks.",
-    "markdown": "The summary must not use Markdown formatting such as bold text, code or links.",
+    "markdown": (
+        "The summary must not use Markdown formatting such as bold or emphasis, code or links."
+    ),
     "list_formatting": "The summary must be prose, not a list.",
     "preamble": "Return only the summary text, with no label, preamble or introduction.",
     "self_audit": (
@@ -98,7 +107,7 @@ def check_summary(text: str) -> SummaryCheck:
         issues.append("too_many_sentences")
     if "\n" in summary or "\r" in summary:
         issues.append("line_breaks")
-    if _MARKDOWN.search(summary):
+    if _MARKDOWN.search(summary) or _EMPHASIS.search(summary):
         issues.append("markdown")
     if _LIST.match(summary):
         issues.append("list_formatting")

@@ -7,6 +7,7 @@ from typing import Any
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from botocore.response import StreamingBody
 from botocore.stub import Stubber
 from common.bedrock import (
@@ -14,12 +15,14 @@ from common.bedrock import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL_ID,
     SUPPORTED_MODEL_IDS,
+    BedrockError,
     BedrockInvocationError,
     BedrockResponseError,
     BedrockThrottlingError,
     BedrockTransientError,
     Message,
     PromptTooLargeError,
+    RetrySupersededError,
     UnsupportedModelError,
     build_request_body,
     invoke_bedrock,
@@ -256,3 +259,95 @@ def test_error_strings_never_contain_prompts() -> None:
         with pytest.raises(BedrockInvocationError) as info:
             invoke_bedrock(c, HAIKU, "SENTINEL-CASE-TEXT-7f3a", policy=FAST)
     assert "SENTINEL" not in str(info.value)
+
+
+def recording_client(events: list[str]) -> BedrockRuntimeClient:
+    c = client()
+    c.meta.events.register(
+        "provide-client-params.bedrock-runtime.InvokeModel",
+        lambda **_: events.append("invoke"),
+    )
+    return c
+
+
+def test_retry_guard_runs_after_each_backoff_immediately_before_the_retry() -> None:
+    events: list[str] = []
+    c = recording_client(events)
+
+    def guard() -> None:
+        events.append("guard")
+
+    with Stubber(c) as stub:
+        for code in ("ThrottlingException", "ModelTimeoutException"):
+            stub.add_client_error("invoke_model", service_error_code=code, http_status_code=429)
+        stub.add_response("invoke_model", response())
+        result = invoke_bedrock(
+            c, HAIKU, "x", policy=FAST, sleep=lambda _: events.append("sleep"), before_retry=guard
+        )
+    assert events == ["invoke", "sleep", "guard", "invoke", "sleep", "guard", "invoke"]
+    assert result.attempts == 3
+    assert result.throttle_count == 1
+
+
+def test_retry_guard_outcome_stops_retrying_without_another_invocation(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    events: list[str] = []
+    c = recording_client(events)
+    outcome = {"status": "alreadyProcessed"}
+    with Stubber(c) as stub:
+        stub.add_client_error(
+            "invoke_model", service_error_code="ThrottlingException", http_status_code=429
+        )
+        with pytest.raises(RetrySupersededError) as info:
+            invoke_bedrock(
+                c,
+                HAIKU,
+                "SENTINEL-CASE-TEXT-7f3a prompt",
+                policy=FAST,
+                sleep=lambda _: events.append("sleep"),
+                before_retry=lambda: outcome,
+            )
+        stub.assert_no_pending_responses()
+    assert events == ["invoke", "sleep"]
+    assert info.value.outcome is outcome
+    assert info.value.attempts == 1
+    assert info.value.throttle_count == 1
+    assert info.value.model_id == HAIKU
+    assert "SENTINEL" not in str(info.value)
+    assert any("Bedrock retry skipped" in r.getMessage() for r in caplog.records)
+    assert all("SENTINEL" not in repr(r.__dict__) for r in caplog.records)
+
+
+def test_retry_guard_errors_propagate_unchanged() -> None:
+    c = client()
+    guard_error = ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "synthetic"}}, "HeadObject"
+    )
+
+    def guard() -> None:
+        raise guard_error
+
+    with Stubber(c) as stub:
+        stub.add_client_error(
+            "invoke_model", service_error_code="ThrottlingException", http_status_code=429
+        )
+        with pytest.raises(ClientError) as info:
+            invoke_bedrock(c, HAIKU, "x", policy=FAST, sleep=lambda _: None, before_retry=guard)
+    assert info.value is guard_error
+    assert not isinstance(info.value, BedrockError)
+
+
+def test_retry_guard_is_not_consulted_without_a_retry() -> None:
+    calls: list[str] = []
+    c = client()
+    with Stubber(c) as stub:
+        stub.add_response("invoke_model", response())
+        stub.add_client_error(
+            "invoke_model", service_error_code="AccessDeniedException", http_status_code=403
+        )
+        invoke_bedrock(c, HAIKU, "x", policy=FAST, before_retry=lambda: calls.append("guard"))
+        with pytest.raises(BedrockInvocationError):
+            invoke_bedrock(c, HAIKU, "x", policy=FAST, before_retry=lambda: calls.append("guard"))
+    assert calls == []

@@ -48,6 +48,25 @@
         "too_many_sentences"
       ],
       "text": "The customer saw S3 errors. Requests returned 403. A bucket policy denied access. The policy used a wrong principal. Support reviewed CloudTrail. The engineer found the mismatch. The customer updated the policy to reference the correct role ARN and removed the stale deny statement that had been added during an earlier security review. Applications regained access to the bucket and the error rate returned to zero across all clients. The customer added an AWS Config rule to detect policy drift in future and documented the change in the internal runbook for the platform team, so the issue would be caught before release."
+    },
+    {
+      "id": "markdown-emphasis-asterisk",
+      "expected_issues": [
+        "markdown"
+      ],
+      "text": "The *customer* reported intermittent HTTP 503 errors from an Application Load Balancer in us-east-1 after deploying a new release of a web application. Target group health checks were failing because the updated container image listened on port 8081 instead of 8080. Amazon ECS repeatedly replaced the unhealthy tasks, which reduced capacity and increased the error rate during peak traffic. The engineer advised aligning the container port with the target group and enabling the ECS deployment circuit breaker. After the task definition was corrected and redeployed, health checks passed and the errors stopped."
+    },
+    {
+      "id": "markdown-emphasis-underscore",
+      "expected_issues": [
+        "markdown"
+      ],
+      "text": "The _customer_ reported intermittent HTTP 503 errors from an Application Load Balancer in us-east-1 after deploying a new release of a web application. Target group health checks were failing because the updated container image listened on port 8081 instead of 8080. Amazon ECS repeatedly replaced the unhealthy tasks, which reduced capacity and increased the error rate during peak traffic. The engineer advised aligning the container port with the target group and enabling the ECS deployment circuit breaker. After the task definition was corrected and redeployed, health checks passed and the errors stopped."
+    },
+    {
+      "id": "technical-underscore-arithmetic",
+      "expected_issues": [],
+      "text": "The customer reported intermittent HTTP 503 errors from an Application Load Balancer in us-east-1 after deploying a new release of a web application. Target group health checks were failing because the updated container image listened on port 8081 instead of 8080. Amazon ECS repeatedly replaced the unhealthy tasks, which reduced capacity and increased the error rate during peak traffic. The engineer matched each ec2_instance_id tag to its task and sized the service at a * b/2*3 tasks per host with the ECS deployment circuit breaker enabled. After the task definition was corrected and redeployed, health checks passed and the errors stopped."
     }
   ]
 }

@@ -121,3 +121,20 @@ def test_missing_raw_field_is_rejected() -> None:
     raw = {k: v for k, v in RAW.items() if k != "Case_Retrieval_Date"}
     with pytest.raises(IncompleteRecordError, match="raw_metadata_fields"):
         build_processed_record(raw, *stages())
+
+
+@pytest.mark.parametrize("emphasised", ["*customer*", "_customer_"])
+def test_inline_markdown_emphasis_in_the_summary_is_rejected(emphasised: str) -> None:
+    record = build_processed_record(RAW, *stages())
+    record["Case_Summary"] = SUMMARY.replace("customer", emphasised, 1)
+    with pytest.raises(IncompleteRecordError) as info:
+        validate_processed_record(record)
+    assert info.value.code == "invalid_summary"
+
+
+def test_technical_underscores_and_arithmetic_in_the_summary_are_accepted() -> None:
+    technical = SUMMARY.replace("port 8081", "port 8081 on ec2_instance_id hosts of a * b/2*3", 1)
+    assert technical != SUMMARY
+    summary = checkpoint("summary", {"Case_Summary": technical})
+    record = build_processed_record(RAW, summary, *stages()[1:])
+    assert record["Case_Summary"] == technical

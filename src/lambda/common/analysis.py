@@ -6,9 +6,10 @@ summary-queue reference written by Case Annotation) and returns only identifiers
 keys. Case content, summaries and classifications live in S3 stage checkpoints, never in
 workflow state, logs or metrics.
 
-Before every Bedrock invocation a stage confirms that no processed record exists and that no
-valid checkpoint for the stage has appeared since it started, so a committed case is never sent
-to Bedrock again and a completed stage is reused rather than repeated.
+Before every Bedrock invocation, including each automatic retry after a backoff delay, a stage
+confirms that no processed record exists and that no valid checkpoint for the stage has appeared
+since it started, so a committed case is never sent to Bedrock again and a completed stage is
+reused rather than repeated.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import os
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -28,6 +29,7 @@ from common.bedrock import (
     BedrockError,
     BedrockResult,
     Message,
+    RetrySupersededError,
     invoke_bedrock,
     validate_model_id,
 )
@@ -69,6 +71,18 @@ class InvalidWorkflowInputError(AnalysisError):
 
 class IncompleteAnalysisError(AnalysisError):
     """A required input (raw metadata or an earlier stage's checkpoint) is missing or invalid."""
+
+
+class StageSupersededError(Exception):
+    """A durable result appeared while a Bedrock retry was backing off; not a failure.
+
+    `result` is the stage result (`alreadyProcessed` or `reused`) to return instead of
+    retrying the invocation.
+    """
+
+    def __init__(self, result: dict[str, Any]) -> None:
+        super().__init__(f"StageSuperseded: {result.get('status')}")
+        self.result = result
 
 
 class SummaryValidationError(AnalysisError):
@@ -142,15 +156,21 @@ def sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def invoke_stage_model(
+def invoke_stage_model(  # noqa: PLR0913
     aws: AnalysisClients,
     settings: AnalysisSettings,
     messages: Sequence[Message],
     *,
     metrics: Metrics,
     deadline: float | None,
+    durable_result: Callable[[], dict[str, Any] | None],
 ) -> BedrockResult:
-    """Invoke the configured model and publish latency, token and throttle metrics."""
+    """Invoke the configured model and publish latency, token and throttle metrics.
+
+    `durable_result` returns the stage result when the case is already processed or a reusable
+    checkpoint exists, otherwise `None`. It is consulted after every retry backoff, immediately
+    before the retried invocation; when it finds a result, `StageSupersededError` carries it.
+    """
     try:
         result = invoke_bedrock(
             aws.bedrock,
@@ -159,7 +179,17 @@ def invoke_stage_model(
             max_tokens=settings.max_tokens,
             deadline=deadline,
             sleep=sleep,
+            before_retry=durable_result,
         )
+    except RetrySupersededError as superseded:
+        if superseded.throttle_count:
+            metrics.add_metric(
+                name="BedrockThrottles", unit=MetricUnit.Count, value=superseded.throttle_count
+            )
+        outcome = superseded.outcome
+        if not isinstance(outcome, dict):
+            raise
+        raise StageSupersededError(outcome) from None
     except BedrockError as exc:
         metrics.add_metric(name="BedrockInvocationFailures", unit=MetricUnit.Count, value=1)
         if exc.throttle_count:

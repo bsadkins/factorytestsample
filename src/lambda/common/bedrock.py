@@ -112,6 +112,29 @@ class BedrockResponseError(BedrockError):
     """The model response could not be parsed or contained no text."""
 
 
+class RetrySupersededError(Exception):
+    """A `before_retry` guard found a durable result, so the retry was not sent.
+
+    Not a failure: `outcome` is the guard's return value for the caller to use instead of a
+    model reply. The message carries the model ID and counts only.
+    """
+
+    def __init__(self, outcome: object, model_id: str, attempts: int, throttle_count: int) -> None:
+        super().__init__(f"Bedrock retry of {model_id} superseded after {attempts} attempt(s)")
+        self.outcome = outcome
+        self.model_id = model_id
+        self.attempts = attempts
+        self.throttle_count = throttle_count
+
+
+class _GuardFailure(Exception):  # noqa: N818
+    """Carries an exception raised by a `before_retry` guard past the InvokeModel error mapping."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__(type(error).__name__)
+        self.error = error
+
+
 def validate_model_id(model_id: str) -> str:
     """Return `model_id` if approved, otherwise raise `UnsupportedModelError`."""
     if model_id not in SUPPORTED_MODEL_IDS:
@@ -176,6 +199,40 @@ def _parse_response(raw: bytes, model_id: str) -> tuple[str, int, int, str | Non
     )
 
 
+def _guarded_sleep(
+    sleep: Callable[[float], None],
+    before_retry: Callable[[], object | None] | None,
+    superseded: Callable[[object], RetrySupersededError],
+) -> Callable[[float], None]:
+    """Wrap a backoff `sleep` so `before_retry` runs after the delay, before the next attempt."""
+    if before_retry is None:
+        return sleep
+
+    def pause(delay: float) -> None:
+        sleep(delay)
+        try:
+            outcome = before_retry()
+        except Exception as exc:
+            raise _GuardFailure(exc) from exc
+        if outcome is not None:
+            raise superseded(outcome)
+
+    return pause
+
+
+def _read_reply(
+    response: InvokeModelResponseTypeDef, model_id: str, throttles: int
+) -> tuple[str, int, int, str | None]:
+    stream = response["body"]
+    try:
+        raw = stream.read(MAX_RESPONSE_BYTES + 1)
+    finally:
+        stream.close()
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise BedrockResponseError("ResponseTooLarge", model_id, throttles)
+    return _parse_response(raw, model_id)
+
+
 def invoke_bedrock(  # noqa: PLR0913
     client: BedrockRuntimeClient,
     model_id: str,
@@ -188,12 +245,18 @@ def invoke_bedrock(  # noqa: PLR0913
     policy: RetryPolicy = BEDROCK_RETRY_POLICY,
     sleep: Callable[[float], None] = time.sleep,
     deadline: float | None = None,
+    before_retry: Callable[[], object | None] | None = None,
 ) -> BedrockResult:
     """Invoke an approved model with the Anthropic messages format and return its text reply.
 
     Throttling and transient errors are retried with bounded exponential backoff; exhausted
     retries raise `BedrockThrottlingError` or `BedrockTransientError`, which workflow Retry rules
     can match by name. Other service errors raise `BedrockInvocationError`.
+
+    `before_retry` runs after every backoff delay, immediately before the retried InvokeModel
+    call. When it returns a value other than `None` no further call is made and
+    `RetrySupersededError` carrying that value is raised. Exceptions it raises propagate
+    unchanged.
     """
     validate_model_id(model_id)
     if not MIN_MAX_TOKENS <= max_tokens <= MAX_MAX_TOKENS:
@@ -233,10 +296,22 @@ def invoke_bedrock(  # noqa: PLR0913
         response = retry_with_backoff(
             call,
             policy=policy,
-            sleep=sleep,
+            sleep=_guarded_sleep(
+                sleep,
+                before_retry,
+                lambda outcome: RetrySupersededError(outcome, model_id, attempts, throttles),
+            ),
             deadline=deadline,
             operation_name="bedrock:InvokeModel",
         )
+    except _GuardFailure as failure:
+        raise failure.error from None
+    except RetrySupersededError:
+        logger.info(
+            "Bedrock retry skipped; a durable result already exists",
+            extra={"model_id": model_id, "attempts": attempts, "throttles": throttles},
+        )
+        raise
     except ClientError as exc:
         code = aws_error_code(exc) or "Unknown"
         logger.warning(
@@ -254,14 +329,7 @@ def invoke_bedrock(  # noqa: PLR0913
             raise BedrockTransientError(code, model_id, throttles) from None
         raise BedrockInvocationError(code, model_id, throttles) from None
 
-    stream = response["body"]
-    try:
-        raw = stream.read(MAX_RESPONSE_BYTES + 1)
-    finally:
-        stream.close()
-    if len(raw) > MAX_RESPONSE_BYTES:
-        raise BedrockResponseError("ResponseTooLarge", model_id, throttles)
-    text, input_tokens, output_tokens, stop_reason = _parse_response(raw, model_id)
+    text, input_tokens, output_tokens, stop_reason = _read_reply(response, model_id, throttles)
     latency_ms = int((time.monotonic() - started) * 1000)
     logger.info(
         "Bedrock invocation complete",
