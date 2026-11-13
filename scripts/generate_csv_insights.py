@@ -106,9 +106,10 @@ Filters combine with AND; repeating a filter option matches any of its values. D
 calendar days and both bounds are inclusive. Null values are written as empty cells. Rows are
 sorted by account, case creation time and case display ID.
 
-Exit status: 0 success, 2 invalid options, 3 AWS error (credentials, permissions, missing
-bucket), 4 invalid records (without --skip-invalid) or more than --max-records matches. No output
-file is written unless the export succeeds.
+Exit status: 0 success, 2 invalid options (including an existing --output file without
+--overwrite, also one created while the export runs), 3 AWS error (credentials, permissions,
+missing bucket), 4 invalid records (without --skip-invalid) or more than --max-records matches. No
+output file is written unless the export succeeds.
 """
 
 
@@ -122,6 +123,10 @@ class InvalidRecordError(ValueError):
 
 class RecordLimitError(RuntimeError):
     """More records matched than `--max-records` allows."""
+
+
+class OutputError(RuntimeError):
+    """The output file cannot be published safely. The message never contains record content."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,7 +257,10 @@ def build_parser() -> argparse.ArgumentParser:
         "exist. Files are created with owner-only permissions.",
     )
     parser.add_argument(
-        "--overwrite", action="store_true", help="Replace --output if it already exists."
+        "--overwrite",
+        action="store_true",
+        help="Replace --output if it already exists. Without it an existing file is never "
+        "replaced, even one created while the export runs.",
     )
     parser.add_argument(
         "--account-id",
@@ -538,8 +546,38 @@ def render_csv(records: Sequence[ParsedRecord], *, escape_formulas: bool) -> str
     return frame.to_csv(index=False, na_rep="", lineterminator="\r\n")
 
 
-def write_output(text: str, output: str, encoding: str) -> None:
-    """Write the CSV to stdout, or atomically to a new owner-only file."""
+def publish(temp: Path, target: Path, *, overwrite: bool) -> None:
+    """Atomically move the complete `temp` file to `target`.
+
+    Without `overwrite` an existing `target` is never replaced, even one created after the early
+    existence check: a hard link, unlike a rename, fails instead of replacing the destination.
+    Raises OutputError, leaving `target` unchanged, when it exists or the filesystem cannot link.
+    """
+    if overwrite:
+        temp.replace(target)
+        return
+    try:
+        target.hardlink_to(temp)
+    except FileExistsError:
+        raise OutputError(
+            f"--output {str(target)!r} was created while the export ran and was left unchanged; "
+            "pass --overwrite to replace it."
+        ) from None
+    except OSError as exc:
+        raise OutputError(
+            f"cannot create --output {str(target)!r} without risking replacing another file "
+            f"({exc.strerror or type(exc).__name__}); write to a directory on a filesystem "
+            "that supports hard links, or pass --overwrite."
+        ) from None
+    temp.unlink()
+
+
+def write_output(text: str, output: str, encoding: str, *, overwrite: bool) -> None:
+    """Write the CSV to stdout, or atomically to an owner-only file.
+
+    An existing file is replaced only when `overwrite` is set; otherwise OutputError is raised and
+    the existing file is left unchanged. No temporary file remains after a failure.
+    """
     data = text.encode(encoding)
     if output == "-":
         sys.stdout.flush()
@@ -555,7 +593,7 @@ def write_output(text: str, output: str, encoding: str) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        Path(handle.name).replace(target)
+        publish(Path(handle.name), target, overwrite=overwrite)
     except BaseException:
         Path(handle.name).unlink(missing_ok=True)
         raise
@@ -656,11 +694,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             "the valid records only.\n"
         )
         return EXIT_DATA_ERROR
-    write_output(
-        render_csv(records, escape_formulas=not args.no_escape_formulas),
-        args.output,
-        args.encoding,
-    )
+    try:
+        write_output(
+            render_csv(records, escape_formulas=not args.no_escape_formulas),
+            args.output,
+            args.encoding,
+            overwrite=args.overwrite,
+        )
+    except OutputError as exc:
+        report(stats, None, destination)
+        sys.stderr.write(f"error: {exc} Nothing was written.\n")
+        return EXIT_USAGE
     report(stats, len(records), destination)
     return EXIT_OK
 

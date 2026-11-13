@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import errno
 import importlib.util
 import io
 import json
@@ -758,3 +759,118 @@ def test_script_runs_as_main_module(
         runpy.run_path(str(SCRIPT), run_name="__main__")
     assert exit_info.value.code == 0
     assert parse_csv(out.read_text()) == [expected_row(ACCOUNT_B, record)]
+
+
+# --- output publication races ----------------------------------------------------------------
+
+COMPETING = b"competing export, not ours\n"
+
+
+def create_output_during_collection(monkeypatch: pytest.MonkeyPatch, out: Path) -> list[Path]:
+    """Create `out` (absent at start) on the CLI's first S3 GetObject, as another export would."""
+    created: list[Path] = []
+    original = boto3.session.Session.client
+
+    def client(
+        self: boto3.session.Session, service_name: str, *args: object, **kwargs: object
+    ) -> S3Client:
+        made: S3Client = original(self, service_name, *args, **kwargs)  # type: ignore[call-overload]
+
+        def compete(**_: object) -> None:
+            if not created:
+                assert not out.exists()
+                out.write_bytes(COMPETING)
+                out.chmod(0o644)
+                created.append(out)
+
+        made.meta.events.register("before-call.s3.GetObject", compete)
+        return made
+
+    monkeypatch.setattr(boto3.session.Session, "client", client)
+    return created
+
+
+def test_output_created_during_export_is_kept_without_overwrite(
+    s3_bucket: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    put(ACCOUNT_A, make_record("1", subject=SENTINEL, Case_Summary=SENTINEL))
+    out = tmp_path / "race.csv"
+    created = create_output_during_collection(monkeypatch, out)
+    monkeypatch.setattr(
+        sys, "argv", [str(SCRIPT), "--bucket", BUCKET, "--output", str(out), "--max-workers", "1"]
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        runpy.run_path(str(SCRIPT), run_name="__main__")
+    captured = capsys.readouterr()
+    assert created == [out]
+    assert exit_info.value.code == 2
+    assert out.read_bytes() == COMPETING
+    assert out.stat().st_mode & 0o777 == 0o644
+    assert [p.name for p in tmp_path.iterdir()] == ["race.csv"]
+    assert "--overwrite" in captured.err
+    assert "left unchanged" in captured.err
+    assert "Traceback" not in captured.err
+    assert SENTINEL not in captured.err
+    assert captured.out == ""
+
+
+def test_overwrite_replaces_output_created_during_export(
+    script: ModuleType,
+    s3_bucket: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    record = make_record("1")
+    put(ACCOUNT_A, record)
+    out = tmp_path / "race.csv"
+    created = create_output_during_collection(monkeypatch, out)
+    code = script.main(
+        ["--bucket", BUCKET, "--output", str(out), "--overwrite", "--max-workers", "1"]
+    )
+    captured = capsys.readouterr()
+    assert created == [out]
+    assert code == 0, captured.err
+    assert parse_csv(out.read_text(encoding="utf-8")) == [expected_row(ACCOUNT_A, record)]
+    assert out.stat().st_mode & 0o777 == 0o600
+    assert [p.name for p in tmp_path.iterdir()] == ["race.csv"]
+    assert captured.out == ""
+
+
+def test_new_output_file_is_published_owner_only_without_temp_files(
+    script: ModuleType, s3_bucket: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record = make_record("1")
+    put(ACCOUNT_A, record)
+    code, rows, _ = export(script, tmp_path, capsys=capsys)
+    assert code == 0
+    assert rows == [expected_row(ACCOUNT_A, record)]
+    out = tmp_path / "export.csv"
+    assert out.stat().st_mode & 0o777 == 0o600
+    assert out.stat().st_nlink == 1
+    assert [p.name for p in tmp_path.iterdir()] == ["export.csv"]
+
+
+def test_filesystem_without_hard_links_fails_cleanly_without_overwrite(
+    script: ModuleType,
+    s3_bucket: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    put(ACCOUNT_A, make_record("1", subject=SENTINEL))
+
+    def no_links(self: Path, target: object) -> None:
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(Path, "hardlink_to", no_links)
+    code, rows, err = export(script, tmp_path, capsys=capsys)
+    assert code == 2
+    assert rows is None
+    assert list(tmp_path.iterdir()) == []
+    assert "--overwrite" in err
+    assert "Traceback" not in err
+    assert SENTINEL not in err

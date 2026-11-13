@@ -106,8 +106,8 @@ Labels that contain spaces must be quoted in the shell.
 | Option | Default | Description |
 | --- | --- | --- |
 | `--bucket BUCKET` | Required | Processed-record bucket name. Must be a valid S3 bucket name. |
-| `--output OUTPUT` | `-` (standard output) | CSV file to write. The directory must exist. Files are written to a temporary file in the same directory and then renamed, so a reader never sees a partial file, and are created with owner-only permissions (`0600`). |
-| `--overwrite` | Off | Replace `--output` if it already exists. Without it the script refuses to run (status `2`). |
+| `--output OUTPUT` | `-` (standard output) | CSV file to write. The directory must exist. Files are written to a temporary file in the same directory and then atomically moved into place, so a reader never sees a partial file, and are created with owner-only permissions (`0600`). Without `--overwrite` the file is published with a hard link, which never replaces an existing file, so the directory's filesystem must support hard links. |
+| `--overwrite` | Off | Replace `--output` if it already exists. Without it the script refuses to run (status `2`), and a file that another process creates at that path while the export runs is left unchanged (status `2`, nothing written). |
 | `--account-id ID` | All accounts | Export only this 12-digit account. Repeatable. Only the selected accounts' `account_number=<id>/` prefixes are listed, so this also reduces S3 requests. |
 | `--start-date YYYY-MM-DD` | No lower bound | Earliest UTC calendar day, inclusive. Must not be after `--end-date`. |
 | `--end-date YYYY-MM-DD` | No upper bound | Latest UTC calendar day, inclusive. |
@@ -187,7 +187,7 @@ The CSV contains case summaries, subjects and submitter identities. Store it wit
 | Status | Meaning |
 | --- | --- |
 | `0` | Export written |
-| `2` | Invalid options, for example an unknown category, a start date after the end date, a missing output directory or an existing output file without `--overwrite`. No AWS request is made |
+| `2` | Invalid options, for example an unknown category, a start date after the end date, a missing output directory or an existing output file without `--overwrite`. No AWS request is made, except when the output file appears while the export runs; that file is left unchanged |
 | `3` | AWS error: missing credentials, unknown profile, access denied (the message names `s3:ListBucket` or `s3:GetObject`), missing bucket (`NoSuchBucket`; check `--bucket` and `--region`) or another S3 failure |
 | `4` | Invalid records found without `--skip-invalid`, or more than `--max-records` records match |
 
