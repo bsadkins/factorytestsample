@@ -14,12 +14,13 @@ extend-exclude = ["cdk.out", "node_modules", ".venv", "coverage", "reports"]
 select = ["E", "W", "F", "I", "B", "UP", "N", "S", "SIM", "RUF", "PT", "C4", "PL", "ANN"]
 
 [tool.ruff.lint.per-file-ignores]
-"test/**" = ["S101", "PLR2004"]
+# Tests use fake credentials with stubbed clients and literal expected values.
+"test/**" = ["S101", "S105", "S106", "PLR2004"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src", "test"]
+files = ["src", "test", "scripts"]
 mypy_path = "src/lambda"
 explicit_package_bases = true
 warn_unreachable = true
@@ -29,6 +30,9 @@ cache_dir = ".mypy_cache"
 testpaths = ["test"]
 pythonpath = ["src/lambda"]
 addopts = ["--strict-markers", "--strict-config", "--import-mode=importlib"]
+markers = [
+    "live_bedrock: calls the real Amazon Bedrock API; skipped unless CASE_INSIGHTS_LIVE_BEDROCK=1",
+]
 xfail_strict = true
 
 [tool.coverage.run]

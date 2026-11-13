@@ -10,6 +10,48 @@ exports[`Support Case Insights app core stack template snapshot 1`] = `
       "Type": "AWS::SSM::Parameter::Value<String>",
     },
   },
+  "Resources": {
+    "SharedLayersCommonLayer7C4E03F5": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "CompatibleArchitectures": [
+          "x86_64",
+        ],
+        "CompatibleRuntimes": [
+          "python3.12",
+        ],
+        "Content": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Support Case Insights shared Python package (/opt/python/common) and pinned dependencies",
+        "LayerName": "case-insights-common-scidev",
+        "LicenseInfo": "MIT-0",
+      },
+      "Type": "AWS::Lambda::LayerVersion",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "SharedLayersTemplatesLayer1DC6F067": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "CompatibleArchitectures": [
+          "x86_64",
+        ],
+        "CompatibleRuntimes": [
+          "python3.12",
+        ],
+        "Content": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Support Case Insights prompt templates (/opt/templates)",
+        "LayerName": "case-insights-templates-scidev",
+        "LicenseInfo": "MIT-0",
+      },
+      "Type": "AWS::Lambda::LayerVersion",
+      "UpdateReplacePolicy": "Delete",
+    },
+  },
   "Rules": {
     "CheckBootstrapVersion": {
       "Assertions": [

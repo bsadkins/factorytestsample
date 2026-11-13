@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { App, aws_s3 as s3 } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { addCaseInsightsStacks, CaseInsightsCoreStack, CONFIG_DIR, ConfigValidationError } from '../lib';
+import { normaliseAssetHashes } from './helpers/assets';
 
 function tempOutdir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'case-insights-app-'));
@@ -35,7 +36,7 @@ describe('Support Case Insights app', () => {
   test('core stack template snapshot', () => {
     const app = new App({ outdir: tempOutdir() });
     const { core } = addCaseInsightsStacks(app, { env: 'dev' });
-    expect(Template.fromStack(core).toJSON()).toMatchSnapshot();
+    expect(normaliseAssetHashes(Template.fromStack(core).toJSON())).toMatchSnapshot();
   });
 
   test('cdk-nag findings fail synthesis', () => {

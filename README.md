@@ -4,14 +4,15 @@ Support Case Insights is an AWS CDK (TypeScript) application that will collect r
 
 ## Project status
 
-This branch currently contains the project foundation only:
+This branch currently contains the project foundation and the shared Python runtime:
 
 - typed, schema-validated environment configuration (`config/`) and the optional pipeline configuration schema;
-- the CDK entry point, which validates configuration, registers cdk-nag and synthesises an empty `CaseInsightsCoreStack-<uniqueId>` scaffold;
+- the CDK entry point, which validates configuration, registers cdk-nag and synthesises `CaseInsightsCoreStack-<uniqueId>`;
+- the shared Python package `src/lambda/common/` (taxonomies, prompt rendering, model-output validation, Bedrock, STS, S3, SQS and retry helpers) and the prompt templates in `src/templates/`, packaged as two Lambda layers;
 - strict TypeScript and Python tooling, exact dependency pins, an npm lockfile and hash-locked Python requirements;
 - local lint, type-check, test, synth and security commands.
 
-The data pipeline, Lambda functions, member-role StackSet, Analytics stack, MCP server, CDK pipeline and full documentation are **not implemented yet**. The core stack template has no resources and is not deployable. Nothing has been deployed to AWS.
+The data pipeline Lambda functions, member-role StackSet, Analytics stack, MCP server, CDK pipeline and full documentation are **not implemented yet**. The core stack currently contains only the two Lambda layers and is not a working deployment. Nothing has been deployed to AWS.
 
 ## Prerequisites
 
@@ -69,6 +70,31 @@ Rules enforced before synthesis include:
 
 The pipeline configuration requires an existing CodeConnections ARN in the pipeline account and the `main` branch. Dev and prod must use different `uniqueId` values in the same organization and management account.
 
+## Python Lambda packaging
+
+Lambda code is packaged locally during `cdk synth`; Docker, Finch and manual uploads are not used. CDK uploads the assets on deploy.
+
+| Layer | Contents | Mounted at |
+| --- | --- | --- |
+| `case-insights-common-<uniqueId>` | Every package in `requirements.txt` plus `src/lambda/common/` | `/opt/python` (import `common`) |
+| `case-insights-templates-<uniqueId>` | `src/templates/*.txt` | `/opt/templates` |
+
+- `scripts/build/bundle_python_layer.py` installs the runtime lock with `pip --require-hashes --only-binary=:all:` for CPython 3.12 on Linux x86_64 (`manylinux_2_28_x86_64`). A missing wheel, an unhashed requirement or a hash mismatch fails synthesis; nothing is compiled on the host and there is no Docker fallback.
+- Synthesis runs the bundler with `.venv/bin/python` (override with `CASE_INSIGHTS_PYTHON`). Downloaded wheels are cached in the ignored, repository-local `.cache/pip`; the first synth needs access to the package index.
+- Asset hashes are computed from file contents: the shared layer from `src/lambda/common/`, `requirements.txt` and the bundler; the templates layer from the template files. Editing only a template changes only the templates layer, and `npx cdk deploy` publishes a new layer version.
+- `common.templates.prompt_version()` returns a digest of the templates and taxonomies, recorded as `Prompt_Version`.
+
+### Prompts and taxonomies
+
+- `src/lambda/common/taxonomy.py` is the only place RCA and lifecycle categories and their definitions are written. Templates insert them through the `{categories}` placeholder, and `python scripts/render_taxonomy_docs.py` renders them as Markdown (`--check FILE` / `--write FILE` keep a marked documentation block in sync).
+- Prompt regression fixtures live in `test/fixtures/prompts/` and run with the normal test suite. A regression against the real Bedrock API is opt-in and never runs by default:
+
+  ```bash
+  CASE_INSIGHTS_LIVE_BEDROCK=1 .venv/bin/pytest test/prompts/test_live_bedrock_prompts.py --no-cov
+  ```
+
+  It needs AWS credentials allowed to invoke the configured global inference profile (`CASE_INSIGHTS_LIVE_MODEL_ID`, `CASE_INSIGHTS_LIVE_REGION`) and sends only the invented fixtures.
+
 ## Dependencies and locks
 
 - npm packages are pinned exactly in `package.json` and locked in `package-lock.json`. `overrides` move transitive `glob`, `minimatch` and `test-exclude` to patched releases.
@@ -80,12 +106,16 @@ The pipeline configuration requires an existing CodeConnections ARN in the pipel
 ```
 bin/                 CDK app entry point
 lib/config/          Typed configuration, validation and resource names
+lib/constructs/      Reusable CDK constructs (shared Lambda layers)
+lib/packaging/       Docker-free Python asset bundling and content hashing
 lib/stacks/          CDK stacks
 lib/nag.ts           cdk-nag registration
 config/              Schemas and environment configuration
-src/lambda/common/   Shared Python Lambda package (placeholder)
+src/lambda/common/   Shared Python Lambda package (shared layer, /opt/python/common)
+src/templates/       Prompt templates (templates layer, /opt/templates)
+scripts/build/       Wheel-only layer bundler
 scripts/security/    Dependency advisory scanner
-test/                Jest and pytest suites
+test/                Jest and pytest suites; prompt fixtures in test/fixtures/prompts
 ```
 
 ## Licence

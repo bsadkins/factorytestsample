@@ -1,0 +1,4 @@
+Your previous summary did not meet these requirements:
+{issues}
+
+Rewrite the summary of the same case so that it meets every original requirement: 4 to 6 complete sentences, 600 to 650 characters in total, plain prose in a single paragraph covering the issue context, technical details and errors, the AWS service impacted, and the resolution and outcome. Return only the corrected summary prose, with no header, preamble, markdown, counts or notes.

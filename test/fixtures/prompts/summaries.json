@@ -1,0 +1,53 @@
+{
+  "_comment": "Invented summaries for validator regression. No real case data.",
+  "cases": [
+    {
+      "id": "valid-five-sentences",
+      "expected_issues": [],
+      "text": "The customer reported intermittent HTTP 503 errors from an Application Load Balancer in us-east-1 after deploying a new release of a web application. Target group health checks were failing because the updated container image listened on port 8081 instead of 8080. Amazon ECS repeatedly replaced the unhealthy tasks, which reduced capacity and increased the error rate during peak traffic. The engineer advised aligning the container port with the target group and enabling the ECS deployment circuit breaker. After the task definition was corrected and redeployed, health checks passed and the errors stopped."
+    },
+    {
+      "id": "valid-four-sentences-unicode",
+      "expected_issues": [],
+      "text": "The customer’s Amazon RDS for PostgreSQL instance in eu-west-1 became unavailable during a storage scaling operation, and applications reported connection timeouts for about forty minutes. CloudWatch showed FreeStorageSpace near zero and the event log recorded a storage-full condition followed by an automatic scaling attempt that stalled. AWS Support confirmed the instance had reached the maximum allocated storage configured for autoscaling, so the scaling request could not complete. The customer raised the maximum storage threshold, the volume expanded, the database returned to available status and alarms were added for low free space."
+    },
+    {
+      "id": "too-short",
+      "expected_issues": [
+        "too_short"
+      ],
+      "text": "The customer could not reach an S3 bucket. A bucket policy denied access. The policy was corrected. Access now works."
+    },
+    {
+      "id": "markdown-heading",
+      "expected_issues": [
+        "line_breaks",
+        "markdown",
+        "too_short",
+        "too_few_sentences"
+      ],
+      "text": "## Summary\nThe customer saw throttling on DynamoDB."
+    },
+    {
+      "id": "self-audit",
+      "expected_issues": [
+        "self_audit"
+      ],
+      "text": "The customer reported intermittent HTTP 503 errors from an Application Load Balancer in us-east-1 after deploying a new release of a customer-facing web application serving checkout traffic. Target group health checks were failing because the updated container image listened on port 8081 instead of 8080. Amazon ECS repeatedly replaced the unhealthy tasks, which reduced capacity and raised the error rate during peak traffic. The engineer advised aligning the container port with the target group and enabling the deployment circuit breaker. After redeploying, health checks passed and the errors stopped (612 characters)."
+    },
+    {
+      "id": "preamble",
+      "expected_issues": [
+        "preamble"
+      ],
+      "text": "Here is the summary: the customer reported intermittent HTTP 503 errors from an Application Load Balancer in us-east-1 after deploying a new release of a web application. Target group health checks were failing because the updated container image listened on port 8081 instead of 8080. Amazon ECS repeatedly replaced the unhealthy tasks in the service, which reduced capacity and increased the error rate during peak evening traffic. The engineer advised aligning the container port with the target group and enabling the circuit breaker. After the fix was redeployed, health checks passed and the errors stopped."
+    },
+    {
+      "id": "too-many-sentences",
+      "expected_issues": [
+        "too_many_sentences"
+      ],
+      "text": "The customer saw S3 errors. Requests returned 403. A bucket policy denied access. The policy used a wrong principal. Support reviewed CloudTrail. The engineer found the mismatch. The customer updated the policy to reference the correct role ARN and removed the stale deny statement that had been added during an earlier security review. Applications regained access to the bucket and the error rate returned to zero across all clients. The customer added an AWS Config rule to detect policy drift in future and documented the change in the internal runbook for the platform team, so the issue would be caught before release."
+    }
+  ]
+}
