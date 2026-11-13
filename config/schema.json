@@ -168,8 +168,8 @@
             },
             "dlqRetentionDays": {
               "type": "integer",
-              "description": "Days messages stay in dead-letter queues awaiting redrive.",
-              "minimum": 1,
+              "description": "Days messages stay in dead-letter queues awaiting redrive. SQS keeps a message's original enqueue time when it moves to a DLQ, so this must exceed the 4-day source-queue retention.",
+              "minimum": 5,
               "maximum": 14,
               "default": 14
             }

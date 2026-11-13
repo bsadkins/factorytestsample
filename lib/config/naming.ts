@@ -6,10 +6,18 @@ import type { CaseInsightsConfig } from './types';
  */
 export interface ResourceNames {
   readonly coreStack: string;
+  readonly memberRoleStack: string;
   readonly analyticsStack: string;
   readonly mcpStack: string;
   readonly memberRoleStackSet: string;
   readonly memberRole: string;
+  /** Management-account execution roles trusted by the member role. */
+  readonly caseRetrievalRole: string;
+  readonly caseAnnotationRole: string;
+  readonly activeAccountsQueue: string;
+  readonly annotationQueue: string;
+  readonly summaryQueue: string;
+  readonly workflowFailureQueue: string;
   readonly accountLookupFunction: string;
   readonly caseAnalysisStateMachine: string;
   readonly glueDatabase: string;
@@ -22,10 +30,17 @@ export function resourceNames(config: Pick<CaseInsightsConfig, 'uniqueId'>): Res
   const id = config.uniqueId;
   return {
     coreStack: `CaseInsightsCoreStack-${id}`,
+    memberRoleStack: `CaseInsightsMemberRoleStack-${id}`,
     analyticsStack: `CaseInsightsAnalyticsStack-${id}`,
     mcpStack: `CaseInsightsMcpStack-${id}`,
     memberRoleStackSet: `CaseInsights-MemberRole-${id}`,
     memberRole: `Support-Case-Analysis-Role-${id}`,
+    caseRetrievalRole: `CaseInsights-CaseRetrieval-${id}`,
+    caseAnnotationRole: `CaseInsights-CaseAnnotation-${id}`,
+    activeAccountsQueue: `CaseInsights-ActiveAccounts-${id}`,
+    annotationQueue: `CaseInsights-CaseAnnotation-${id}`,
+    summaryQueue: `CaseInsights-CaseSummary-${id}`,
+    workflowFailureQueue: `CaseInsights-WorkflowFailures-${id}`,
     accountLookupFunction: `Lambda-AccountLookup-${id}`,
     caseAnalysisStateMachine: `CaseAnalysis-${id}`,
     // Glue database names allow only lower-case letters, digits and underscores.
@@ -34,4 +49,9 @@ export function resourceNames(config: Pick<CaseInsightsConfig, 'uniqueId'>): Res
     crawler: `case-insights-partition-crawler-${id}`,
     athenaWorkgroup: `CaseInsights-${id}`,
   };
+}
+
+/** Name of the dead-letter queue paired with a stage queue. */
+export function deadLetterQueueName(queueName: string): string {
+  return `${queueName}-DLQ`;
 }

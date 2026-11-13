@@ -2,6 +2,7 @@ import { type App, Tags } from 'aws-cdk-lib';
 import { type CaseInsightsConfig, type EnvironmentName, loadEnvironmentConfig, resourceNames } from './config';
 import { enableNagChecks } from './nag';
 import { CaseInsightsCoreStack } from './stacks/core-stack';
+import { CaseInsightsMemberRoleStack } from './stacks/member-role-stack';
 
 export interface CaseInsightsAppOptions {
   readonly env: EnvironmentName;
@@ -12,6 +13,7 @@ export interface CaseInsightsAppOptions {
 export interface CaseInsightsAppStacks {
   readonly config: CaseInsightsConfig;
   readonly core: CaseInsightsCoreStack;
+  readonly memberRole: CaseInsightsMemberRoleStack;
 }
 
 /**
@@ -35,5 +37,16 @@ export function addCaseInsightsStacks(app: App, options: CaseInsightsAppOptions)
     config,
   });
 
-  return { config, core };
+  const memberRole = new CaseInsightsMemberRoleStack(app, names.memberRoleStack, {
+    stackName: names.memberRoleStack,
+    description: `Support Case Insights member-account role StackSet (${config.uniqueId})`,
+    env,
+    config,
+    trustedRoles: core.memberAccess.trust,
+  });
+  // IAM rejects trust policies naming roles that do not exist yet, so the trusted execution
+  // roles must be created before any StackSet instance.
+  memberRole.addStackDependency(core, 'Member role trusts core execution roles');
+
+  return { config, core, memberRole };
 }

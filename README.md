@@ -7,12 +7,24 @@ Support Case Insights is an AWS CDK (TypeScript) application that will collect r
 This branch currently contains the project foundation and the shared Python runtime:
 
 - typed, schema-validated environment configuration (`config/`) and the optional pipeline configuration schema;
-- the CDK entry point, which validates configuration, registers cdk-nag and synthesises `CaseInsightsCoreStack-<uniqueId>`;
+- the CDK entry point, which validates configuration, registers cdk-nag and synthesises `CaseInsightsCoreStack-<uniqueId>` and `CaseInsightsMemberRoleStack-<uniqueId>`;
+- the core storage and coordination foundation: account-list, raw and processed buckets plus a dedicated access-log bucket, the Powertools idempotency table, the stage queues with their dead-letter queues, and the two execution roles that member accounts trust;
+- the service-managed `CaseInsights-MemberRole-<uniqueId>` StackSet, which deploys the read-only `Support-Case-Analysis-Role-<uniqueId>` to every account under the configured root or OUs;
+- reusable constructs for later pipeline stages: a standard Python function factory (`PipelineFunction`) and the Bedrock model allowlist policy (`BedrockInvokePolicy`);
 - the shared Python package `src/lambda/common/` (taxonomies, prompt rendering, model-output validation, Bedrock, STS, S3, SQS and retry helpers) and the prompt templates in `src/templates/`, packaged as two Lambda layers;
 - strict TypeScript and Python tooling, exact dependency pins, an npm lockfile and hash-locked Python requirements;
 - local lint, type-check, test, synth and security commands.
 
-The data pipeline Lambda functions, member-role StackSet, Analytics stack, MCP server, CDK pipeline and full documentation are **not implemented yet**. The core stack currently contains only the two Lambda layers and is not a working deployment. Nothing has been deployed to AWS.
+The data pipeline Lambda functions, workflow, schedules, dashboard and alarms, Analytics stack, MCP server, CDK pipeline and full documentation are **not implemented yet**. The core stack currently contains storage, queues, roles and the two Lambda layers but no functions, so it is not a working deployment. Nothing has been deployed to AWS; StackSet instance creation is untested until a real deployment.
+
+## Security foundation
+
+- Every bucket is private (`BLOCK_ALL`, bucket-owner enforced), versioned, SSE-S3 encrypted and denies requests without TLS 1.2 or later. The account-list, raw and processed buckets write server access logs to a dedicated bucket that does not log to itself. Raw data and account lists expire after `rawRetentionDays`; processed records move to Standard-IA after `operations.storage.processedInfrequentAccessDays` (S3 does not transition objects smaller than 128 KB by default, so small records stay in Standard).
+- Prod retains buckets, the idempotency table and log groups on stack deletion and enables DynamoDB deletion protection. Dev deletes them and empties its buckets first.
+- Queues use SSE-SQS and deny requests without TLS. Each work queue has its own dead-letter queue with the configured receive count, and its visibility timeout is at least six times the consumer timeout. Dead-letter retention (`operations.queues.dlqRetentionDays`, minimum 5) must exceed the 4-day source retention because SQS keeps a message's original enqueue time.
+- The member role trusts only `CaseInsights-CaseRetrieval-<uniqueId>` and `CaseInsights-CaseAnnotation-<uniqueId>` in the management account, with an `aws:PrincipalOrgID` condition, and grants only `support:DescribeCases` and `support:DescribeCommunications`. Those two roles can assume only that role name, in accounts of the configured organization. Service-managed StackSets never deploy to the management account. StackSets trusted access must be enabled before deployment.
+- `BedrockInvokePolicy` allows the configured global inference profile plus its Regional and global foundation-model ARNs (only through that profile), explicitly denies every other model, limits `aws-marketplace:Subscribe` to the approved product IDs (`prod-xdkflymybwmvi` for Claude Haiku 4.5, `prod-mxcfnwvpd6kb4` for Claude Sonnet 4.5) and allows `aws-marketplace:ViewSubscriptions`, which has no resource or condition scoping. IAM cannot complete Anthropic's first-time-use form; that remains an account prerequisite.
+- cdk-nag acknowledgements are made with `acknowledgeNagFinding` on the narrowest construct and finding ID, each with a written reason; `test/app.test.ts` lists every acknowledgement in the app.
 
 ## Prerequisites
 
@@ -106,7 +118,7 @@ Lambda code is packaged locally during `cdk synth`; Docker, Finch and manual upl
 ```
 bin/                 CDK app entry point
 lib/config/          Typed configuration, validation and resource names
-lib/constructs/      Reusable CDK constructs (shared Lambda layers)
+lib/constructs/      Reusable CDK constructs (storage, queues, roles, function factory, Bedrock policy, layers)
 lib/packaging/       Docker-free Python asset bundling and content hashing
 lib/stacks/          CDK stacks
 lib/nag.ts           cdk-nag registration

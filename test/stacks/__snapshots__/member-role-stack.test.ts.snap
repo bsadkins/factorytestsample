@@ -1,0 +1,351 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`dev member-role StackSet template snapshot: StackSet stack 1`] = `
+{
+  "Description": "Support Case Insights member-account role StackSet (scidev)",
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "MemberRoleStackSet": {
+      "Properties": {
+        "AutoDeployment": {
+          "Enabled": true,
+          "RetainStacksOnAccountRemoval": false,
+        },
+        "CallAs": "SELF",
+        "Capabilities": [
+          "CAPABILITY_NAMED_IAM",
+        ],
+        "Description": "Support Case Insights read-only member role Support-Case-Analysis-Role-scidev",
+        "ManagedExecution": {
+          "Active": true,
+        },
+        "OperationPreferences": {
+          "ConcurrencyMode": "SOFT_FAILURE_TOLERANCE",
+          "FailureTolerancePercentage": 10,
+          "MaxConcurrentPercentage": 25,
+          "RegionConcurrencyType": "SEQUENTIAL",
+        },
+        "PermissionModel": "SERVICE_MANAGED",
+        "StackInstancesGroup": [
+          {
+            "DeploymentTargets": {
+              "OrganizationalUnitIds": [
+                "r-ab12",
+              ],
+            },
+            "Regions": [
+              "us-east-1",
+            ],
+          },
+        ],
+        "StackSetName": "CaseInsights-MemberRole-scidev",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "TemplateBody": "{"AWSTemplateFormatVersion":"2010-09-09","Description":"Support Case Insights read-only member role (scidev). Managed by StackSet; do not edit in member accounts.","Resources":{"SupportCaseAnalysisRole":{"Type":"AWS::IAM::Role","Properties":{"RoleName":"Support-Case-Analysis-Role-scidev","Description":"Read-only AWS Support access for Support Case Insights (scidev)","MaxSessionDuration":3600,"AssumeRolePolicyDocument":{"Version":"2012-10-17","Statement":[{"Sid":"TrustCaseInsightsCollectors","Effect":"Allow","Principal":{"AWS":[{"Fn::Sub":"arn:\${AWS::Partition}:iam::111111111111:role/CaseInsights-CaseRetrieval-scidev"},{"Fn::Sub":"arn:\${AWS::Partition}:iam::111111111111:role/CaseInsights-CaseAnnotation-scidev"}]},"Action":"sts:AssumeRole","Condition":{"StringEquals":{"aws:PrincipalOrgID":"o-exampleorg1"}}}]},"Policies":[{"PolicyName":"SupportCaseReadOnly","PolicyDocument":{"Version":"2012-10-17","Statement":[{"Sid":"ReadSupportCases","Effect":"Allow","Action":["support:DescribeCases","support:DescribeCommunications"],"Resource":"*"}]}}],"Tags":[{"Key":"Project","Value":"SupportCaseInsights"},{"Key":"UniqueId","Value":"scidev"}]}}},"Outputs":{"RoleArn":{"Value":{"Fn::GetAtt":["SupportCaseAnalysisRole","Arn"]}}}}",
+      },
+      "Type": "AWS::CloudFormation::StackSet",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
+
+exports[`dev member-role StackSet template snapshot: member-account template 1`] = `
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Support Case Insights read-only member role (scidev). Managed by StackSet; do not edit in member accounts.",
+  "Outputs": {
+    "RoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "SupportCaseAnalysisRole",
+          "Arn",
+        ],
+      },
+    },
+  },
+  "Resources": {
+    "SupportCaseAnalysisRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:PrincipalOrgID": "o-exampleorg1",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": [
+                  {
+                    "Fn::Sub": "arn:\${AWS::Partition}:iam::111111111111:role/CaseInsights-CaseRetrieval-scidev",
+                  },
+                  {
+                    "Fn::Sub": "arn:\${AWS::Partition}:iam::111111111111:role/CaseInsights-CaseAnnotation-scidev",
+                  },
+                ],
+              },
+              "Sid": "TrustCaseInsightsCollectors",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Read-only AWS Support access for Support Case Insights (scidev)",
+        "MaxSessionDuration": 3600,
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "support:DescribeCases",
+                    "support:DescribeCommunications",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": "*",
+                  "Sid": "ReadSupportCases",
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "SupportCaseReadOnly",
+          },
+        ],
+        "RoleName": "Support-Case-Analysis-Role-scidev",
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+  },
+}
+`;
+
+exports[`prod member-role StackSet template snapshot: StackSet stack 1`] = `
+{
+  "Description": "Support Case Insights member-account role StackSet (sciprod)",
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "MemberRoleStackSet": {
+      "Properties": {
+        "AutoDeployment": {
+          "Enabled": true,
+          "RetainStacksOnAccountRemoval": false,
+        },
+        "CallAs": "SELF",
+        "Capabilities": [
+          "CAPABILITY_NAMED_IAM",
+        ],
+        "Description": "Support Case Insights read-only member role Support-Case-Analysis-Role-sciprod",
+        "ManagedExecution": {
+          "Active": true,
+        },
+        "OperationPreferences": {
+          "ConcurrencyMode": "SOFT_FAILURE_TOLERANCE",
+          "FailureTolerancePercentage": 10,
+          "MaxConcurrentPercentage": 25,
+          "RegionConcurrencyType": "SEQUENTIAL",
+        },
+        "PermissionModel": "SERVICE_MANAGED",
+        "StackInstancesGroup": [
+          {
+            "DeploymentTargets": {
+              "OrganizationalUnitIds": [
+                "ou-ab12-cdefgh34",
+              ],
+            },
+            "Regions": [
+              "us-east-1",
+            ],
+          },
+        ],
+        "StackSetName": "CaseInsights-MemberRole-sciprod",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "TemplateBody": "{"AWSTemplateFormatVersion":"2010-09-09","Description":"Support Case Insights read-only member role (sciprod). Managed by StackSet; do not edit in member accounts.","Resources":{"SupportCaseAnalysisRole":{"Type":"AWS::IAM::Role","Properties":{"RoleName":"Support-Case-Analysis-Role-sciprod","Description":"Read-only AWS Support access for Support Case Insights (sciprod)","MaxSessionDuration":3600,"AssumeRolePolicyDocument":{"Version":"2012-10-17","Statement":[{"Sid":"TrustCaseInsightsCollectors","Effect":"Allow","Principal":{"AWS":[{"Fn::Sub":"arn:\${AWS::Partition}:iam::111111111111:role/CaseInsights-CaseRetrieval-sciprod"},{"Fn::Sub":"arn:\${AWS::Partition}:iam::111111111111:role/CaseInsights-CaseAnnotation-sciprod"}]},"Action":"sts:AssumeRole","Condition":{"StringEquals":{"aws:PrincipalOrgID":"o-exampleorg1"}}}]},"Policies":[{"PolicyName":"SupportCaseReadOnly","PolicyDocument":{"Version":"2012-10-17","Statement":[{"Sid":"ReadSupportCases","Effect":"Allow","Action":["support:DescribeCases","support:DescribeCommunications"],"Resource":"*"}]}}],"Tags":[{"Key":"Project","Value":"SupportCaseInsights"},{"Key":"UniqueId","Value":"sciprod"}]}}},"Outputs":{"RoleArn":{"Value":{"Fn::GetAtt":["SupportCaseAnalysisRole","Arn"]}}}}",
+      },
+      "Type": "AWS::CloudFormation::StackSet",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
+
+exports[`prod member-role StackSet template snapshot: member-account template 1`] = `
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Support Case Insights read-only member role (sciprod). Managed by StackSet; do not edit in member accounts.",
+  "Outputs": {
+    "RoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "SupportCaseAnalysisRole",
+          "Arn",
+        ],
+      },
+    },
+  },
+  "Resources": {
+    "SupportCaseAnalysisRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:PrincipalOrgID": "o-exampleorg1",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": [
+                  {
+                    "Fn::Sub": "arn:\${AWS::Partition}:iam::111111111111:role/CaseInsights-CaseRetrieval-sciprod",
+                  },
+                  {
+                    "Fn::Sub": "arn:\${AWS::Partition}:iam::111111111111:role/CaseInsights-CaseAnnotation-sciprod",
+                  },
+                ],
+              },
+              "Sid": "TrustCaseInsightsCollectors",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Read-only AWS Support access for Support Case Insights (sciprod)",
+        "MaxSessionDuration": 3600,
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "support:DescribeCases",
+                    "support:DescribeCommunications",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": "*",
+                  "Sid": "ReadSupportCases",
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "SupportCaseReadOnly",
+          },
+        ],
+        "RoleName": "Support-Case-Analysis-Role-sciprod",
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+  },
+}
+`;
