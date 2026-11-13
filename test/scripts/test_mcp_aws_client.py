@@ -12,6 +12,7 @@ import importlib
 import importlib.util
 import json
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -518,15 +519,15 @@ def test_messages_the_endpoint_cannot_accept_are_answered_locally(
     fixture.use(lambda received: result_for(received, {"bytes": len(received.body)}))
     bridge = Bridge([], bridge_env(tmp_path, fixture))
 
+    # MCP 2025-11-25 JSONRPCErrorResponse: `id` is optional but never null, so it is omitted.
     bridge.send_raw(b'{"jsonrpc": "2.0", "id": 1, "method": ')
     assert bridge.recv() == {
         "jsonrpc": "2.0",
-        "id": None,
         "error": {"code": -32700, "message": "Parse error", "data": {"source": "mcp_aws_client"}},
     }
     bridge.send([rpc("ping", 2), rpc("ping", 3)])
     batch = bridge.recv()
-    assert batch["id"] is None
+    assert "id" not in batch
     assert batch["error"]["code"] == -32600
 
     bridge.send_raw(sized_call(4, 32769))
@@ -551,13 +552,85 @@ def test_messages_the_endpoint_cannot_accept_are_answered_locally(
     assert "Refused notifications/progress" in stderr
 
 
+def test_overlong_line_is_answered_without_an_id(fixture: Fixture, tmp_path: Path) -> None:
+    fixture.use(lambda received: result_for(received, {}))
+    bridge = Bridge([], bridge_env(tmp_path, fixture))
+    bridge.send_raw(b'{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"' + b"a" * 1024 * 1024)
+    assert bridge.recv() == {
+        "jsonrpc": "2.0",
+        "error": {
+            "code": -32600,
+            "message": "Message is too large",
+            "data": {"source": "mcp_aws_client"},
+        },
+    }
+    assert bridge.request(rpc("ping", 2)) == {"jsonrpc": "2.0", "id": 2, "result": {}}
+    code, rest, _ = bridge.finish()
+    assert code == 0
+    assert rest == []
+    assert len(fixture.received) == 1
+
+
+def invalid_method_error(**request_id: object) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        **request_id,
+        "error": {
+            "code": -32600,
+            "message": "Invalid Request: method must be a string",
+            "data": {"source": "mcp_aws_client"},
+        },
+    }
+
+
+def test_non_string_methods_are_answered_locally(fixture: Fixture, tmp_path: Path) -> None:
+    fixture.use(lambda received: result_for(received, {}))
+    # One worker, so replies come back in the order the messages were sent.
+    bridge = Bridge(["--max-concurrency", "1"], bridge_env(tmp_path, fixture))
+    bridge.send({"jsonrpc": "2.0", "id": 17, "method": []})
+    bridge.send({"jsonrpc": "2.0", "id": "o", "method": {"name": "ping"}})
+    bridge.send({"jsonrpc": "2.0", "method": 42})  # not a valid notification either
+    bridge.send({"jsonrpc": "2.0", "id": [1], "method": None})  # unusable id is omitted
+    bridge.send(rpc("ping", 19))
+
+    assert [bridge.recv() for _ in range(5)] == [
+        invalid_method_error(id=17),
+        invalid_method_error(id="o"),
+        invalid_method_error(),
+        invalid_method_error(),
+        {"jsonrpc": "2.0", "id": 19, "result": {}},
+    ]
+    code, rest, stderr = bridge.finish()
+    assert code == 0
+    assert rest == []
+    assert [received.message()["id"] for received in fixture.received] == [19]
+    assert stderr.count("Refused a message whose method is not a string") == 4
+    assert "Unexpected bridge failure" not in stderr
+    assert_clean(stderr, b"".join(bridge.stdout_lines))
+
+
+def test_endpoint_error_without_id_for_a_null_id_request_stays_id_less(
+    fixture: Fixture, tmp_path: Path
+) -> None:
+    error = {"code": -32600, "message": "id must be a string or an integer"}
+    fixture.use(lambda received: json_reply({"jsonrpc": "2.0", "error": error}, 400))
+    bridge = Bridge([], bridge_env(tmp_path, fixture))
+    assert bridge.request({"jsonrpc": "2.0", "id": None, "method": "ping"}) == {
+        "jsonrpc": "2.0",
+        "error": error,
+    }
+    assert bridge.finish()[0] == 0
+
+
 # Configuration -----------------------------------------------------------------------------------
 
 
-def run_once(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[bytes]:
+def run_once(
+    args: list[str], env: dict[str, str], stdin: bytes = b""
+) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(  # noqa: S603
         [sys.executable, str(SCRIPT), *args],
-        input=b"",
+        input=stdin,
         capture_output=True,
         env=env,
         cwd=REPO_ROOT,
@@ -629,6 +702,66 @@ def test_missing_credentials_exit_3(tmp_path: Path) -> None:
     assert result.returncode == 3
     assert result.stdout == b""
     assert "No AWS credentials found" in result.stderr.decode()
+
+
+PROVIDER_SENTINEL = "SYNTHETIC-PROVIDER-SESSION-TOKEN-0004"
+CREDENTIAL_PROCESSES = {
+    "failing-process": (
+        f"import sys\nsys.stderr.write('Provider failure: {PROVIDER_SENTINEL}')\nsys.exit(42)\n"
+    ),
+    "malformed-process-output": (
+        f'print(\'{{"Version": 1, "SessionToken": "{PROVIDER_SENTINEL}"\')\n'
+    ),
+    "unsupported-process-version": (
+        f"import json\nprint(json.dumps({{'Version': 2, 'SessionToken': '{PROVIDER_SENTINEL}'}}))\n"
+    ),
+}
+
+
+def assert_single_safe_diagnostic(result: subprocess.CompletedProcess[bytes]) -> str:
+    stderr = result.stderr.decode()
+    assert result.stdout == b""
+    assert len(stderr.strip().splitlines()) == 1, stderr
+    assert "Traceback" not in stderr
+    assert PROVIDER_SENTINEL not in stderr
+    assert_clean(result.stderr)
+    return stderr
+
+
+@pytest.mark.parametrize("behaviour", sorted(CREDENTIAL_PROCESSES))
+def test_credential_provider_failure_exits_3_with_one_safe_line(
+    tmp_path: Path, behaviour: str
+) -> None:
+    helper = tmp_path / "credential_process.py"
+    helper.write_text(CREDENTIAL_PROCESSES[behaviour], encoding="utf-8")
+    config = tmp_path / "config"
+    config.write_text(
+        "[profile broken]\n"
+        f"credential_process = {shlex.quote(sys.executable)} {shlex.quote(str(helper))}\n",
+        encoding="utf-8",
+    )
+    env = base_env(tmp_path, "https://abc123.execute-api.eu-west-2.amazonaws.com/v1/mcp")
+    env["AWS_CONFIG_FILE"] = str(config)
+    env["AWS_PROFILE"] = "broken"
+    result = run_once([], env, stdin=json.dumps(rpc("ping", 1)).encode() + b"\n")
+    assert result.returncode == 3
+    stderr = assert_single_safe_diagnostic(result)
+    assert "AWS credentials could not be obtained from the credential provider chain" in stderr
+
+
+def test_unreadable_aws_config_exits_3_with_one_safe_line(tmp_path: Path) -> None:
+    config = tmp_path / "config"
+    config.write_text(f"{PROVIDER_SENTINEL}\n[profile x]\nregion = eu-west-2\n", encoding="utf-8")
+    env = {
+        **base_env(tmp_path, "https://abc123.execute-api.eu-west-2.amazonaws.com/v1/mcp"),
+        **env_credentials(),
+    }
+    env["AWS_CONFIG_FILE"] = str(config)
+    del env["AWS_REGION"]
+    result = run_once([], env)
+    assert result.returncode == 3
+    stderr = assert_single_safe_diagnostic(result)
+    assert "The AWS configuration could not be loaded (ConfigParseError)" in stderr
 
 
 def test_unknown_profile_exits_3(tmp_path: Path) -> None:

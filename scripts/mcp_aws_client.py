@@ -124,7 +124,12 @@ JSON-RPC errors (-32000 HTTP error, -32001 unreachable or timed out, -32002 inva
 
 Plain http:// URLs are accepted only for loopback hosts, for local testing.
 
-Exit status: 0 stdin closed, 2 invalid options or configuration, 3 no AWS credentials found.
+Messages the endpoint cannot accept are answered locally: -32700 for invalid JSON, -32600 for
+batches, oversized messages and non-string methods. An error whose request id is unknown has no
+id member.
+
+Exit status: 0 stdin closed, 2 invalid options or configuration, 3 AWS credentials or
+configuration could not be loaded.
 """
 
 logger = logging.getLogger("mcp_aws_client")
@@ -191,11 +196,26 @@ def resolve_region(url: str, explicit: str | None, profile_region: str | None) -
 def _rpc_error(
     request_id: object, code: int, message: str, data: Mapping[str, Any]
 ) -> dict[str, Any]:
-    return {
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "error": {"code": code, "message": message, "data": {"source": "mcp_aws_client", **data}},
+    """A bridge-local JSON-RPC error; without a known request id it has no `id` member.
+
+    The MCP 2025-11-25 schema makes `JSONRPCErrorResponse.id` optional but never null.
+    """
+    response: dict[str, Any] = {"jsonrpc": "2.0"}
+    if request_id is not None:
+        response["id"] = request_id
+    response["error"] = {
+        "code": code,
+        "message": message,
+        "data": {"source": "mcp_aws_client", **data},
     }
+    return response
+
+
+def _usable_id(value: object) -> str | int | None:
+    """`value` if it is a valid MCP request id (string or integer), else None."""
+    if isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool)):
+        return value
+    return None
 
 
 def _error_type(response: AWSResponse) -> str | None:
@@ -239,7 +259,7 @@ def _parse_jsonrpc_reply(content: bytes) -> dict[str, Any] | None:
 
 def _method_label(message: Mapping[str, Any]) -> str:
     method = message.get("method")
-    if method in KNOWN_METHODS:
+    if isinstance(method, str) and method in KNOWN_METHODS:
         label = str(method)
         if label == "tools/call":
             params = message.get("params")
@@ -281,6 +301,15 @@ class Bridge:
             logger.warning("Discarded a stdin message that is not a JSON-RPC object")
             return _rpc_error(
                 None, INVALID_REQUEST, "Batch and non-object messages are not supported", {}
+            )
+        if "method" in message and not isinstance(message["method"], str):
+            # Neither a request nor a notification; JSON-RPC answers it even without an id.
+            logger.warning("Refused a message whose method is not a string")
+            return _rpc_error(
+                _usable_id(message.get("id")),
+                INVALID_REQUEST,
+                "Invalid Request: method must be a string",
+                {},
             )
         is_request = "method" in message and "id" in message
         request_id = message.get("id") if is_request else None
@@ -378,7 +407,10 @@ class Bridge:
             reply_id = document.get("id")
             if "error" in document and reply_id is None:
                 # The endpoint could not read the id; the bridge knows which request failed.
-                document["id"] = request_id
+                if request_id is None:
+                    document.pop("id", None)
+                else:
+                    document["id"] = request_id
             elif reply_id != request_id:
                 logger.warning("%s failed: response id does not match the request", label)
                 return _rpc_error(
@@ -563,26 +595,42 @@ def _configure_logging(verbose: bool) -> None:
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv, os.environ)
-    protocol_out = sys.stdout.buffer
-    # Anything printed by mistake must not corrupt the protocol stream.
-    sys.stdout = sys.stderr
-    _configure_logging(args.verbose)
+class StartupError(Exception):
+    """The bridge cannot start; `message` is safe to log and `exit_code` is the exit status."""
+
+    def __init__(self, message: str, exit_code: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.exit_code = exit_code
+
+
+def load_startup(args: argparse.Namespace) -> tuple[Settings, Credentials]:
+    """Validate the configuration and resolve credentials, or raise `StartupError`."""
     try:
         url = validate_url(args.url)
         session = boto3.Session(profile_name=args.profile)
         region = resolve_region(url, args.region, session.region_name)
     except ProfileNotFound:
-        logger.error("The AWS profile was not found")
-        return EXIT_CREDENTIALS
+        raise StartupError("The AWS profile was not found", EXIT_CREDENTIALS) from None
     except ConfigError as exc:
-        logger.error("%s", exc)
-        return EXIT_USAGE
-    credentials = session.get_credentials()
+        raise StartupError(str(exc), EXIT_USAGE) from None
+    except BotoCoreError as exc:
+        raise StartupError(
+            f"The AWS configuration could not be loaded ({type(exc).__name__})", EXIT_CREDENTIALS
+        ) from None
+    try:
+        credentials = session.get_credentials()
+    except Exception as exc:
+        # Provider exceptions can carry a credential_process's raw stderr; log the class only.
+        raise StartupError(
+            "AWS credentials could not be obtained from the credential provider chain "
+            f"({type(exc).__name__})",
+            EXIT_CREDENTIALS,
+        ) from None
     if credentials is None:
-        logger.error("No AWS credentials found through the credential provider chain")
-        return EXIT_CREDENTIALS
+        raise StartupError(
+            "No AWS credentials found through the credential provider chain", EXIT_CREDENTIALS
+        )
     settings = Settings(
         url=url,
         region=region,
@@ -591,13 +639,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         timeout=args.timeout,
         concurrency=args.max_concurrency,
     )
-    parts = urlsplit(url)
+    return settings, credentials
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv, os.environ)
+    protocol_out = sys.stdout.buffer
+    # Anything printed by mistake must not corrupt the protocol stream.
+    sys.stdout = sys.stderr
+    _configure_logging(args.verbose)
+    try:
+        settings, credentials = load_startup(args)
+    except StartupError as exc:
+        logger.error("%s", exc.message)
+        return exc.exit_code
+    parts = urlsplit(settings.url)
     logger.info(
         "Forwarding MCP stdio to %s://%s%s (Region %s, credentials: %s)",
         parts.scheme,
         parts.netloc,
         parts.path,
-        region,
+        settings.region,
         credentials.method,
     )
     bridge = Bridge(settings, credentials)

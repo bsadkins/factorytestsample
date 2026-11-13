@@ -138,12 +138,14 @@ Stdout carries MCP protocol messages only. Diagnostics go to stderr and never in
 | `-32001` | The endpoint could not be reached, TLS verification failed or the response timed out | `errorType`, `retryable` |
 | `-32002` | The endpoint's reply was not a valid JSON-RPC response | `httpStatus` |
 | `-32003` | Credentials could not be obtained or refreshed | `errorType` |
-| `-32600` | The message exceeds the endpoint's 32,768-byte limit, or is a batch; it is not sent | |
+| `-32600` | The message exceeds the endpoint's 32,768-byte limit, is a batch, or has a `method` that is not a string; it is not sent | |
 | `-32700` | The line is not valid JSON; it is not sent | |
+
+When the bridge cannot tell which request a local error belongs to (invalid JSON, a batch, a line over 1 MiB, or a malformed message without a usable string or integer `id`), the error has no `id` member, as the MCP 2025-11-25 schema requires; it never sends `"id": null`.
 
 JSON-RPC errors produced by the MCP function itself (for example `-32602` for an unknown tool) are passed through unchanged. The body of an API Gateway error is never copied, because signature errors can echo the canonical request, including the session token.
 
-Exit status: `0` when stdin closes, `2` for invalid options or configuration, `3` when no credentials are found.
+Exit status: `0` when stdin closes, `2` for invalid options or configuration, `3` when no credentials are found, the profile does not exist, the AWS configuration files cannot be parsed or the credential provider fails. A startup failure writes one stderr line that names only the error class, never the provider's own output.
 
 ## Kiro
 
@@ -200,7 +202,7 @@ An unsigned request, for example with plain `curl`, must receive HTTP `403`.
 | Symptom | Likely cause and fix |
 | --- | --- |
 | Bridge exits with status `2` | `MCP_SERVER_URL` is missing, not `https://`, or contradicts `AWS_REGION`. The stderr line names the problem. |
-| Bridge exits with status `3` | No credentials found or the profile does not exist. Run `aws sts get-caller-identity` with the same profile, or `aws sso login`. |
+| Bridge exits with status `3` | No credentials found, the profile does not exist, the AWS config file is malformed, or a `credential_process` or other provider failed. Run `aws sts get-caller-identity` with the same profile, or `aws sso login`, to see the provider's full error. |
 | `-32000`, `httpStatus` `403`, `errorType` `InvalidSignatureException` | Wrong `AWS_REGION`, or the local clock is more than five minutes out. |
 | `-32000`, `httpStatus` `403`, `errorType` `AccessDeniedException` | Your principal is not in `mcpAllowedPrincipals`, lacks `execute-api:Invoke`, or is outside the Organization. |
 | `-32000`, `httpStatus` `403`, `errorType` `ExpiredTokenException` or `UnrecognizedClientException` | Temporary credentials expired or are invalid. Refresh them. |
