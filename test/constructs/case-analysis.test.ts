@@ -6,6 +6,7 @@ import {
   ANALYSIS_STAGE_PACKAGES,
   addCaseInsightsStacks,
   CaseInsightsCoreStack,
+  CLEANUP_CLAIM_FILE,
   CLEANUP_RESETTABLE_FILES,
   CLEANUP_SCHEDULE_RETRY_ATTEMPTS,
   CLEANUP_STATE_PREFIX,
@@ -310,6 +311,8 @@ describe('CaseAnalysis', () => {
         Action: 's3:DeleteObject',
         Resource: ['communications.json', 'data.json', 'workflow.json'].map((file) => raw(`account_number=*/case_number=*/${file}`)),
       },
+      // Cleanup writes only its reset claim in place of the ownership marker before deleting inputs.
+      { Sid: 'ClaimAbandonedCases', Effect: 'Allow', Action: 's3:PutObject', Resource: raw('account_number=*/case_number=*/workflow.json') },
       { Sid: 'KeepCleanupCursor', Effect: 'Allow', Action: ['s3:DeleteObject', 's3:GetObject', 's3:PutObject'], Resource: raw('cleanup-state/*') },
       trackDeliveries,
       sendFailures,
@@ -348,6 +351,8 @@ describe('CaseAnalysis', () => {
     expect(constant(cleanup, 'CURSOR_KEY').startsWith(CLEANUP_STATE_PREFIX)).toBe(true);
     expect([constant(cleanup, 'RAW_FILE'), constant(cleanup, 'COMMUNICATIONS_FILE'), constant(workflow, 'MARKER_FILE')]).toEqual([...CLEANUP_RESETTABLE_FILES]);
     expect(cleanup).toMatch(/^RESETTABLE_FILES: Final = \(RAW_FILE, COMMUNICATIONS_FILE, MARKER_FILE\)$/m);
+    expect(cleanup).toMatch(/^INPUT_FILES: Final = \(RAW_FILE, COMMUNICATIONS_FILE\)$/m);
+    expect(CLEANUP_CLAIM_FILE).toBe(constant(workflow, 'MARKER_FILE'));
     expect(TERMINAL_MARKER_PATTERN.endsWith(`/${constant(python('common/failures.py'), 'TERMINAL_MARKER_FILE')}`)).toBe(true);
     expect(FAILURE_DELIVERY_PATTERN).toBe(`account_number=*/case_number=*/${constant(python('common/failure_delivery.py'), 'DELIVERY_DIR')}/*`);
   });

@@ -5,21 +5,29 @@ time and resets a case only when every check agrees the work is abandoned:
 
 - the case has no committed processed record (processed cases are never touched);
 - every object for the case is older than the grace period;
-- no RUNNING or PENDING_REDRIVE execution of the CaseAnalysis state machine belongs to the case;
+- no RUNNING execution of the CaseAnalysis state machine belongs to the case (a paginated
+  top-level listing; an owner waiting in PENDING_REDRIVE is found through DescribeExecution);
 - the case's ownership marker, if any, names an execution that is closed (or that never started);
 - a closed FAILED, TIMED_OUT or ABORTED execution has its failure record confirmed on the
   workflow failure queue first (see `common.failure_delivery`): a pending failure-delivery
-  marker is written and delivered before the ownership marker can be deleted, because a
+  marker is written and delivered before the ownership marker can be replaced, because a
   whole-execution timeout or abort bypasses the workflow's failure handler;
-- the processed record is checked again immediately before deleting.
+- the processed record is checked again after the reset claim below is written.
 
-A reset deletes only the current versions of `data.json`, `communications.json` and the
-ownership marker `workflow.json`, each with an S3 conditional delete on the ETag that was checked,
-so anything a new run wrote meanwhile survives. Stage checkpoints and terminal failure markers
-are kept: valid checkpoints are reused by the next attempt and stale ones are ignored. Failure-
-delivery markers are never deleted and do not count as recent activity. Unknown or failed status
-checks, and failure records that could not be preserved or sent, never lead to a deletion; they
-are counted as cleanup errors and retried on the next run.
+Before any input is deleted, cleanup replaces exactly the ownership marker it judged (or its
+absence) with a reset claim (`common.workflow.ResetClaim`), conditional on that marker's ETag. A
+starter that took ownership in the meantime therefore always wins and keeps the inputs, and
+starters never overwrite a recent claim. Then `data.json` and `communications.json` are deleted,
+each conditional on the ETag that was listed, and finally the claim itself. If an input changed
+or the processed record appeared, the claim is released and the inputs stay. A claim left by an
+interrupted cleanup protects the case while recent and is completed by a later cleanup (or taken
+over by a starter) once stale; another cleanup's recent claim is skipped as recent work.
+
+Stage checkpoints and terminal failure markers are kept: valid checkpoints are reused by the next
+attempt and stale ones are ignored. Failure-delivery markers are never deleted and do not count
+as recent activity. Unknown or failed status checks, and failure records that could not be
+preserved or sent, never lead to a deletion; they are counted as cleanup errors and retried on
+the next run.
 
 Every case partition visited, including processed, recent and active ones, also has its pending
 failure-delivery markers delivered, so evidence kept by the workflow starter reaches the queue.
@@ -33,6 +41,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Iterator
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import cache
@@ -41,6 +50,7 @@ from typing import TYPE_CHECKING, Any, Final
 import boto3
 from aws_lambda_powertools import Logger, Metrics, Tracer
 from aws_lambda_powertools.metrics import MetricUnit
+from botocore.exceptions import ClientError
 from common.aws import client_config
 from common.failure_delivery import (
     DELIVERY_DIR,
@@ -51,11 +61,10 @@ from common.failure_delivery import (
 )
 from common.processed import case_record_key, get_existing_cases_batch
 from common.s3_json import (
-    S3JsonDecodeError,
-    S3ObjectTooLargeError,
+    S3PreconditionFailedError,
     delete_if_unchanged,
+    is_not_found_error,
     object_exists,
-    read_json_if_exists,
     read_json_with_etag,
     write_json,
 )
@@ -68,10 +77,13 @@ from common.workflow import (
     SUCCEEDED_STATUS,
     InvalidOwnershipMarkerError,
     OwnershipMarker,
+    ResetClaim,
     describe_status,
     display_component,
     execution_arn,
+    marker_key,
     parse_execution_name,
+    read_ownership,
 )
 
 if TYPE_CHECKING:
@@ -88,9 +100,11 @@ CASE_PREFIX: Final = "account_number="
 CURSOR_KEY: Final = "cleanup-state/cursor.json"
 RAW_FILE: Final = "data.json"
 COMMUNICATIONS_FILE: Final = "communications.json"
-# Deleted in this order: data.json is rewritten first by any new run, so a changed ETag there
-# stops the reset before anything else is removed.
+# Deleted in this order after the reset claim: data.json is rewritten first by any new run, so a
+# changed ETag there stops the reset before anything else is removed.
+INPUT_FILES: Final = (RAW_FILE, COMMUNICATIONS_FILE)
 RESETTABLE_FILES: Final = (RAW_FILE, COMMUNICATIONS_FILE, MARKER_FILE)
+LISTED_STATUS: Final = "RUNNING"
 TIME_MARGIN_SECONDS: Final = 30
 LIST_PAGE_SIZE = 1000
 _CASE_KEY: Final = re.compile(r"^account_number=(\d{12})/case_number=([A-Za-z0-9_-]{1,64})/(.+)$")
@@ -192,15 +206,18 @@ class Summary:
 
 
 def active_cases(sfn: SFNClient, state_machine_arn: str) -> set[tuple[str, str]]:
-    """`(accountId, caseComponent)` of every RUNNING or PENDING_REDRIVE execution."""
+    """`(accountId, caseComponent)` of every RUNNING execution of the state machine.
+
+    ListExecutions accepts PENDING_REDRIVE only for Map Runs, so it is not listed here; an
+    execution waiting for a redrive is caught through the owner's DescribeExecution status.
+    """
     active: set[tuple[str, str]] = set()
     paginator = sfn.get_paginator("list_executions")
-    for status in sorted(ACTIVE_STATUSES):
-        for page in paginator.paginate(stateMachineArn=state_machine_arn, statusFilter=status):  # type: ignore[arg-type]
-            for execution in page.get("executions", []):
-                identity = parse_execution_name(execution["name"])
-                if identity is not None:
-                    active.add((identity.account_id, identity.case_component))
+    for page in paginator.paginate(stateMachineArn=state_machine_arn, statusFilter=LISTED_STATUS):
+        for execution in page.get("executions", []):
+            identity = parse_execution_name(execution["name"])
+            if identity is not None:
+                active.add((identity.account_id, identity.case_component))
     return active
 
 
@@ -269,24 +286,33 @@ class Cleaner:
             tally=self.deliveries,
         )
 
-    def marker_closed(self, case: CaseObjects) -> str:
-        """`closed`, `active`, `processed` or `unknown` for the case's ownership marker.
+    def ownership(self, case: CaseObjects) -> tuple[str, str | None]:
+        """Judge the case's `workflow.json` and return the verdict with the judged ETag.
+
+        The verdict is `closed` (no marker, a closed or never-started owner, or a stale reset
+        claim), `recent` (a reset claim another cleanup may still be working on), `active`,
+        `processed` or `unknown`. The ETag is `None` when there is no marker.
+        """
+        try:
+            current = read_ownership(
+                self.aws.s3, self.settings.raw_bucket, case.account_id, case.display_id
+            )
+        except InvalidOwnershipMarkerError:
+            return "unknown", None
+        if current is None:
+            return "closed", None
+        owner, etag = current
+        if isinstance(owner, ResetClaim):
+            return ("closed" if owner.is_stale(now()) else "recent"), etag
+        return self.marker_closed(case, owner), etag
+
+    def marker_closed(self, case: CaseObjects, marker: OwnershipMarker) -> str:
+        """`closed`, `active` or `processed` for the execution named by the ownership marker.
 
         A closed failed execution is `closed` only once its failure record is preserved and sent;
-        S3 or SQS errors propagate, so the marker is not deleted.
+        S3 or SQS errors propagate, so the marker is not replaced. PENDING_REDRIVE cannot be
+        listed for a state machine, so the owner's described status is what protects it.
         """
-        key = case.objects[MARKER_FILE].key
-        try:
-            document = read_json_if_exists(
-                self.aws.s3, self.settings.raw_bucket, key, max_bytes=MAX_MARKER_BYTES
-            )
-            if document is None:
-                return "closed"
-            marker = OwnershipMarker.from_document(document)
-        except (S3JsonDecodeError, S3ObjectTooLargeError, InvalidOwnershipMarkerError):
-            return "unknown"
-        if (marker.account_id, marker.display_id) != (case.account_id, case.display_id):
-            return "unknown"
         arn = execution_arn(self.settings.state_machine_arn, marker.execution_name)
         status = describe_status(self.aws.sfn, arn)
         if status in ACTIVE_STATUSES:
@@ -321,21 +347,83 @@ class Cleaner:
             return "recent"
         if (case.account_id, display_component(case.display_id)) in self.active:
             return "active"
+        judged: str | None = None
         if MARKER_FILE in case.objects:
-            state = self.marker_closed(case)
+            state, judged = self.ownership(case)
             if state != "closed":
                 return state
         if self.is_processed_now(case):
             return "processed"
-        return self.reset(case)
+        return self.reset(case, judged)
 
-    def reset(self, case: CaseObjects) -> str:
-        for name in RESETTABLE_FILES:
-            item = case.objects.get(name)
-            if item is None:
-                continue
-            if not delete_if_unchanged(self.aws.s3, self.settings.raw_bucket, item.key, item.etag):
-                return "conflict"
+    def claim(self, case: CaseObjects, judged: str | None) -> str | None:
+        """Replace exactly the judged `workflow.json` (or its absence) with a reset claim.
+
+        Returns the claim's ETag, or `None` when a starter changed ownership meanwhile.
+        """
+        claim = ResetClaim(case.account_id, case.display_id, now())
+        try:
+            written = write_json(
+                self.aws.s3,
+                self.settings.raw_bucket,
+                claim.key,
+                claim.to_document(),
+                if_none_match=judged is None,
+                if_match=judged,
+                max_bytes=MAX_MARKER_BYTES,
+            )
+        except S3PreconditionFailedError:
+            return None
+        except ClientError as exc:
+            if is_not_found_error(exc):
+                return None
+            raise
+        return written.etag
+
+    def release(self, case: CaseObjects, claim_etag: str) -> None:
+        """Remove our reset claim so a new run can take ownership; the inputs stay."""
+        delete_if_unchanged(
+            self.aws.s3,
+            self.settings.raw_bucket,
+            marker_key(case.account_id, case.display_id),
+            claim_etag,
+        )
+
+    def reset(self, case: CaseObjects, judged: str | None) -> str:
+        claim_etag = self.claim(case, judged)
+        if claim_etag is None:
+            return "conflict"
+        deleted_input = False
+        try:
+            # A record committed between the first check and the claim must keep its inputs.
+            if self.is_processed_now(case):
+                self.release(case, claim_etag)
+                return "processed"
+            for name in INPUT_FILES:
+                item = case.objects.get(name)
+                if item is None:
+                    continue
+                if not delete_if_unchanged(
+                    self.aws.s3, self.settings.raw_bucket, item.key, item.etag
+                ):
+                    if not deleted_input:
+                        self.release(case, claim_etag)
+                    return "conflict"
+                deleted_input = True
+                metrics.add_metric(name="CleanupObjectsDeleted", unit=MetricUnit.Count, value=1)
+        except Exception:
+            # Once an input is gone the claim must stay, so starters wait until a later cleanup
+            # (or the stale age) completes the reset instead of running on partial inputs.
+            if not deleted_input:
+                with suppress(Exception):
+                    self.release(case, claim_etag)
+            raise
+        if delete_if_unchanged(
+            self.aws.s3,
+            self.settings.raw_bucket,
+            marker_key(case.account_id, case.display_id),
+            claim_etag,
+        ):
             metrics.add_metric(name="CleanupObjectsDeleted", unit=MetricUnit.Count, value=1)
         return "reset"
 

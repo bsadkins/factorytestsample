@@ -23,6 +23,7 @@ from common.run_markers import (
     AccountMarker,
     CaseMarker,
     InvalidRunMarkerError,
+    dispatching_account,
     retrieved_account,
     skipped_account,
 )
@@ -134,10 +135,15 @@ def test_execution_input_is_recognised_only_for_its_own_execution() -> None:
 
 
 def test_run_markers_round_trip() -> None:
-    retrieved = retrieved_account(RUN, ACCOUNT, ["1001", "1002"])
+    cases = {"1001": "case-1001", "1002": "case-1002"}
+    retrieved = retrieved_account(RUN, ACCOUNT, cases)
     skipped = skipped_account(RUN, ACCOUNT, "AccessDenied")
-    for marker in (retrieved, skipped):
+    dispatching = dispatching_account(RUN, ACCOUNT, cases)
+    skipped_after_dispatch = skipped_account(RUN, ACCOUNT, "SubscriptionRequired", cases)
+    for marker in (retrieved, skipped, dispatching, skipped_after_dispatch):
         assert AccountMarker.from_document(marker.to_document()) == marker
+    assert skipped_after_dispatch.dispatched == cases
+    assert retrieved.to_document()["caseIds"] == ["case-1001", "case-1002"]
     assert retrieved.key == f"runs/{RUN}/accounts/{ACCOUNT}.json"
     handoff = CaseMarker(RUN, ACCOUNT, "1001", "started", NAME)
     assert CaseMarker.from_document(handoff.to_document()) == handoff
@@ -155,10 +161,15 @@ def test_run_markers_round_trip() -> None:
         {"outcome": "skipped", "skipReason": None},
         {"outcome": "skipped", "skipReason": "Access Denied!"},
         {"skipReason": "AccessDenied"},
+        {"outcome": "dispatching", "skipReason": "AccessDenied"},
+        {"caseIds": []},
+        {"caseIds": "case-1001"},
+        {"caseIds": ["bad case id!"]},
+        {"cases": ["1001", "1001"], "caseIds": ["case-1001", "case-1001"]},
     ],
 )
 def test_malformed_account_markers_are_rejected(change: dict[str, Any]) -> None:
-    document = {**retrieved_account(RUN, ACCOUNT, ["1001"]).to_document(), **change}
+    document = {**retrieved_account(RUN, ACCOUNT, {"1001": "case-1001"}).to_document(), **change}
     with pytest.raises(InvalidRunMarkerError):
         AccountMarker.from_document(document)
 

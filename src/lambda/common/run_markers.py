@@ -4,8 +4,11 @@ Account discovery starts a run by writing `account-lists/<runId>.json`; finishin
 not completion. These raw-bucket markers let Run Completion decide when every account and case of
 a run has reached a terminal outcome:
 
-- `runs/<runId>/accounts/<accountId>.json`: written by Case Retrieval once an account is settled
-  for the run: `retrieved` with the display IDs it queued for annotation, or `skipped`;
+- `runs/<runId>/accounts/<accountId>.json`: written by Case Retrieval. `dispatching` records the
+  cases it is about to queue for annotation before any reference is sent (the account is not
+  settled yet); `retrieved` settles the account once every reference is queued, and `skipped`
+  once access is lost. The recorded cases only grow across retries of the same run, so a case
+  that may have been handed off is never dropped, even by a later skip;
 - `runs/<runId>/cases/<accountId>/<displayId>.json`: the case's hand-off in that run. Annotation
   writes outcomes that end the case's work for the run (skips, not found, already processed,
   conversations too large to summarise); the workflow starter writes the execution that owns the
@@ -13,20 +16,31 @@ a run has reached a terminal outcome:
 - `runs/<runId>/completion.json`: written once, with IfNoneMatch, when the run is complete.
 
 They are evidence for completion reconciliation only. SQS and Step Functions still coordinate the
-work; nothing reads these markers to decide whether to start or skip a case. They contain
+work; nothing reads these markers to decide whether to start or skip a case (Case Retrieval reads
+its own account marker only to keep the recorded cases monotonic). They contain
 identifiers and counts, never case content, and expire with the raw bucket's retention.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 from common.account_list import validate_run_id
+from common.case_refs import validate_case_id
 from common.processed import validate_account_id, validate_display_id
-from common.s3_json import S3PreconditionFailedError, WriteResult, write_json
+from common.s3_json import (
+    S3JsonDecodeError,
+    S3ObjectNotFoundError,
+    S3ObjectTooLargeError,
+    S3PreconditionFailedError,
+    WriteResult,
+    key_exists_by_listing,
+    read_json_object,
+    write_json,
+)
 
 if TYPE_CHECKING:
     from types_boto3_s3.client import S3Client
@@ -35,6 +49,7 @@ RUNS_PREFIX: Final = "runs/"
 RUN_MARKER_SCHEMA_VERSION: Final = 1
 MAX_ACCOUNT_MARKER_BYTES: Final = 16 * 1024 * 1024
 MAX_CASE_MARKER_BYTES: Final = 4 * 1024
+ACCOUNT_DISPATCHING: Final = "dispatching"
 ACCOUNT_RETRIEVED: Final = "retrieved"
 ACCOUNT_SKIPPED: Final = "skipped"
 CASE_STARTED: Final = "started"
@@ -89,19 +104,30 @@ def _require(document: Mapping[str, Any], keys: frozenset[str]) -> None:
 
 @dataclass(frozen=True, slots=True)
 class AccountMarker:
-    """How one account was settled in one run."""
+    """How one account was handled in one run, with every case it may have handed off.
+
+    `cases` and `caseIds` are parallel lists (display ID and case ID of each case).
+    """
 
     run_id: str
     account_id: str
     outcome: str
     cases: tuple[str, ...] = ()
     skip_reason: str | None = None
+    case_ids: tuple[str, ...] = ()
 
-    _KEYS = frozenset({"schemaVersion", "runId", "accountId", "outcome", "cases", "skipReason"})
+    _KEYS = frozenset(
+        {"schemaVersion", "runId", "accountId", "outcome", "cases", "caseIds", "skipReason"}
+    )
 
     @property
     def key(self) -> str:
         return account_marker_key(self.run_id, self.account_id)
+
+    @property
+    def dispatched(self) -> dict[str, str]:
+        """Display ID to case ID of every case recorded as handed off, in recorded order."""
+        return dict(zip(self.cases, self.case_ids, strict=True))
 
     def to_document(self) -> dict[str, Any]:
         return {
@@ -110,6 +136,7 @@ class AccountMarker:
             "accountId": self.account_id,
             "outcome": self.outcome,
             "cases": list(self.cases),
+            "caseIds": list(self.case_ids),
             "skipReason": self.skip_reason,
         }
 
@@ -118,8 +145,13 @@ class AccountMarker:
         _require(document, cls._KEYS)
         outcome = document["outcome"]
         cases = document["cases"]
+        case_ids = document["caseIds"]
         reason = document["skipReason"]
-        if not isinstance(cases, list):
+        if (
+            not isinstance(cases, list)
+            or not isinstance(case_ids, list)
+            or len(cases) != len(case_ids)
+        ):
             raise InvalidRunMarkerError("account marker cases are malformed")
         try:
             marker = cls(
@@ -128,17 +160,19 @@ class AccountMarker:
                 outcome=outcome,
                 cases=tuple(validate_display_id(case) for case in cases),
                 skip_reason=reason,
+                case_ids=tuple(validate_case_id(case_id) for case_id in case_ids),
             )
         except (ValueError, TypeError):
             raise InvalidRunMarkerError("account marker values are malformed") from None
-        retrieved = outcome == ACCOUNT_RETRIEVED and reason is None
+        if len(set(marker.cases)) != len(marker.cases):
+            raise InvalidRunMarkerError("account marker cases are duplicated")
+        unsettled = outcome in {ACCOUNT_RETRIEVED, ACCOUNT_DISPATCHING} and reason is None
         skipped = (
             outcome == ACCOUNT_SKIPPED
-            and not cases
             and isinstance(reason, str)
             and _SKIP_REASON.match(reason) is not None
         )
-        if not (retrieved or skipped):
+        if not (unsettled or skipped):
             raise InvalidRunMarkerError("account marker outcome is malformed")
         return marker
 
@@ -204,12 +238,63 @@ def write_case_marker(s3: S3Client, bucket: str, marker: CaseMarker) -> WriteRes
     return write_json(s3, bucket, marker.key, marker.to_document(), max_bytes=MAX_CASE_MARKER_BYTES)
 
 
-def retrieved_account(run_id: str, account_id: str, cases: Sequence[str]) -> AccountMarker:
-    return AccountMarker(run_id, account_id, ACCOUNT_RETRIEVED, tuple(cases))
+def read_account_marker(
+    s3: S3Client, bucket: str, run_id: str, account_id: str
+) -> AccountMarker | None:
+    """The account's run marker, or `None` when there is none.
+
+    Existence is checked by listing first, so a prefix-scoped s3:ListBucket is enough to tell an
+    absent marker from a denied read. An invalid marker raises `InvalidRunMarkerError`.
+    """
+    key = account_marker_key(run_id, account_id)
+    if not key_exists_by_listing(s3, bucket, key):
+        return None
+    try:
+        document = read_json_object(s3, bucket, key, max_bytes=MAX_ACCOUNT_MARKER_BYTES)
+    except S3ObjectNotFoundError:
+        return None
+    except (S3JsonDecodeError, S3ObjectTooLargeError):
+        raise InvalidRunMarkerError("account marker is unreadable") from None
+    marker = AccountMarker.from_document(document)
+    if (marker.run_id, marker.account_id) != (run_id, account_id):
+        raise InvalidRunMarkerError("account marker is for another run or account")
+    return marker
 
 
-def skipped_account(run_id: str, account_id: str, reason: str) -> AccountMarker:
-    return AccountMarker(run_id, account_id, ACCOUNT_SKIPPED, (), reason)
+def _account(
+    run_id: str,
+    account_id: str,
+    outcome: str,
+    dispatched: Mapping[str, str],
+    reason: str | None = None,
+) -> AccountMarker:
+    return AccountMarker(
+        run_id,
+        account_id,
+        outcome,
+        tuple(dispatched),
+        reason,
+        tuple(dispatched.values()),
+    )
+
+
+def dispatching_account(
+    run_id: str, account_id: str, dispatched: Mapping[str, str]
+) -> AccountMarker:
+    """Intent recorded before any case reference is sent; the account is not settled yet."""
+    return _account(run_id, account_id, ACCOUNT_DISPATCHING, dispatched)
+
+
+def retrieved_account(run_id: str, account_id: str, dispatched: Mapping[str, str]) -> AccountMarker:
+    """Every case in `dispatched` (display ID to case ID) has been queued for annotation."""
+    return _account(run_id, account_id, ACCOUNT_RETRIEVED, dispatched)
+
+
+def skipped_account(
+    run_id: str, account_id: str, reason: str, dispatched: Mapping[str, str] | None = None
+) -> AccountMarker:
+    """The account lost access; `dispatched` are cases an earlier attempt already handed off."""
+    return _account(run_id, account_id, ACCOUNT_SKIPPED, dispatched or {}, reason)
 
 
 def write_completion(

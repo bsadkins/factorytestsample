@@ -16,7 +16,9 @@ from common.failure_delivery import DeliveryMarker, delivery_marker_key
 from common.idempotency import persistence_layer
 from common.workflow import (
     MAX_ATTEMPTS_PER_RUN,
+    RESET_CLAIM_STALE_AFTER,
     OwnershipMarker,
+    ResetClaim,
     encode_input,
     execution_input,
     execution_name,
@@ -532,3 +534,67 @@ def test_each_decision_is_recorded_for_run_completion(env: Env) -> None:
     assert env.case_marker(NEXT_RUN)["outcome"] == "alreadyActive"
     assert env.case_marker(NEXT_RUN)["executionName"] == name(1)
     assert env.case_outcome(RUN, display="170000000002") == "alreadyProcessed"
+
+
+# A cleanup reset claim in workflow.json means cleanup is deleting the case inputs. A starter never
+# overwrites a recent claim; only a claim older than any cleanup can run is taken over.
+
+
+def put_reset_claim(env: Env, claimed_at: datetime) -> dict[str, Any]:
+    document = ResetClaim(ACCOUNT, DISPLAY, claimed_at).to_document()
+    env.s3.put_object(Bucket=RAW, Key=marker_key(ACCOUNT, DISPLAY), Body=json.dumps(document))
+    return document
+
+
+def test_recent_reset_claim_is_never_overwritten_and_the_record_retries(env: Env) -> None:
+    claim = put_reset_claim(env, START - timedelta(minutes=5))
+
+    response = env.handle(summary_ref(NEXT_RUN))
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "m0"}]}
+    assert env.marker() == claim
+    assert env.sfn.started() == []
+    assert env.case_outcome(NEXT_RUN) is None
+    assert env.metrics() == {"WorkflowStartFailures": 1}
+    assert "CaseResetInProgressError" in env.logs()
+
+    # Once cleanup has finished and released the claim, the redelivered record starts the case.
+    env.s3.delete_object(Bucket=RAW, Key=marker_key(ACCOUNT, DISPLAY))
+    assert env.handle(summary_ref(NEXT_RUN)) == {"batchItemFailures": []}
+    assert env.sfn.status(name(1, NEXT_RUN)) == "RUNNING"
+
+
+def test_stale_reset_claim_of_an_interrupted_cleanup_is_taken_over(env: Env) -> None:
+    put_reset_claim(env, START - RESET_CLAIM_STALE_AFTER - timedelta(seconds=1))
+
+    response = env.handle(summary_ref(NEXT_RUN))
+
+    assert response == {"batchItemFailures": []}
+    assert env.sfn.status(name(1, NEXT_RUN)) == "RUNNING"
+    marker = env.marker()
+    assert marker is not None
+    assert marker["executionName"] == name(1, NEXT_RUN)
+    assert env.case_outcome(NEXT_RUN) == "started"
+    assert env.metrics() == {"WorkflowsStarted": 1, "StaleResetClaimsTakenOver": 1}
+
+
+def test_reset_claim_written_between_read_and_claim_wins(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ref = summary_ref()
+    env.previous_attempt(ref, 1, "FAILED")
+    original = app._claim
+    calls: list[bool] = []
+
+    def cleanup_claims_first(*args: Any, **kwargs: Any) -> bool:  # noqa: ANN401
+        if not calls:
+            put_reset_claim(env, START)
+        calls.append(True)
+        return bool(original(*args, **kwargs))
+
+    monkeypatch.setattr(app, "_claim", cleanup_claims_first)
+    response = env.handle(summary_ref(NEXT_RUN))
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "m0"}]}
+    assert env.marker() == ResetClaim(ACCOUNT, DISPLAY, START).to_document()
+    assert env.sfn.started() == []

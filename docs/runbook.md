@@ -46,7 +46,7 @@ For every function: check the function's log group (`/aws/lambda/<function name>
 
 ### LambdaErrors-WorkflowStarter
 
-`Lambda-WorkflowStarter-<uniqueId>` could not start or describe executions. Check `states:StartExecution` throttling, the ownership markers (`workflow.json`) and the idempotency table. Messages are retried and land in the summary dead-letter queue when their receive count is exhausted.
+`Lambda-WorkflowStarter-<uniqueId>` could not start or describe executions. Check `states:StartExecution` throttling, the ownership markers (`workflow.json`) and the idempotency table. `CaseResetInProgressError` means Case Cleanup is resetting the case; the record is retried and starts once the reset finishes or its claim is an hour old. Messages are retried and land in the summary dead-letter queue when their receive count is exhausted.
 
 ### LambdaErrors-AnalysisStages
 

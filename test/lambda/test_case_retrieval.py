@@ -215,6 +215,7 @@ def test_pages_all_cases_and_queues_only_new_resolved_cases_in_the_window(env: E
         "accountId": A,
         "outcome": "retrieved",
         "cases": new,
+        "caseIds": [f"case-{A}-2026-{d}" for d in new],
         "skipReason": None,
     }
     assert env.raw(raw_key(A, "1001")) == {
@@ -465,4 +466,147 @@ def test_account_is_not_settled_until_every_reference_is_queued(
     monkeypatch.setattr(app, "send_messages", failing_send)
 
     assert env.handle(message(A)) == {"batchItemFailures": [{"itemIdentifier": "m0"}]}
-    assert env.raw_keys("runs/") == []
+    # The intent to hand the case off is recorded before sending; the account is not settled.
+    marker = env.account_marker(A)
+    assert (marker["outcome"], marker["cases"], marker["caseIds"]) == (
+        "dispatching",
+        ["9001"],
+        [f"case-{A}-2026-9001"],
+    )
+
+
+# Every case a run may have handed off stays in the account's run marker across retries, so run
+# completion waits for it even when a retry loses access or the case is no longer eligible.
+
+
+def partial_send(sent: int) -> Callable[..., int]:
+    """`send_messages` that queues only the first `sent` bodies, then fails like an SQS outage."""
+
+    def send(sqs: SQSClient, url: str, bodies: list[dict[str, Any]]) -> int:
+        send_messages(sqs, url, list(bodies)[:sent])
+        raise SqsSendError(len(bodies) - sent, ("ServiceUnavailable",))
+
+    return send
+
+
+def case_ids(account: str, *displays: str) -> list[str]:
+    return [f"case-{account}-2026-{d}" for d in displays]
+
+
+def test_partial_handoff_then_access_loss_still_records_and_resends_every_dispatched_case(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cases = [case(A, "9101"), case(A, "9102"), case(A, "9103")]
+    env.support.stub(A).add_response("describe_cases", {"cases": cases}, params())
+    with monkeypatch.context() as patch:
+        patch.setattr(app, "send_messages", partial_send(1))
+        assert env.handle(message(A)) == {"batchItemFailures": [{"itemIdentifier": "m0"}]}
+    assert [m["displayId"] for m in env.annotation_messages()] == ["9101"]
+    marker = env.account_marker(A)
+    assert (marker["outcome"], marker["cases"]) == ("dispatching", ["9101", "9102", "9103"])
+    env.metrics()
+
+    env.sts.denied.add(A)
+    assert env.handle(message(A), request_id="request-2") == {"batchItemFailures": []}
+
+    marker = env.account_marker(A)
+    assert marker == {
+        "schemaVersion": 1,
+        "runId": RUN,
+        "accountId": A,
+        "outcome": "skipped",
+        "cases": ["9101", "9102", "9103"],
+        "caseIds": case_ids(A, "9101", "9102", "9103"),
+        "skipReason": "AccessDenied",
+    }
+    # Each earlier hand-off is queued again so it reaches a terminal outcome in this run;
+    # annotation's per-run idempotency absorbs the one that was already delivered.
+    assert sorted(m["displayId"] for m in env.annotation_messages()) == ["9101", "9102", "9103"]
+    assert env.metrics() == {
+        "AccountsSkipped": 1,
+        "AccountsSkippedAccessDenied": 1,
+        "CasesRedispatched": 3,
+    }
+
+
+def test_all_sent_then_marker_failure_then_lost_subscription_keeps_the_dispatched_cases(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.support.stub(A).add_response(
+        "describe_cases", {"cases": [case(A, "9201"), case(A, "9202")]}, params()
+    )
+    original = app.record_account
+
+    def settling_fails(s3: S3Client, bucket: str, marker: Any) -> Any:  # noqa: ANN401
+        if marker.outcome == "retrieved":
+            raise SqsSendError(1, ("InternalError",))
+        return original(s3, bucket, marker)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app, "record_account", settling_fails)
+        assert env.handle(message(A)) == {"batchItemFailures": [{"itemIdentifier": "m0"}]}
+    assert sorted(m["displayId"] for m in env.annotation_messages()) == ["9201", "9202"]
+    assert env.account_marker(A)["outcome"] == "dispatching"
+
+    env.support.stub(A).add_client_error(
+        "describe_cases", service_error_code="SubscriptionRequiredException", http_status_code=400
+    )
+    assert env.handle(message(A), request_id="request-2") == {"batchItemFailures": []}
+
+    marker = env.account_marker(A)
+    assert (marker["outcome"], marker["skipReason"], marker["cases"]) == (
+        "skipped",
+        "SubscriptionRequired",
+        ["9201", "9202"],
+    )
+    assert sorted(m["displayId"] for m in env.annotation_messages()) == ["9201", "9202"]
+
+
+def test_retry_after_eligibility_changes_never_shrinks_the_dispatched_cases(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.support.stub(A).add_response(
+        "describe_cases", {"cases": [case(A, "9301"), case(A, "9302")]}, params()
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(app, "send_messages", partial_send(1))
+        env.handle(message(A))
+    assert [m["displayId"] for m in env.annotation_messages()] == ["9301"]
+    first_9302 = env.raw(raw_key(A, "9302"))
+
+    # By the retry 9301 has been committed, 9302 was reopened and 9303 has been resolved.
+    env.mark_processed(A, "9301")
+    retry = [case(A, "9301"), case(A, "9302", status="reopened"), case(A, "9303")]
+    env.support.stub(A).add_response("describe_cases", {"cases": retry}, params())
+    assert env.handle(message(A), request_id="request-2") == {"batchItemFailures": []}
+
+    marker = env.account_marker(A)
+    assert (marker["outcome"], marker["cases"], marker["caseIds"]) == (
+        "retrieved",
+        ["9301", "9302", "9303"],
+        case_ids(A, "9301", "9302", "9303"),
+    )
+    assert sorted(m["displayId"] for m in env.annotation_messages()) == ["9301", "9302", "9303"]
+    assert env.raw(raw_key(A, "9302")) == first_9302
+    assert env.raw_keys() == [raw_key(A, d) for d in ("9301", "9302", "9303")]
+    metrics = env.metrics()
+    assert metrics["CasesRetrieved"] == 1
+    assert metrics["CasesRedispatched"] == 2
+
+
+def test_plain_access_skip_without_earlier_dispatch_settles_with_no_cases(env: Env) -> None:
+    env.sts.denied.add(A)
+
+    assert env.handle(message(A)) == {"batchItemFailures": []}
+
+    assert env.account_marker(A) == {
+        "schemaVersion": 1,
+        "runId": RUN,
+        "accountId": A,
+        "outcome": "skipped",
+        "cases": [],
+        "caseIds": [],
+        "skipReason": "AccessDenied",
+    }
+    assert env.annotation_messages() == []
+    assert "CasesRedispatched" not in env.metrics()

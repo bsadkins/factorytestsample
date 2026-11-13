@@ -121,15 +121,23 @@ export class CaseCollection extends Construct {
         }),
         new PolicyStatement({
           sid: 'RecordRunAccounts',
-          actions: ['s3:PutObject'],
+          actions: ['s3:GetObject', 's3:PutObject'],
           resources: [rawBucket.arnForObjects(RUN_ACCOUNT_MARKER_PATTERN)],
+        }),
+        // Retrieval reads its own account marker to keep the recorded cases monotonic; listing
+        // tells an absent marker from a denied read without bucket-wide s3:ListBucket.
+        new PolicyStatement({
+          sid: 'FindRunAccounts',
+          actions: ['s3:ListBucket'],
+          resources: [rawBucket.bucketArn],
+          conditions: { StringLike: { 's3:prefix': [RUN_ACCOUNT_MARKER_PATTERN] } },
         }),
       ],
     });
     acknowledgeNagFinding(
       retrievalAccess,
       `AwsSolutions-IAM5[Resource::<${logicalIdOf(rawBucket)}.Arn>/${RUN_ACCOUNT_MARKER_PATTERN}]`,
-      'Retrieval writes one run marker per settled account under runs/<runId>/accounts/; run and account IDs are discovered at run time and the markers hold identifiers only.',
+      'Retrieval writes, and re-reads on retry, one run marker per account under runs/<runId>/accounts/; run and account IDs are discovered at run time and the markers hold identifiers only.',
     );
     acknowledgeNagFinding(
       retrievalAccess,

@@ -22,6 +22,7 @@ from common.failure_delivery import DeliveryMarker, delivery_marker_key
 from common.run_markers import (
     CaseMarker,
     completion_key,
+    dispatching_account,
     retrieved_account,
     skipped_account,
     write_account_marker,
@@ -44,6 +45,10 @@ RUN = "20261113T000000Z"
 OLD_RUN = "20261101T000000Z"
 NOW = datetime(2026, 11, 13, 6, 0, 0, tzinfo=UTC)
 SENTINEL_NAME = "SENTINEL-ACCOUNT-NAME-5d1e"
+
+
+def dispatched(account: str, *displays: str) -> dict[str, str]:
+    return {display: f"case-{account}-2026-{display}" for display in displays}
 
 
 def case_ref(account: str, display: str, run_id: str = RUN) -> SummaryRef:
@@ -77,10 +82,19 @@ class Env:
         self.s3.put_object(Bucket=LISTS, Key=account_list_key(run_id), Body=json.dumps(document))
 
     def retrieved(self, account: str, *displays: str, run_id: str = RUN) -> None:
-        write_account_marker(self.s3, RAW, retrieved_account(run_id, account, displays))
+        write_account_marker(
+            self.s3, RAW, retrieved_account(run_id, account, dispatched(account, *displays))
+        )
 
-    def skipped(self, account: str, reason: str = "AccessDenied", run_id: str = RUN) -> None:
-        write_account_marker(self.s3, RAW, skipped_account(run_id, account, reason))
+    def skipped(
+        self,
+        account: str,
+        reason: str = "AccessDenied",
+        run_id: str = RUN,
+        cases: tuple[str, ...] = (),
+    ) -> None:
+        marker = skipped_account(run_id, account, reason, dispatched(account, *cases))
+        write_account_marker(self.s3, RAW, marker)
 
     def outcome(self, account: str, display: str, outcome: str, run_id: str = RUN) -> None:
         write_case_marker(self.s3, RAW, CaseMarker(run_id, account, display, outcome))
@@ -449,3 +463,48 @@ def test_settings_validate_the_lookback(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("MANAGEMENT_ACCOUNT_ID", "not-an-account")
     with pytest.raises(ValueError, match="account"):
         app.Settings.from_env()
+
+
+# Account markers keep every case an attempt may have handed off, so neither an unsettled
+# dispatch nor a later access skip can let the heartbeat fire before that work is terminal.
+
+
+def test_dispatching_account_is_pending_even_when_its_cases_are_terminal(env: Env) -> None:
+    env.account_list(RUN, A)
+    write_account_marker(env.s3, RAW, dispatching_account(RUN, A, dispatched(A, "2601")))
+    env.outcome(A, "2601", "alreadyProcessed")
+
+    result = env.run()
+
+    assert result == {"runsChecked": 1, "runsCompleted": 0, "runsIncomplete": 1, "errors": 0}
+    assert env.completion() is None
+
+    env.retrieved(A, "2601")
+    assert env.run()["runsCompleted"] == 1
+
+
+def test_skipped_account_with_earlier_dispatches_waits_for_those_cases(env: Env) -> None:
+    env.account_list(RUN, A)
+    env.skipped(A, cases=("2701", "2702"))
+    running = env.handed_off(A, "2701", "RUNNING")
+
+    assert env.run()["runsCompleted"] == 0
+    assert env.metrics()["RunCasesPending"] == 2
+
+    env.sfn.executions[running].status = "SUCCEEDED"
+    assert env.run()["runsCompleted"] == 0
+    assert env.metrics()["RunCasesPending"] == 1
+
+    env.outcome(A, "2702", "skippedAccessDenied")
+    assert env.run()["runsCompleted"] == 1
+    completion = env.completion()
+    assert completion is not None
+    assert completion["counts"] == {
+        "accounts": 1,
+        "accountsRetrieved": 0,
+        "accountsSkipped": 1,
+        "cases": 2,
+        "casesProcessed": 1,
+        "casesSkipped": 1,
+        "casesFailed": 0,
+    }

@@ -3,8 +3,10 @@
 `FakeStepFunctions` follows the documented Standard-workflow semantics the handlers depend on:
 StartExecution with the name and input of a RUNNING execution succeeds idempotently, while a
 closed execution or different input yields `ExecutionAlreadyExists`; unknown executions yield
-`ExecutionDoesNotExist`; ListExecutions pages with `nextToken`. Calls can be failed or given a
-side effect to simulate races and service errors.
+`ExecutionDoesNotExist`; ListExecutions pages with `nextToken` and enforces the documented request
+contract: `stateMachineArn` and `mapRunArn` are mutually exclusive, and `PENDING_REDRIVE` is only
+valid with `mapRunArn` (a top-level listing with it is a `ValidationException`). Calls can be
+failed or given a side effect to simulate races and service errors.
 """
 
 from __future__ import annotations
@@ -18,6 +20,11 @@ from botocore.exceptions import ClientError
 REGION = "us-east-1"
 ACCOUNT = "123456789012"
 STATE_MACHINE_ARN = f"arn:aws:states:{REGION}:{ACCOUNT}:stateMachine:CaseAnalysis-test"
+
+
+LIST_STATUSES = frozenset(
+    {"RUNNING", "SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED", "PENDING_REDRIVE"}
+)
 
 
 def sfn_error(code: str, operation: str, status: int = 400) -> ClientError:
@@ -116,14 +123,23 @@ class FakeStepFunctions:
     def list_executions(
         self,
         *,
-        stateMachineArn: str,  # noqa: N803
-        statusFilter: str,  # noqa: N803
-        maxResults: int,  # noqa: N803
+        stateMachineArn: str | None = None,  # noqa: N803
+        mapRunArn: str | None = None,  # noqa: N803
+        statusFilter: str | None = None,  # noqa: N803
+        maxResults: int = 100,  # noqa: N803
         nextToken: str | None = None,  # noqa: N803
     ) -> dict[str, Any]:
+        if (stateMachineArn is None) == (mapRunArn is None):
+            raise sfn_error("ValidationException", "ListExecutions")
+        if statusFilter is not None and statusFilter not in LIST_STATUSES:
+            raise sfn_error("ValidationException", "ListExecutions")
+        if statusFilter == "PENDING_REDRIVE" and mapRunArn is None:
+            raise sfn_error("ValidationException", "ListExecutions")
         assert stateMachineArn == STATE_MACHINE_ARN
-        self._before("list", statusFilter)
-        matching = [e for e in self.executions.values() if e.status == statusFilter]
+        self._before("list", str(statusFilter))
+        matching = [
+            e for e in self.executions.values() if statusFilter is None or e.status == statusFilter
+        ]
         start = int(nextToken or 0)
         page = matching[start : start + maxResults]
         response: dict[str, Any] = {

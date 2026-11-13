@@ -41,6 +41,8 @@ export const ANALYSIS_STAGES = ['summary', 'rca', 'lifecycle'] as const;
 export const CLEANUP_STATE_PREFIX = 'cleanup-state/';
 /** Files cleanup may delete from an abandoned case; must match RESETTABLE_FILES in case_cleanup/app.py. */
 export const CLEANUP_RESETTABLE_FILES = ['data.json', 'communications.json', 'workflow.json'] as const;
+/** Cleanup's reset claim replaces the ownership marker; must match MARKER_FILE in common/workflow.py. */
+export const CLEANUP_CLAIM_FILE = 'workflow.json';
 /** Failure-delivery markers; must match DELIVERY_DIR in common/failure_delivery.py. Never deletable. */
 export const FAILURE_DELIVERY_PATTERN = 'account_number=*/case_number=*/failure-deliveries/*';
 /** Scheduler retries delivering the daily cleanup invocation; a missed run is repeated the next day. */
@@ -291,6 +293,11 @@ export class CaseAnalysis extends Construct {
           actions: ['s3:DeleteObject'],
           resources: resettable.map((pattern) => rawBucket.arnForObjects(pattern)),
         }),
+        new PolicyStatement({
+          sid: 'ClaimAbandonedCases',
+          actions: ['s3:PutObject'],
+          resources: [rawBucket.arnForObjects(`account_number=*/case_number=*/${CLEANUP_CLAIM_FILE}`)],
+        }),
         raw.read('KeepCleanupCursor', `${CLEANUP_STATE_PREFIX}*`, ['s3:DeleteObject', 's3:GetObject', 's3:PutObject']),
         trackFailureDeliveries(),
         sendFailureRecords(),
@@ -302,7 +309,7 @@ export class CaseAnalysis extends Construct {
     });
     raw.acknowledge(cleanupAccess, CASE_PARTITION_PATTERN, 'Cleanup reads ownership markers of case partitions discovered by listing the raw bucket; it never reads processed output from the raw bucket.');
     for (const pattern of resettable) {
-      raw.acknowledge(cleanupAccess, pattern, 'Cleanup may delete only data.json, communications.json and workflow.json of abandoned cases (conditional on the checked ETag); checkpoints and terminal markers are never deletable.');
+      raw.acknowledge(cleanupAccess, pattern, 'Cleanup may delete only data.json, communications.json and workflow.json of abandoned cases (conditional on the checked ETag), and may write only its reset claim to workflow.json (conditional on the judged marker) before doing so; checkpoints and terminal markers are never deletable.');
     }
     raw.acknowledge(cleanupAccess, FAILURE_DELIVERY_PATTERN, 'Cleanup preserves and delivers failure-delivery markers of closed failed executions under the case failure-deliveries/ prefix; it can write but never delete them.');
     raw.acknowledge(cleanupAccess, `${CLEANUP_STATE_PREFIX}*`, 'The cleanup resume cursor lives under the cleanup-state/ prefix of the raw bucket; its name is fixed but the policy keeps the prefix for future cursor versions.');

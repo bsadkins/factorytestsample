@@ -156,8 +156,15 @@ describe('CaseCollection', () => {
       {
         Sid: 'RecordRunAccounts',
         Effect: 'Allow',
-        Action: 's3:PutObject',
+        Action: ['s3:GetObject', 's3:PutObject'],
         Resource: { 'Fn::Join': ['', [arnOf(logicalId(core, core.storage.rawBucket)), '/runs/*/accounts/*']] },
+      },
+      {
+        Sid: 'FindRunAccounts',
+        Effect: 'Allow',
+        Action: 's3:ListBucket',
+        Resource: arnOf(logicalId(core, core.storage.rawBucket)),
+        Condition: { StringLike: { 's3:prefix': [RUN_ACCOUNT_MARKER_PATTERN] } },
       },
     ]);
     expect(statementsFor(logicalId(core, core.memberAccess.annotationRole))).toEqual([

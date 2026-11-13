@@ -4,14 +4,16 @@ Runs hourly from EventBridge Scheduler. Every account list written by account di
 the lookback window is one run; finishing the lookup does not complete it. A run is complete
 when, using the run markers in `common.run_markers`:
 
-- every account in the run's account list has an account marker (retrieved or skipped);
-- every case a retrieved account queued has a case marker; and
+- every account in the run's account list has a settled account marker (retrieved or skipped;
+  `dispatching` means its case references may still be being queued);
+- every case an account marker lists has a case marker, including the cases a skipped account
+  had handed off in an earlier attempt before it lost access; and
 - every case reached a terminal outcome: skipped, already processed, a terminal oversized
   conversation, a SUCCEEDED CaseAnalysis execution, or a closed FAILED, TIMED_OUT or ABORTED
   execution whose failure record is confirmed on the workflow failure queue. Run Completion
   preserves and delivers that record itself when it is missing (see `common.failure_delivery`).
 
-A run with no accounts, or with only skipped accounts or zero cases, completes immediately.
+A run with no accounts, or with only zero-case skipped or retrieved accounts, completes immediately.
 Pending work, unreadable markers and status lookups or failure deliveries that fail keep the run
 incomplete; it is checked again on the next invocation. The first invocation to see a complete
 run writes `runs/<runId>/completion.json` with IfNoneMatch and emits `DailyRunCompleted`, which
@@ -43,6 +45,7 @@ from common.conversation import utc_timestamp
 from common.failure_delivery import DeliveryTally, FailureQueue, reconcile_closed_attempt
 from common.processed import validate_account_id
 from common.run_markers import (
+    ACCOUNT_DISPATCHING,
     ACCOUNT_SKIPPED,
     CASE_ALREADY_PROCESSED,
     FAILED_OUTCOMES,
@@ -260,10 +263,14 @@ class RunChecker:
                     "Account run marker is unreadable", extra={**fields, **error_fields(exc)}
                 )
                 continue
+            if marker.outcome == ACCOUNT_DISPATCHING:
+                tally.pending_accounts += 1
+                continue
             if marker.outcome == ACCOUNT_SKIPPED:
                 tally.accounts_skipped += 1
-                continue
-            tally.accounts_retrieved += 1
+            else:
+                tally.accounts_retrieved += 1
+            # A skipped account still lists the cases an earlier attempt handed off.
             for display_id in marker.cases:
                 tally.cases += 1
                 self.check_case(run_id, account.account_id, display_id, keys, tally)

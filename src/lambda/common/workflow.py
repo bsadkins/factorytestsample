@@ -11,6 +11,9 @@ names the execution that currently owns the case. Starters write it with S3 cond
 before calling StartExecution, and it stores the exact execution input, so any starter can finish
 a claim whose owner stopped between the write and StartExecution without creating a second
 execution (StartExecution with the same name and input is idempotent while it runs).
+
+While Case Cleanup resets an abandoned case, `workflow.json` holds a `ResetClaim` instead; see
+there for how starters and cleanup share the key.
 """
 
 from __future__ import annotations
@@ -20,17 +23,19 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 
 from botocore.exceptions import ClientError
 
 from common.account_list import validate_run_id
 from common.case_refs import InvalidReferenceError, SummaryRef
-from common.processed import case_record_key
+from common.processed import case_record_key, validate_account_id, validate_display_id
+from common.s3_json import S3JsonDecodeError, S3ObjectTooLargeError, read_json_with_etag
 from common.safe_logging import aws_error_code
 
 if TYPE_CHECKING:
+    from types_boto3_s3.client import S3Client
     from types_boto3_stepfunctions.client import SFNClient
 
 MARKER_FILE: Final = "workflow.json"
@@ -42,6 +47,9 @@ MAX_ATTEMPTS_PER_RUN: Final = 50
 ACTIVE_STATUSES: Final = frozenset({"RUNNING", "PENDING_REDRIVE"})
 FAILED_STATUSES: Final = frozenset({"FAILED", "TIMED_OUT", "ABORTED"})
 SUCCEEDED_STATUS: Final = "SUCCEEDED"
+RESET_CLAIM_KIND: Final = "cleanupReset"
+# Far longer than any cleanup invocation can run (Lambda stops it within 15 minutes).
+RESET_CLAIM_STALE_AFTER: Final = timedelta(hours=1)
 _HASHED_PREFIX: Final = "h"
 _EXECUTION_NAME: Final = re.compile(
     r"^(\d{12})-(.+)-(\d{8}T\d{6}Z(?:-[0-9a-f]{8})?)-a([1-9][0-9]{0,2})$"
@@ -230,6 +238,90 @@ class OwnershipMarker:
             ref.case_id,
             ref.display_id,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ResetClaim:
+    """Cleanup's claim on a case it is about to reset, stored in place of the ownership marker.
+
+    Cleanup writes it with a conditional write on the exact marker it judged closed (or on there
+    being none) before deleting any input, so a starter that took ownership first always wins.
+    Starters never overwrite a claim younger than `RESET_CLAIM_STALE_AFTER`; an older claim was
+    left by a cleanup that stopped mid-reset and may be taken over.
+    """
+
+    account_id: str
+    display_id: str
+    claimed_at: datetime
+
+    _KEYS = frozenset({"schemaVersion", "kind", "accountId", "displayId", "claimedAt"})
+
+    @property
+    def key(self) -> str:
+        return marker_key(self.account_id, self.display_id)
+
+    def to_document(self) -> dict[str, Any]:
+        return {
+            "schemaVersion": MARKER_SCHEMA_VERSION,
+            "kind": RESET_CLAIM_KIND,
+            "accountId": self.account_id,
+            "displayId": self.display_id,
+            "claimedAt": self.claimed_at.isoformat(timespec="seconds"),
+        }
+
+    @staticmethod
+    def is_claim(document: Mapping[str, Any]) -> bool:
+        """True when a stored `workflow.json` document is a reset claim, valid or not."""
+        return document.get("kind") == RESET_CLAIM_KIND
+
+    @classmethod
+    def from_document(cls, document: Mapping[str, Any]) -> ResetClaim:
+        """Parse and validate a stored claim; raise `InvalidOwnershipMarkerError` otherwise."""
+        if (
+            set(document) != cls._KEYS
+            or document["schemaVersion"] != MARKER_SCHEMA_VERSION
+            or document["kind"] != RESET_CLAIM_KIND
+        ):
+            raise InvalidOwnershipMarkerError("reset claim fields do not match the contract")
+        try:
+            account_id = validate_account_id(document["accountId"])
+            display_id = validate_display_id(document["displayId"])
+            claimed_at = datetime.fromisoformat(str(document["claimedAt"]))
+        except (ValueError, TypeError):
+            raise InvalidOwnershipMarkerError("reset claim content is malformed") from None
+        if claimed_at.tzinfo is None:
+            raise InvalidOwnershipMarkerError("reset claim claimedAt has no timezone")
+        return cls(account_id, display_id, claimed_at)
+
+    def is_stale(self, now: datetime) -> bool:
+        """True once no cleanup that wrote this claim can still be running."""
+        return now - self.claimed_at > RESET_CLAIM_STALE_AFTER
+
+
+def read_ownership(
+    s3: S3Client, bucket: str, account_id: str, display_id: str
+) -> tuple[OwnershipMarker | ResetClaim, str] | None:
+    """The case's `workflow.json` (marker or reset claim) and its ETag; `None` when absent.
+
+    Unreadable or invalid documents, and documents for another case, raise
+    `InvalidOwnershipMarkerError`.
+    """
+    try:
+        stored = read_json_with_etag(
+            s3, bucket, marker_key(account_id, display_id), max_bytes=MAX_MARKER_BYTES
+        )
+    except (S3JsonDecodeError, S3ObjectTooLargeError):
+        raise InvalidOwnershipMarkerError("marker is unreadable") from None
+    if stored is None:
+        return None
+    parsed: OwnershipMarker | ResetClaim
+    if ResetClaim.is_claim(stored.document):
+        parsed = ResetClaim.from_document(stored.document)
+    else:
+        parsed = OwnershipMarker.from_document(stored.document)
+    if (parsed.account_id, parsed.display_id) != (account_id, display_id):
+        raise InvalidOwnershipMarkerError("marker is for another case")
+    return parsed, stored.etag
 
 
 def describe_status(sfn: SFNClient, arn: str) -> str | None:

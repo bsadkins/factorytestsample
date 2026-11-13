@@ -19,9 +19,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from aws_lambda_powertools.utilities.typing import LambdaContext
+from case_retrieval import app as retrieval_app
 from common.case_refs import SummaryRef
 from common.failures import summary_ref_from_failure
 from common.idempotency import persistence_layer
+from common.run_markers import AccountMarker
 from common.workflow import execution_input, execution_name
 from pipeline_kit import (
     ACCOUNT_LISTS,
@@ -42,6 +44,7 @@ from pipeline_kit import (
     Pipeline,
     SyntheticCase,
     case_key,
+    client_error,
     model_summary,
     run_day,
     run_id_for,
@@ -625,3 +628,51 @@ def test_failed_account_retrieval_is_retried_redriven_and_never_completes_the_ru
     assert pipeline.processed(EPSILON, "5001") is not None
     assert pipeline.complete_runs()["runsCompleted"] == 1
     assert pipeline.heartbeats() == 1
+
+
+def test_dispatched_case_is_awaited_after_a_settling_failure_and_lost_access(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = pipeline.discover()["runId"]
+    original = retrieval_app.record_account
+
+    def settling_fails(s3: object, bucket: str, marker: AccountMarker) -> None:
+        if (marker.account_id, marker.outcome) == (EPSILON, "retrieved"):
+            raise client_error("InternalError", "PutObject", 500)
+        original(s3, bucket, marker)  # type: ignore[arg-type]
+
+    # 5001 is queued for annotation, but EPSILON's account cannot be settled.
+    with monkeypatch.context() as patch:
+        patch.setattr(retrieval_app, "record_account", settling_fails)
+        pipeline.notify_account_lists()
+        pipeline.deliver("activeAccounts")
+    marker = pipeline.read(RAW, run_key(run, f"accounts/{EPSILON}.json"))
+    assert (marker["outcome"], marker["cases"]) == ("dispatching", ["5001"])
+
+    # 5001 is annotated and its execution starts; by the account's retry the member role is gone.
+    pipeline.held.add("5001")
+    pipeline.deliver("annotation")
+    pipeline.deliver("summary")
+    assert [e.status for e in pipeline.executions_for("5001")] == ["RUNNING"]
+    pipeline.sts.denied.add(EPSILON)
+    pipeline.settle()
+    marker = pipeline.read(RAW, run_key(run, f"accounts/{EPSILON}.json"))
+    assert (marker["outcome"], marker["skipReason"], marker["cases"]) == (
+        "skipped",
+        "AccessDenied",
+        ["5001"],
+    )
+    assert pipeline.metric("CasesRedispatched", "CaseRetrieval") == 1
+    result = pipeline.complete_runs()
+    assert (result["runsCompleted"], result["runsIncomplete"]) == (0, 1)
+    assert pipeline.heartbeats() == 0
+
+    pipeline.release("5001")
+    pipeline.settle()
+    assert pipeline.processed(EPSILON, "5001") is not None
+    assert len(pipeline.executions_for("5001")) == 1
+    assert len(pipeline.bedrock.calls_for("5001", "summary")) == 1
+    assert pipeline.complete_runs()["runsCompleted"] == 1
+    assert pipeline.heartbeats() == 1
+    counts = pipeline.read(RAW, run_key(run, "completion.json"))["counts"]
+    assert (counts["accountsSkipped"], counts["cases"], counts["casesProcessed"]) == (3, 3, 3)

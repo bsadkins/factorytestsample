@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -9,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
+from botocore.stub import Stubber
 from case_cleanup import app
 from common import failure_delivery
 from common.case_refs import SummaryRef
@@ -16,9 +19,17 @@ from common.checkpoints import checkpoint_key
 from common.failure_delivery import DeliveryMarker, delivery_marker_key, reconcile_closed_attempt
 from common.failures import summary_ref_from_failure, terminal_marker_key
 from common.idempotency import persistence_layer
-from common.s3_json import write_json
+from common.s3_json import delete_if_unchanged, write_json
 from common.sqs import SqsSendError
-from common.workflow import OwnershipMarker, encode_input, execution_input, marker_key
+from common.workflow import (
+    RESET_CLAIM_STALE_AFTER,
+    InvalidOwnershipMarkerError,
+    OwnershipMarker,
+    ResetClaim,
+    encode_input,
+    execution_input,
+    marker_key,
+)
 from workflow_kit import STATE_MACHINE_ARN, FakeStepFunctions, sfn_error
 from workflow_starter import app as starter_app
 
@@ -61,6 +72,19 @@ class Env:
     clock: list[datetime] = field(default_factory=list)
     remaining_millis: int = 600_000
     stdout: str = ""
+    table_created: bool = False
+
+    def marker_document(self, display: str) -> dict[str, Any] | None:
+        try:
+            body = self.s3.get_object(Bucket=RAW, Key=marker_key(ACCOUNT, display))["Body"].read()
+        except self.s3.exceptions.NoSuchKey:
+            return None
+        document: dict[str, Any] = json.loads(body)
+        return document
+
+    def delete_markers(self, display: str, name: str) -> int:
+        listing = self.s3.list_object_versions(Bucket=RAW, Prefix=key(display, name))
+        return len(listing.get("DeleteMarkers", []))
 
     def seed(self, display: str, account: str = ACCOUNT, *, checkpoint: bool = False) -> None:
         """Raw objects of a retrieved, annotated case that has no processed record."""
@@ -97,14 +121,20 @@ class Env:
 
     def start_next_run(self, display: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         """Deliver the case's summary reference of the next run to the workflow starter."""
-        self.kit.create_table(TABLE)
+        return self.start(ref(display, run_id=NEXT_RUN), monkeypatch)
+
+    def start(self, summary: SummaryRef, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        """Deliver one summary reference to the real workflow starter handler."""
+        if not self.table_created:
+            self.kit.create_table(TABLE)
+            self.table_created = True
         starter_clients = starter_app.Clients(s3=self.s3, sfn=self.sfn)  # type: ignore[arg-type]
         monkeypatch.setattr(starter_app, "clients", lambda: starter_clients)
         monkeypatch.setattr(starter_app, "now", lambda: self.clock[0])
         persistence_layer.cache_clear()
         try:
             response: dict[str, Any] = starter_app.handler(
-                self.kit.event(ref(display, run_id=NEXT_RUN).to_message()), self.kit.context()
+                self.kit.event(summary.to_message()), self.kit.context()
             )
         finally:
             persistence_layer.cache_clear()
@@ -313,12 +343,54 @@ def test_running_executions_on_later_pages_are_respected(env: Env) -> None:
 
     assert env.run()["reset"] == 0
     assert env.keys("7005") == ["communications.json", "data.json"]
+    # Only the top-level RUNNING filter is listed; PENDING_REDRIVE is not a valid filter with a
+    # state machine ARN and is handled through the owner's DescribeExecution status instead.
     assert [call for call in env.sfn.calls if call[0] == "list"] == [
-        ("list", "PENDING_REDRIVE"),
         ("list", "RUNNING"),
         ("list", "RUNNING"),
         ("list", "RUNNING"),
     ]
+
+
+def test_active_listing_sends_only_valid_top_level_list_executions_requests() -> None:
+    client = boto3.client("stepfunctions", region_name="us-east-1")
+    first = f"{ACCOUNT}-7101-{RUN}-a1"
+    second = f"{OTHER_ACCOUNT}-7102-{RUN}-a2"
+    started = datetime(2026, 11, 13, tzinfo=UTC)
+
+    def item(name: str) -> dict[str, Any]:
+        return {
+            "executionArn": f"{STATE_MACHINE_ARN.replace(':stateMachine:', ':execution:')}:{name}",
+            "stateMachineArn": STATE_MACHINE_ARN,
+            "name": name,
+            "status": "RUNNING",
+            "startDate": started,
+        }
+
+    with Stubber(client) as stub:
+        stub.add_response(
+            "list_executions",
+            {"executions": [item(first), item("not-a-case-execution")], "nextToken": "t1"},
+            {"stateMachineArn": STATE_MACHINE_ARN, "statusFilter": "RUNNING"},
+        )
+        stub.add_response(
+            "list_executions",
+            {"executions": [item(second)]},
+            {"stateMachineArn": STATE_MACHINE_ARN, "statusFilter": "RUNNING", "nextToken": "t1"},
+        )
+        active = app.active_cases(client, STATE_MACHINE_ARN)
+        stub.assert_no_pending_responses()
+
+    assert active == {(ACCOUNT, "7101"), (OTHER_ACCOUNT, "7102")}
+
+
+def test_stand_in_rejects_the_invalid_pending_redrive_listing() -> None:
+    fake = FakeStepFunctions()
+    with pytest.raises(ClientError) as raised:
+        fake.list_executions(stateMachineArn=STATE_MACHINE_ARN, statusFilter="PENDING_REDRIVE")
+    assert raised.value.response["Error"]["Code"] == "ValidationException"
+    with pytest.raises(ClientError):
+        fake.list_executions(stateMachineArn=STATE_MACHINE_ARN, mapRunArn="arn:map-run")
 
 
 def test_cases_spanning_listing_pages_across_accounts_are_evaluated_once(env: Env) -> None:
@@ -655,3 +727,204 @@ def test_delivery_markers_are_bookkeeping_not_case_work() -> None:
     case.objects["data.json"] = app.StoredObject("k1", "e1", stamp)
     case.objects["failure-deliveries/x.json"] = app.StoredObject("k2", "e2", stamp)
     assert [item.key for item in case.work_objects] == ["k1"]
+
+
+# Ownership coordination: before any input is deleted, cleanup replaces exactly the ownership
+# marker it judged closed (or its absence) with a reset claim, conditionally. A starter that took
+# ownership first therefore always wins and keeps the inputs its execution needs, and a starter
+# arriving during the reset never overwrites the claim.
+
+
+def test_ownership_only_redrive_after_evaluation_keeps_the_unchanged_inputs(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.seed("2201")
+    old = env.claim("2201", "TIMED_OUT")
+    original = reconcile_closed_attempt
+    responses: list[dict[str, Any]] = []
+
+    def redrive_arrives(*args: Any, **kwargs: Any) -> tuple[str, bool]:  # noqa: ANN401
+        outcome = original(*args, **kwargs)
+        # An operator redrive of the same run replaces the owner without rewriting any input.
+        redriven = dataclasses.replace(ref("2201"), redrive_id="redrive-1")
+        responses.append(env.start(redriven, monkeypatch))
+        return outcome
+
+    monkeypatch.setattr(app, "reconcile_closed_attempt", redrive_arrives)
+    result = env.run()
+
+    assert responses == [{"batchItemFailures": []}]
+    assert result == {"evaluated": 1, "reset": 0, "errors": 0, "complete": True}
+    assert env.metrics()["CleanupDeleteConflicts"] == 1
+    assert env.keys("2201") == [
+        "communications.json",
+        "data.json",
+        f"failure-deliveries/{old}.json",
+        "workflow.json",
+    ]
+    assert (
+        env.delete_markers("2201", "data.json"),
+        env.delete_markers("2201", "communications.json"),
+    ) == (0, 0)
+    new_owner = f"{ACCOUNT}-2201-{RUN}-a2"
+    assert env.sfn.status(new_owner) == "RUNNING"
+    marker = env.marker_document("2201")
+    assert marker is not None
+    assert marker["executionName"] == new_owner
+
+
+def test_first_owner_claimed_during_cleanup_keeps_the_unchanged_inputs(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Inputs exist but no starter has claimed the case yet; one does while cleanup decides.
+    env.seed("2301")
+    original = app.Cleaner.is_processed_now
+    responses: list[dict[str, Any]] = []
+
+    def first_owner_claims(self: app.Cleaner, case: app.CaseObjects) -> bool:
+        if not responses:
+            responses.append(env.start(ref("2301"), monkeypatch))
+        return original(self, case)
+
+    monkeypatch.setattr(app.Cleaner, "is_processed_now", first_owner_claims)
+    result = env.run()
+
+    assert responses == [{"batchItemFailures": []}]
+    assert result == {"evaluated": 1, "reset": 0, "errors": 0, "complete": True}
+    assert env.metrics()["CleanupDeleteConflicts"] == 1
+    assert env.keys("2301") == ["communications.json", "data.json", "workflow.json"]
+    assert (
+        env.delete_markers("2301", "data.json"),
+        env.delete_markers("2301", "communications.json"),
+    ) == (0, 0)
+    assert env.sfn.status(f"{ACCOUNT}-2301-{RUN}-a1") == "RUNNING"
+
+
+def test_starter_during_a_reset_never_overwrites_the_reset_claim(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.seed("2401")
+    failed = env.claim("2401", "FAILED")
+    original = delete_if_unchanged
+    seen: dict[str, Any] = {}
+
+    def starter_arrives(*args: Any, **kwargs: Any) -> bool:  # noqa: ANN401
+        if not seen:
+            seen["claim"] = env.marker_document("2401")
+            seen["response"] = env.start(ref("2401", run_id=NEXT_RUN), monkeypatch)
+            seen["after"] = env.marker_document("2401")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(app, "delete_if_unchanged", starter_arrives)
+    result = env.run()
+
+    assert seen["claim"] is not None
+    assert seen["claim"].get("kind") == "cleanupReset"
+    assert seen["response"] == {"batchItemFailures": [{"itemIdentifier": "m0"}]}
+    assert seen["after"] == seen["claim"]
+    assert env.sfn.started() == []
+    assert result == {"evaluated": 1, "reset": 1, "errors": 0, "complete": True}
+    assert env.keys("2401") == [f"failure-deliveries/{failed}.json"]
+
+    # The deferred record is retried; once the next run has collected the case again it starts.
+    env.seed("2401")
+    assert env.start(ref("2401", run_id=NEXT_RUN), monkeypatch) == {"batchItemFailures": []}
+    assert env.sfn.status(f"{ACCOUNT}-2401-{NEXT_RUN}-a1") == "RUNNING"
+
+
+def test_interrupted_reset_is_protected_while_recent_then_completed_by_a_later_cleanup(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.seed("2501", checkpoint=True)
+    failed = env.claim("2501", "FAILED")
+    original = delete_if_unchanged
+
+    def stops_mid_reset(s3: Any, bucket: str, object_key: str, etag: str) -> bool:  # noqa: ANN401
+        if object_key.endswith("communications.json"):
+            raise RuntimeError("cleanup stopped")
+        return bool(original(s3, bucket, object_key, etag))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app, "delete_if_unchanged", stops_mid_reset)
+        first = env.run()
+
+    assert (first["reset"], first["errors"]) == (0, 1)
+    assert env.keys("2501") == [
+        "checkpoints/summary.json",
+        "communications.json",
+        f"failure-deliveries/{failed}.json",
+        "workflow.json",
+    ]
+    claim = env.marker_document("2501")
+    assert claim is not None
+    assert claim["kind"] == "cleanupReset"
+
+    # A recent claim may still belong to a running cleanup: starters and cleanup leave it alone.
+    assert env.start(ref("2501", run_id=NEXT_RUN), monkeypatch)["batchItemFailures"]
+    second = env.run()
+    assert (second["reset"], second["errors"]) == (0, 0)
+    assert env.marker_document("2501") == claim
+    assert env.sfn.started() == []
+
+    # No cleanup outlives the stale age, so a later cleanup completes the interrupted reset.
+    env.clock[0] += RESET_CLAIM_STALE_AFTER + timedelta(minutes=1)
+    third = env.run()
+    assert (third["reset"], third["errors"]) == (1, 0)
+    assert env.keys("2501") == ["checkpoints/summary.json", f"failure-deliveries/{failed}.json"]
+
+
+def test_processed_record_seen_after_the_claim_releases_it_and_keeps_the_inputs(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.seed("2601")
+    original = app.Cleaner.is_processed_now
+    claims: list[dict[str, Any] | None] = []
+
+    def committed_after_claim(self: app.Cleaner, case: app.CaseObjects) -> bool:
+        claims.append(env.marker_document("2601"))
+        if len(claims) == 2:
+            env.mark_processed("2601")
+        return original(self, case)
+
+    monkeypatch.setattr(app.Cleaner, "is_processed_now", committed_after_claim)
+    result = env.run()
+
+    assert claims[0] is None
+    assert claims[1] is not None
+    assert claims[1]["kind"] == "cleanupReset"
+    assert result == {"evaluated": 1, "reset": 0, "errors": 0, "complete": True}
+    assert env.keys("2601") == ["communications.json", "data.json"]
+    assert env.metrics()["CleanupSkippedProcessed"] == 1
+
+
+def test_input_conflict_releases_the_claim_so_the_new_run_can_start(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.seed("2701")
+    env.claim("2701", "FAILED")
+    original = app.Cleaner.is_processed_now
+
+    def new_run_writes(self: app.Cleaner, case: app.CaseObjects) -> bool:
+        env.s3.put_object(Bucket=RAW, Key=key("2701", "data.json"), Body=b'{"run": "new"}')
+        return original(self, case)
+
+    monkeypatch.setattr(app.Cleaner, "is_processed_now", new_run_writes)
+    result = env.run()
+
+    assert result["reset"] == 0
+    assert env.metrics()["CleanupDeleteConflicts"] == 1
+    assert env.marker_document("2701") is None
+    assert env.s3.get_object(Bucket=RAW, Key=key("2701", "data.json"))["Body"].read() == (
+        b'{"run": "new"}'
+    )
+    assert env.start(ref("2701", run_id=NEXT_RUN), monkeypatch) == {"batchItemFailures": []}
+    assert env.sfn.status(f"{ACCOUNT}-2701-{NEXT_RUN}-a1") == "RUNNING"
+
+
+def test_reset_claim_document_is_distinct_from_an_ownership_marker(env: Env) -> None:
+    claim = ResetClaim(ACCOUNT, "2801", env.clock[0].replace(microsecond=0))
+    assert ResetClaim.from_document(claim.to_document()) == claim
+    assert not claim.is_stale(claim.claimed_at + RESET_CLAIM_STALE_AFTER)
+    assert claim.is_stale(claim.claimed_at + RESET_CLAIM_STALE_AFTER + timedelta(seconds=1))
+    with pytest.raises(InvalidOwnershipMarkerError):
+        OwnershipMarker.from_document(claim.to_document())

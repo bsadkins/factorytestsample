@@ -1310,6 +1310,25 @@ def sort_filter_rules(json_obj):
               "Sid": "ResetAbandonedCases",
             },
             {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/workflow.json",
+                  ],
+                ],
+              },
+              "Sid": "ClaimAbandonedCases",
+            },
+            {
               "Action": [
                 "s3:DeleteObject",
                 "s3:GetObject",
@@ -3252,7 +3271,10 @@ def sort_filter_rules(json_obj):
               "Sid": "SendAnnotationReferences",
             },
             {
-              "Action": "s3:PutObject",
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
               "Effect": "Allow",
               "Resource": {
                 "Fn::Join": [
@@ -3269,6 +3291,24 @@ def sort_filter_rules(json_obj):
                 ],
               },
               "Sid": "RecordRunAccounts",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "runs/*/accounts/*",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageRawBucketBBD9BDC5",
+                  "Arn",
+                ],
+              },
+              "Sid": "FindRunAccounts",
             },
           ],
           "Version": "2012-10-17",
@@ -8617,6 +8657,25 @@ def sort_filter_rules(json_obj):
               "Sid": "ResetAbandonedCases",
             },
             {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/workflow.json",
+                  ],
+                ],
+              },
+              "Sid": "ClaimAbandonedCases",
+            },
+            {
               "Action": [
                 "s3:DeleteObject",
                 "s3:GetObject",
@@ -10559,7 +10618,10 @@ def sort_filter_rules(json_obj):
               "Sid": "SendAnnotationReferences",
             },
             {
-              "Action": "s3:PutObject",
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
               "Effect": "Allow",
               "Resource": {
                 "Fn::Join": [
@@ -10576,6 +10638,24 @@ def sort_filter_rules(json_obj):
                 ],
               },
               "Sid": "RecordRunAccounts",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "runs/*/accounts/*",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageRawBucketBBD9BDC5",
+                  "Arn",
+                ],
+              },
+              "Sid": "FindRunAccounts",
             },
           ],
           "Version": "2012-10-17",

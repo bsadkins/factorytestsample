@@ -4,9 +4,15 @@ Consumes `{accountId, accountName, runId}` messages from the active-accounts que
 account it assumes `Support-Case-Analysis-Role-<uniqueId>`, pages through `DescribeCases` for the
 run's trailing calendar-month creation window, keeps resolved cases that have no processed record,
 writes their metadata to `account_number=<id>/case_number=<displayId>/data.json` in the raw bucket
-and queues one annotation reference per case. Finally it records the settled account, and the
-cases it queued, in the run marker `runs/<runId>/accounts/<accountId>.json` (see
-`common.run_markers`), which Run Completion uses to decide when the run has finished.
+and queues one annotation reference per case. The run marker
+`runs/<runId>/accounts/<accountId>.json` (see `common.run_markers`) records the cases as
+`dispatching` before any reference is sent and as `retrieved` once all are queued; Run Completion
+uses it to decide when the run has finished.
+
+Recorded cases never shrink within a run. A retry keeps every case an earlier attempt recorded,
+queues it again (annotation is idempotent per case and run) without rewriting its `data.json`,
+and writes metadata only for newly admitted cases. A retry that loses access still queues the
+earlier cases and keeps them in its `skipped` marker, so Run Completion waits for them.
 
 A missing or untrusted role, `AccessDenied` and `SubscriptionRequiredException` are counted skips,
 not failures. Idempotency is keyed by account and run, so a skip only lasts for that run and the
@@ -16,6 +22,7 @@ next daily run evaluates the account again. Other errors fail only that SQS reco
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import cache
@@ -35,7 +42,14 @@ from common.case_window import (
 from common.conversation import utc_timestamp
 from common.idempotency import idempotency_config
 from common.processed import case_record_key, get_existing_cases_batch, validate_display_id
-from common.run_markers import retrieved_account, skipped_account, write_account_marker
+from common.run_markers import (
+    AccountMarker,
+    dispatching_account,
+    read_account_marker,
+    retrieved_account,
+    skipped_account,
+    write_account_marker,
+)
 from common.s3_json import write_json
 from common.sqs import InvalidMessageError, parse_message_body, send_messages
 from common.sqs_batch import RecordFailedError, process_sqs_batch, run_idempotent
@@ -189,27 +203,26 @@ def _retrieve_account(
         sts_client=aws.sts,
         client_factory=support_client,
     )
+    # Cases an earlier attempt of this run recorded before sending may already be with
+    # annotation; they stay recorded, and are queued again, whatever this attempt finds.
+    earlier = read_account_marker(aws.s3, settings.raw_bucket, run_id, account_id)
+    dispatched = earlier.dispatched if earlier is not None else {}
     try:
         support = member.open(account_id, safe_session_name("case-retrieval", run_id))
         selection = select_cases(iter_cases(support, account_id, window), window)
     except SupportAccessSkippedError as exc:
-        write_account_marker(
-            aws.s3, settings.raw_bucket, skipped_account(run_id, account_id, exc.reason)
+        dispatch(aws, settings, run_id, account_id, dispatched)
+        record_account(
+            aws.s3, settings.raw_bucket, skipped_account(run_id, account_id, exc.reason, dispatched)
         )
-        return {**result, "skipped": exc.reason}
+        return {**result, "skipped": exc.reason, "casesRedispatched": len(dispatched)}
 
     candidates = [case["displayId"] for case in selection.admitted]
     processed = get_existing_cases_batch(aws.s3, settings.processed_bucket, account_id, candidates)
     pending = [case for case in selection.admitted if case["displayId"] not in processed]
+    new = [case for case in pending if case["displayId"] not in dispatched]
     retrieved_at = utc_timestamp(now())
-    refs: list[AnnotationRef] = []
-    for case in pending:
-        ref = AnnotationRef(
-            account_id=account_id,
-            case_id=case["caseId"],
-            display_id=case["displayId"],
-            run_id=run_id,
-        )
+    for case in new:
         document = {
             "schemaVersion": RAW_SCHEMA_VERSION,
             "accountId": account_id,
@@ -218,17 +231,16 @@ def _retrieve_account(
             "Case_Retrieval_Date": retrieved_at,
         }
         write_json(
-            aws.s3, settings.raw_bucket, case_record_key(account_id, ref.display_id), document
+            aws.s3, settings.raw_bucket, case_record_key(account_id, case["displayId"]), document
         )
-        refs.append(ref)
-    send_messages(aws.sqs, settings.annotation_queue_url, [ref.to_message() for ref in refs])
-    # Written last: the account counts as settled for run completion only once every case
-    # reference is queued.
-    write_account_marker(
-        aws.s3,
-        settings.raw_bucket,
-        retrieved_account(run_id, account_id, [ref.display_id for ref in refs]),
-    )
+    queued = {**dispatched, **{case["displayId"]: case["caseId"] for case in new}}
+    if queued:
+        # Recorded before sending, so a partial send or a later access loss can never leave a
+        # handed-off case out of the run's evidence.
+        record_account(aws.s3, settings.raw_bucket, dispatching_account(run_id, account_id, queued))
+    dispatch(aws, settings, run_id, account_id, queued)
+    # The account counts as settled for run completion only once every case reference is queued.
+    record_account(aws.s3, settings.raw_bucket, retrieved_account(run_id, account_id, queued))
     return {
         **result,
         "skipped": None,
@@ -237,13 +249,32 @@ def _retrieve_account(
         "excludedOutsideWindow": selection.outside_window,
         "invalidCases": selection.invalid,
         "alreadyProcessed": len(selection.admitted) - len(pending),
-        "casesRetrieved": len(refs),
+        "casesRetrieved": len(new),
+        "casesRedispatched": len(dispatched),
         "window": window.request_parameters(),
     }
 
 
+def dispatch(
+    aws: Clients, settings: Settings, run_id: str, account_id: str, cases: Mapping[str, str]
+) -> None:
+    """Queue one annotation reference per case; annotation is idempotent per case and run."""
+    refs = [
+        AnnotationRef(account_id=account_id, case_id=case_id, display_id=display_id, run_id=run_id)
+        for display_id, case_id in cases.items()
+    ]
+    send_messages(aws.sqs, settings.annotation_queue_url, [ref.to_message() for ref in refs])
+
+
+def record_account(s3: S3Client, bucket: str, marker: AccountMarker) -> None:
+    write_account_marker(s3, bucket, marker)
+
+
 def record_outcome(result: dict[str, Any], log_fields: dict[str, Any]) -> None:
     skipped = result.get("skipped")
+    redispatched = int(result.get("casesRedispatched") or 0)
+    if redispatched:
+        metrics.add_metric(name="CasesRedispatched", unit=MetricUnit.Count, value=redispatched)
     if skipped:
         metrics.add_metric(name="AccountsSkipped", unit=MetricUnit.Count, value=1)
         metrics.add_metric(name=f"AccountsSkipped{skipped}", unit=MetricUnit.Count, value=1)

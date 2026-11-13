@@ -9,6 +9,9 @@ the case's S3 ownership marker with the Step Functions status of the execution i
 - a claim whose execution does not exist yet is completed with the claim's own name and input
   (an idempotent StartExecution), unless it is older than the claim settle time, when it is
   treated as abandoned;
+- a reset claim of Case Cleanup (see `common.workflow.ResetClaim`) is never overwritten while it
+  is recent: the record fails with `CaseResetInProgressError` and is retried. A claim older than
+  any cleanup can run was left by an interrupted reset and is taken over like an absent marker;
 - a closed FAILED, TIMED_OUT or ABORTED execution is recovered with the next attempt name for
   this run (or attempt 1 of a new run), claimed with a conditional write on the marker's ETag.
   Before the marker is replaced, a pending failure-delivery marker is kept for the closed attempt
@@ -41,12 +44,9 @@ from common.idempotency import idempotency_config
 from common.processed import case_record_key
 from common.run_markers import HANDOFF_OUTCOMES, CaseMarker, write_case_marker
 from common.s3_json import (
-    S3JsonDecodeError,
-    S3ObjectTooLargeError,
     S3PreconditionFailedError,
     is_not_found_error,
     object_exists,
-    read_json_with_etag,
     write_json,
 )
 from common.sqs import InvalidMessageError, parse_message_body
@@ -59,9 +59,10 @@ from common.workflow import (
     SUCCEEDED_STATUS,
     InvalidOwnershipMarkerError,
     OwnershipMarker,
+    ResetClaim,
     describe_status,
     execution_arn,
-    marker_key,
+    read_ownership,
     start_execution,
 )
 
@@ -93,6 +94,10 @@ class OwnershipConflictError(Exception):
 
 class AttemptsExhaustedError(Exception):
     """The run already used every attempt name for this case."""
+
+
+class CaseResetInProgressError(Exception):
+    """Case Cleanup holds a recent reset claim on the case; the record is retried later."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,26 +143,28 @@ class Reconciliation:
     lost_claims: int = 0
     recovered_status: str | None = None
     preserved_deliveries: int = 0
+    stale_claims_taken_over: int = 0
 
 
 def _read_marker(
     s3: S3Client, settings: Settings, ref: SummaryRef
-) -> tuple[OwnershipMarker, str] | None:
-    try:
-        stored = read_json_with_etag(
-            s3,
-            settings.raw_bucket,
-            marker_key(ref.account_id, ref.display_id),
-            max_bytes=MAX_MARKER_BYTES,
-        )
-    except (S3JsonDecodeError, S3ObjectTooLargeError):
-        raise InvalidOwnershipMarkerError("marker is unreadable") from None
-    if stored is None:
-        return None
-    marker = OwnershipMarker.from_document(stored.document)
-    if not marker.owns(ref):
+) -> tuple[OwnershipMarker | None, str | None, bool]:
+    """The ownership marker, the ETag to claim against, and whether a stale reset claim is held.
+
+    A recent reset claim raises `CaseResetInProgressError`: cleanup is deleting the inputs, and
+    overwriting its claim could start an execution whose inputs disappear underneath it.
+    """
+    current = read_ownership(s3, settings.raw_bucket, ref.account_id, ref.display_id)
+    if current is None:
+        return None, None, False
+    owner, etag = current
+    if isinstance(owner, ResetClaim):
+        if not owner.is_stale(now()):
+            raise CaseResetInProgressError
+        return None, etag, True
+    if not owner.owns(ref):
         raise InvalidOwnershipMarkerError("marker is for another case")
-    return marker, stored.etag
+    return owner, etag, False
 
 
 def _claim(s3: S3Client, settings: Settings, marker: OwnershipMarker, etag: str | None) -> bool:
@@ -193,11 +200,9 @@ def reconcile_case(ref: SummaryRef, settings: Settings, aws: Clients) -> dict[st
             aws.s3, settings.processed_bucket, case_record_key(ref.account_id, ref.display_id)
         ):
             return _outcome("alreadyProcessed", ref)
-        current = _read_marker(aws.s3, settings, ref)
-        etag: str | None = None
+        marker, etag, taking_over = _read_marker(aws.s3, settings, ref)
         attempt = 1
-        if current is not None:
-            marker, etag = current
+        if marker is not None:
             arn = execution_arn(settings.state_machine_arn, marker.execution_name)
             status = describe_status(aws.sfn, arn)
             if status in ACTIVE_STATUSES:
@@ -250,6 +255,7 @@ def reconcile_case(ref: SummaryRef, settings: Settings, aws: Clients) -> dict[st
         if not _claim(aws.s3, settings, claim, etag):
             stats.lost_claims += 1
             continue
+        stats.stale_claims_taken_over += int(taking_over)
         if start_execution(aws.sfn, settings.state_machine_arn, claim.execution_name, claim.input):
             return _outcome(
                 "started",
@@ -259,6 +265,7 @@ def reconcile_case(ref: SummaryRef, settings: Settings, aws: Clients) -> dict[st
                 completedClaim=False,
                 recoveredFrom=stats.recovered_status,
                 preservedDeliveries=stats.preserved_deliveries,
+                staleClaimsTakenOver=stats.stale_claims_taken_over,
                 nameConflicts=stats.name_conflicts,
                 lostClaims=stats.lost_claims,
             )
@@ -303,6 +310,12 @@ def record_outcome(result: dict[str, Any], log_fields: dict[str, Any]) -> None:
             name="FailureDeliveriesPreserved",
             unit=MetricUnit.Count,
             value=int(result["preservedDeliveries"]),
+        )
+    if result.get("staleClaimsTakenOver"):
+        metrics.add_metric(
+            name="StaleResetClaimsTakenOver",
+            unit=MetricUnit.Count,
+            value=int(result["staleClaimsTakenOver"]),
         )
     if result.get("completedClaim"):
         metrics.add_metric(name="OwnershipClaimsCompleted", unit=MetricUnit.Count, value=1)
