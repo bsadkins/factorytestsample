@@ -10,10 +10,14 @@ from typing import TYPE_CHECKING, Any
 import boto3
 import pytest
 from case_cleanup import app
+from common import failure_delivery
 from common.case_refs import SummaryRef
 from common.checkpoints import checkpoint_key
-from common.failures import terminal_marker_key
+from common.failure_delivery import DeliveryMarker, delivery_marker_key, reconcile_closed_attempt
+from common.failures import summary_ref_from_failure, terminal_marker_key
 from common.idempotency import persistence_layer
+from common.s3_json import write_json
+from common.sqs import SqsSendError
 from common.workflow import OwnershipMarker, encode_input, execution_input, marker_key
 from workflow_kit import STATE_MACHINE_ARN, FakeStepFunctions, sfn_error
 from workflow_starter import app as starter_app
@@ -50,6 +54,8 @@ def key(display: str, name: str, account: str = ACCOUNT) -> str:
 class Env:
     s3: S3Client
     sfn: FakeStepFunctions
+    sqs: Any
+    queue_url: str
     kit: Any
     capsys: pytest.CaptureFixture[str]
     clock: list[datetime] = field(default_factory=list)
@@ -74,6 +80,35 @@ class Env:
                 marker.execution_name, status, encode_input(execution_input(case, attempt))
             )
         return marker.execution_name
+
+    def put_delivery(self, display: str, state: str, status: str | None, attempt: int = 1) -> str:
+        marker = DeliveryMarker(ref(display), attempt, state, status, "2026-11-13T01:00:00Z")
+        self.s3.put_object(Bucket=RAW, Key=marker.key, Body=json.dumps(marker.to_document()))
+        return marker.delivery_key
+
+    def delivery(self, display: str, execution: str) -> dict[str, Any]:
+        body = self.s3.get_object(Bucket=RAW, Key=delivery_marker_key(ACCOUNT, display, execution))
+        document: dict[str, Any] = json.loads(body["Body"].read())
+        return document
+
+    def failures(self) -> list[dict[str, Any]]:
+        received: list[dict[str, Any]] = self.kit.drain(self.sqs, self.queue_url)
+        return received
+
+    def start_next_run(self, display: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        """Deliver the case's summary reference of the next run to the workflow starter."""
+        self.kit.create_table(TABLE)
+        starter_clients = starter_app.Clients(s3=self.s3, sfn=self.sfn)  # type: ignore[arg-type]
+        monkeypatch.setattr(starter_app, "clients", lambda: starter_clients)
+        monkeypatch.setattr(starter_app, "now", lambda: self.clock[0])
+        persistence_layer.cache_clear()
+        try:
+            response: dict[str, Any] = starter_app.handler(
+                self.kit.event(ref(display, run_id=NEXT_RUN).to_message()), self.kit.context()
+            )
+        finally:
+            persistence_layer.cache_clear()
+        return response
 
     def mark_processed(self, display: str, account: str = ACCOUNT) -> None:
         self.s3.put_object(Bucket=PROCESSED, Key=key(display, "data.json", account), Body=b"{}")
@@ -106,7 +141,10 @@ def env(
     for bucket in (RAW, PROCESSED):
         s3.create_bucket(Bucket=bucket)
         s3.put_bucket_versioning(Bucket=bucket, VersioningConfiguration={"Status": "Enabled"})
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    queue_url = sqs.create_queue(QueueName="workflow-failures")["QueueUrl"]
     for name, value in {
+        "FAILURE_QUEUE_URL": queue_url,
         "RAW_BUCKET": RAW,
         "PROCESSED_BUCKET": PROCESSED,
         "STATE_MACHINE_ARN": STATE_MACHINE_ARN,
@@ -120,11 +158,13 @@ def env(
     environment = Env(
         s3=s3,
         sfn=sfn,
+        sqs=sqs,
+        queue_url=queue_url,
         kit=case_collection_kit,
         capsys=capsys,
         clock=[datetime.now(UTC) + timedelta(days=2)],
     )
-    clients = app.Clients(s3=s3, sfn=sfn)  # type: ignore[arg-type]
+    clients = app.Clients(s3=s3, sfn=sfn, sqs=sqs)  # type: ignore[arg-type]
     monkeypatch.setattr(app, "clients", lambda: clients)
     monkeypatch.setattr(app, "now", lambda: environment.clock[0])
     monkeypatch.setattr(app, "LIST_PAGE_SIZE", 2)
@@ -133,18 +173,24 @@ def env(
 
 def test_abandoned_case_is_reset_and_reusable_artefacts_are_kept(env: Env) -> None:
     env.seed("1001", checkpoint=True)
-    env.claim("1001", "FAILED")
+    execution = env.claim("1001", "FAILED")
     env.s3.put_object(Bucket=RAW, Key=terminal_marker_key(ACCOUNT, "1001"), Body=b"{}")
 
     result = env.run()
 
     assert result == {"evaluated": 1, "reset": 1, "errors": 0, "complete": True}
-    assert env.keys("1001") == ["checkpoints/summary.json", "terminal-failure.json"]
+    assert env.keys("1001") == [
+        "checkpoints/summary.json",
+        f"failure-deliveries/{execution}.json",
+        "terminal-failure.json",
+    ]
     assert env.metrics() == {
         "CleanupCasesEvaluated": 1,
         "CleanupCasesReset": 1,
         "CleanupErrors": 0,
         "CleanupObjectsDeleted": 3,
+        "FailureDeliveriesSent": 1,
+        "FailureDeliveriesPreserved": 1,
     }
     # Earlier versions stay recoverable until lifecycle expiry; only delete markers were added.
     versions = env.s3.list_object_versions(Bucket=RAW, Prefix=key("1001", "data.json"))
@@ -169,6 +215,7 @@ def test_processed_active_young_and_empty_cases_are_untouched(env: Env) -> None:
 
     assert result == {"evaluated": 5, "reset": 0, "errors": 0, "complete": True}
     assert {d: env.keys(d) for d in before} == before
+    assert env.failures() == []
     assert env.metrics() == {
         "CleanupCasesEvaluated": 5,
         "CleanupCasesReset": 0,
@@ -362,22 +409,14 @@ def test_cleanup_then_next_run_recovers_the_case(env: Env, monkeypatch: pytest.M
     env.seed("9301", checkpoint=True)
     failed = env.claim("9301", "FAILED")
     assert env.run()["reset"] == 1
-    assert env.keys("9301") == ["checkpoints/summary.json"]
+    assert env.keys("9301") == ["checkpoints/summary.json", f"failure-deliveries/{failed}.json"]
+    assert len(env.failures()) == 1
 
     # The next daily run retrieves the case again (no processed record) and the starter
-    # starts a fresh attempt under the new run's identity.
+    # starts a fresh attempt under the new run's identity; the confirmed failure record of the
+    # earlier attempt never stops that retry.
     env.seed("9301")
-    env.kit.create_table(TABLE)
-    starter_clients = starter_app.Clients(s3=env.s3, sfn=env.sfn)  # type: ignore[arg-type]
-    monkeypatch.setattr(starter_app, "clients", lambda: starter_clients)
-    monkeypatch.setattr(starter_app, "now", lambda: env.clock[0])
-    persistence_layer.cache_clear()
-    try:
-        response = starter_app.handler(
-            env.kit.event(ref("9301", run_id=NEXT_RUN).to_message()), env.kit.context()
-        )
-    finally:
-        persistence_layer.cache_clear()
+    response = env.start_next_run("9301", monkeypatch)
 
     assert response == {"batchItemFailures": []}
     assert env.sfn.status(failed) == "FAILED"
@@ -386,9 +425,233 @@ def test_cleanup_then_next_run_recovers_the_case(env: Env, monkeypatch: pytest.M
 
 
 def test_grace_hours_must_be_positive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAILURE_QUEUE_URL", "https://sqs.example/queue")
     monkeypatch.setenv("RAW_BUCKET", RAW)
     monkeypatch.setenv("PROCESSED_BUCKET", PROCESSED)
     monkeypatch.setenv("STATE_MACHINE_ARN", STATE_MACHINE_ARN)
     monkeypatch.setenv("CLEANUP_GRACE_HOURS", "0")
     with pytest.raises(ValueError, match="at least 1"):
         app.Settings.from_env()
+
+
+# Failure-delivery reconciliation: a closed failed attempt reaches the workflow failure queue
+# before its ownership marker can be removed, at least once and under a stable delivery key.
+
+
+@pytest.mark.parametrize("status", ["TIMED_OUT", "ABORTED", "FAILED"])
+def test_closed_attempt_without_a_confirmed_record_is_delivered_before_reset(
+    env: Env, status: str
+) -> None:
+    # TIMED_OUT and ABORTED bypass every task Catch; FAILED without a confirmed marker is an
+    # attempt whose failure handler exhausted its own retries.
+    env.seed("1101", checkpoint=True)
+    execution = env.claim("1101", status)
+
+    result = env.run()
+
+    assert result == {"evaluated": 1, "reset": 1, "errors": 0, "complete": True}
+    [failure] = env.failures()
+    assert failure == {
+        "schemaVersion": 1,
+        "failureType": "WorkflowExecutionClosed",
+        "stage": "workflow",
+        "retryable": True,
+        "failedAt": failure["failedAt"],
+        **ref("1101").to_message(),
+        "executionStatus": status,
+        "executionName": execution,
+        "attempt": 1,
+        "deliveryKey": execution,
+    }
+    # The record redrives to the summary queue like any other failure record.
+    assert summary_ref_from_failure(failure) == ref("1101")
+    assert env.delivery("1101", execution)["status"] == "sent"
+    assert env.keys("1101") == ["checkpoints/summary.json", f"failure-deliveries/{execution}.json"]
+    metrics = env.metrics()
+    assert metrics["FailureDeliveriesSent"] == 1
+    assert metrics["FailureDeliveriesPreserved"] == 1
+    assert "FailureDeliveryErrors" not in metrics
+
+
+def test_record_confirmed_by_the_failure_handler_is_not_sent_again(env: Env) -> None:
+    env.seed("1201")
+    execution = env.claim("1201", "FAILED")
+    env.put_delivery("1201", "sent", status=None)
+
+    assert env.run()["reset"] == 1
+    assert env.failures() == []
+    assert env.delivery("1201", execution)["status"] == "sent"
+    assert "FailureDeliveriesSent" not in env.metrics()
+
+
+def test_send_failure_keeps_the_owner_and_pending_evidence_for_the_next_run(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.seed("1301")
+    execution = env.claim("1301", "TIMED_OUT")
+
+    def unavailable(*_: Any, **__: Any) -> int:  # noqa: ANN401
+        raise SqsSendError(1, ("ServiceUnavailable",))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(failure_delivery, "send_messages", unavailable)
+        result = env.run()
+
+    assert result == {"evaluated": 1, "reset": 0, "errors": 1, "complete": True}
+    assert env.failures() == []
+    assert env.delivery("1301", execution)["status"] == "pending"
+    assert "workflow.json" in env.keys("1301")
+    metrics = env.metrics()
+    assert metrics["FailureDeliveryErrors"] == 1
+    assert metrics["CleanupErrors"] == 1
+
+    second = env.run()
+
+    assert second == {"evaluated": 1, "reset": 1, "errors": 0, "complete": True}
+    assert [f["deliveryKey"] for f in env.failures()] == [execution]
+    assert env.delivery("1301", execution)["status"] == "sent"
+
+
+def test_evidence_that_cannot_be_written_never_allows_deletion(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.seed("1401")
+    env.claim("1401", "ABORTED")
+
+    def unavailable(*_: Any, **__: Any) -> None:  # noqa: ANN401
+        raise sfn_error("InternalError", "PutObject", 500)
+
+    monkeypatch.setattr(failure_delivery, "write_json", unavailable)
+    result = env.run()
+
+    assert result["reset"] == 0
+    assert result["errors"] == 1
+    assert env.failures() == []
+    assert env.keys("1401") == ["communications.json", "data.json", "workflow.json"]
+
+
+def test_crash_after_send_repeats_the_record_with_the_same_key_then_stops(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.seed("1501")
+    execution = env.claim("1501", "TIMED_OUT")
+    original = write_json
+
+    def lose_confirmation(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        if kwargs.get("if_match"):
+            raise sfn_error("InternalError", "PutObject", 500)
+        return original(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(failure_delivery, "write_json", lose_confirmation)
+        first = env.run()
+
+    # The record was sent, so the owner is released; the unconfirmed marker stays pending.
+    assert first["reset"] == 1
+    assert env.delivery("1501", execution)["status"] == "pending"
+    assert env.metrics()["FailureDeliveriesUnconfirmed"] == 1
+
+    env.run()
+    env.run()
+
+    keys = [f["deliveryKey"] for f in env.failures()]
+    assert keys == [execution, execution]
+    assert env.delivery("1501", execution)["status"] == "sent"
+
+
+def test_repeated_reconciliation_sends_one_record(env: Env) -> None:
+    env.seed("1601")
+    env.claim("1601", "TIMED_OUT")
+
+    for _ in range(3):
+        env.run()
+
+    assert len(env.failures()) == 1
+
+
+def test_pending_evidence_kept_by_the_starter_is_delivered_without_touching_active_work(
+    env: Env,
+) -> None:
+    # The starter replaced the owner of a timed-out attempt with a running new attempt.
+    env.seed("1701")
+    env.claim("1701", "RUNNING", attempt=2)
+    timed_out = env.put_delivery("1701", "pending", status="TIMED_OUT")
+    # A processed case may also hold evidence from an earlier failed attempt.
+    env.seed("1702")
+    env.mark_processed("1702")
+    earlier = env.put_delivery("1702", "pending", status="FAILED")
+
+    result = env.run()
+
+    assert result["reset"] == 0
+    assert sorted(f["deliveryKey"] for f in env.failures()) == sorted([timed_out, earlier])
+    assert "workflow.json" in env.keys("1701")
+    assert env.keys("1702") == [
+        "communications.json",
+        "data.json",
+        f"failure-deliveries/{earlier}.json",
+    ]
+
+
+def test_unreadable_pending_evidence_is_counted_and_kept(env: Env) -> None:
+    env.seed("1801")
+    env.mark_processed("1801")
+    bad = key("1801", "failure-deliveries/" + f"{ACCOUNT}-1801-{RUN}-a1.json")
+    env.s3.put_object(Bucket=RAW, Key=bad, Body=b"{bad")
+
+    result = env.run()
+
+    assert result["errors"] == 1
+    assert env.failures() == []
+    assert env.metrics()["FailureDeliveryErrors"] == 1
+    assert "Pending failure record could not be delivered; kept" in env.kit.logs()
+
+
+def test_unknown_or_unavailable_status_never_sends_a_record(env: Env) -> None:
+    env.seed("1901")
+    env.claim("1901", "FAILED")
+    env.sfn.failures["describe"] = sfn_error("ThrottlingException", "DescribeExecution")
+    env.seed("1902")
+    foreign = OwnershipMarker.claim(ref("1903"), 1, env.clock[0]).to_document()
+    env.s3.put_object(Bucket=RAW, Key=marker_key(ACCOUNT, "1902"), Body=json.dumps(foreign))
+
+    assert env.run()["errors"] == 2
+    assert env.failures() == []
+
+
+def test_new_run_racing_the_reset_keeps_one_record_and_its_files(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.seed("2101")
+    execution = env.claim("2101", "TIMED_OUT")
+    original = reconcile_closed_attempt
+
+    def new_run_arrives(*args: Any, **kwargs: Any) -> tuple[str, bool]:  # noqa: ANN401
+        outcome = original(*args, **kwargs)
+        # The next run rewrites the case and its starter recovers the timed-out attempt.
+        for name in ("data.json", "communications.json"):
+            env.s3.put_object(Bucket=RAW, Key=key("2101", name), Body=b'{"run": "next"}')
+        env.start_next_run("2101", monkeypatch)
+        return outcome
+
+    monkeypatch.setattr(app, "reconcile_closed_attempt", new_run_arrives)
+    result = env.run()
+
+    assert result["reset"] == 0
+    assert env.metrics()["CleanupDeleteConflicts"] == 1
+    assert env.keys("2101") == [
+        "communications.json",
+        "data.json",
+        f"failure-deliveries/{execution}.json",
+        "workflow.json",
+    ]
+    assert [f["deliveryKey"] for f in env.failures()] == [execution]
+    assert env.sfn.status(f"{ACCOUNT}-2101-{NEXT_RUN}-a1") == "RUNNING"
+
+
+def test_delivery_markers_are_bookkeeping_not_case_work() -> None:
+    stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    case = app.CaseObjects(ACCOUNT, "1001")
+    case.objects["data.json"] = app.StoredObject("k1", "e1", stamp)
+    case.objects["failure-deliveries/x.json"] = app.StoredObject("k2", "e2", stamp)
+    assert [item.key for item in case.work_objects] == ["k1"]

@@ -11,7 +11,9 @@ queued for summarisation it is reported to the workflow failure queue, so it fai
 than being truncated. A `terminal-failure.json` marker records the digest of the reported
 conversation, so later runs report it again only when its content changes; unchanged oversized
 content is never retried automatically. Cases that already have a processed record are skipped.
-Access and entitlement errors are counted skips for this run only.
+Access and entitlement errors are counted skips for this run only. Every outcome other than a
+queued summary is recorded in the run marker `runs/<runId>/cases/<accountId>/<displayId>.json`
+(see `common.run_markers`), so run completion counts the case as finished for the run.
 """
 
 from __future__ import annotations
@@ -46,6 +48,7 @@ from common.failures import (
 )
 from common.idempotency import idempotency_config
 from common.processed import get_existing_cases_batch
+from common.run_markers import CaseMarker, write_case_marker
 from common.s3_json import (
     S3JsonDecodeError,
     S3ObjectNotFoundError,
@@ -147,9 +150,17 @@ def annotate_case(
     tracer's exception log nor the batch report can carry AWS error text.
     """
     try:
-        return _annotate_case(key, invocation, ref, settings, aws)
+        result = _annotate_case(key, invocation, ref, settings, aws)
+        if result["outcome"] != "annotated":
+            # The case's work for this run ends here; run completion needs to know that.
+            write_case_marker(
+                aws.s3,
+                settings.raw_bucket,
+                CaseMarker(ref.run_id, ref.account_id, ref.display_id, str(result["outcome"])),
+            )
     except Exception as exc:
         raise RecordFailedError.from_exception(exc) from None
+    return result
 
 
 def _annotate_case(

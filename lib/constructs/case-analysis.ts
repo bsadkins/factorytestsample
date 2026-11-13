@@ -27,7 +27,7 @@ import { type CaseInsightsConfig, resourceNames } from '../config';
 import { acknowledgeNagFinding } from '../nag';
 import { lambdaPackagesCode, REPO_ROOT } from '../packaging/python-assets';
 import { BedrockInvokePolicy } from './bedrock-invoke-policy';
-import { CASE_PARTITION_PATTERN } from './case-collection';
+import { CASE_PARTITION_PATTERN, RUN_CASE_MARKER_PATTERN } from './case-collection';
 import { handlerDirectory, logicalIdOf } from './construct-utils';
 import { dataRemovalPolicy } from './environment';
 import { logRetention, PipelineFunction } from './pipeline-function';
@@ -41,6 +41,8 @@ export const ANALYSIS_STAGES = ['summary', 'rca', 'lifecycle'] as const;
 export const CLEANUP_STATE_PREFIX = 'cleanup-state/';
 /** Files cleanup may delete from an abandoned case; must match RESETTABLE_FILES in case_cleanup/app.py. */
 export const CLEANUP_RESETTABLE_FILES = ['data.json', 'communications.json', 'workflow.json'] as const;
+/** Failure-delivery markers; must match DELIVERY_DIR in common/failure_delivery.py. Never deletable. */
+export const FAILURE_DELIVERY_PATTERN = 'account_number=*/case_number=*/failure-deliveries/*';
 /** Scheduler retries delivering the daily cleanup invocation; a missed run is repeated the next day. */
 export const CLEANUP_SCHEDULE_RETRY_ATTEMPTS = 3;
 export const CLEANUP_MAX_EVENT_AGE = Duration.hours(6);
@@ -204,14 +206,16 @@ export class CaseAnalysis extends Construct {
       serviceName: 'handle-failure',
       layers: [commonLayer],
       timeout: analysisTimeout,
-      environment: { FAILURE_QUEUE_URL: props.failureQueue.queueUrl },
+      environment: { FAILURE_QUEUE_URL: props.failureQueue.queueUrl, RAW_BUCKET: rawBucket.bucketName },
     });
-    new Policy(this, 'HandleFailureAccess', {
+    const sendFailureRecords = (): PolicyStatement =>
+      new PolicyStatement({ sid: 'SendFailureRecords', actions: ['sqs:SendMessage'], resources: [props.failureQueue.queueArn] });
+    const trackFailureDeliveries = (): PolicyStatement => raw.read('TrackFailureDeliveries', FAILURE_DELIVERY_PATTERN, ['s3:GetObject', 's3:PutObject']);
+    const failureAccess = new Policy(this, 'HandleFailureAccess', {
       roles: [this.failureFunction.role],
-      statements: [
-        new PolicyStatement({ sid: 'SendFailureRecords', actions: ['sqs:SendMessage'], resources: [props.failureQueue.queueArn] }),
-      ],
+      statements: [sendFailureRecords(), trackFailureDeliveries(), listBuckets([rawBucket])],
     });
+    raw.acknowledge(failureAccess, FAILURE_DELIVERY_PATTERN, 'The failure handler reads and confirms the failure-delivery marker of the failed execution only, under the case partition failure-deliveries/ prefix; keys are discovered at run time.');
 
     this.stateMachine = this.buildStateMachine(config, names.caseAnalysisStateMachine);
 
@@ -235,6 +239,8 @@ export class CaseAnalysis extends Construct {
       roles: [this.starterFunction.role],
       statements: [
         raw.read('ClaimCaseOwnership', 'account_number=*/case_number=*/workflow.json', ['s3:GetObject', 's3:PutObject']),
+        trackFailureDeliveries(),
+        raw.write('RecordRunCases', RUN_CASE_MARKER_PATTERN),
         processed.read('CheckProcessedRecords', CASE_PARTITION_PATTERN),
         listBuckets([rawBucket, processedBucket]),
         new PolicyStatement({ sid: 'StartCaseAnalysis', actions: ['states:StartExecution'], resources: [stateMachineArn] }),
@@ -247,6 +253,8 @@ export class CaseAnalysis extends Construct {
       ],
     });
     raw.acknowledge(starterAccess, 'account_number=*/case_number=*/workflow.json', 'Ownership markers are one workflow.json per case partition, keyed by account and case IDs discovered at run time; only that file is read or written.');
+    raw.acknowledge(starterAccess, FAILURE_DELIVERY_PATTERN, 'Before replacing the ownership marker of a closed failed execution the starter preserves a pending failure-delivery marker under the case failure-deliveries/ prefix; keys are discovered at run time.');
+    raw.acknowledge(starterAccess, RUN_CASE_MARKER_PATTERN, 'The starter records which execution owns each case for the run under runs/<runId>/cases/; run, account and case IDs are discovered at run time.');
     processed.acknowledge(starterAccess, CASE_PARTITION_PATTERN, 'The starter only reads (HEAD) processed records so completed cases are never started again; keys are account and case IDs discovered at run time.');
     acknowledgeExecutions(starterAccess, names.caseAnalysisStateMachine, 'Execution names are derived per case attempt at run time; DescribeExecution is limited to executions of this deployment CaseAnalysis state machine.');
     this.starterFunction.function.addEventSource(
@@ -269,6 +277,7 @@ export class CaseAnalysis extends Construct {
         ...buckets,
         STATE_MACHINE_ARN: stateMachineArn,
         CLEANUP_GRACE_HOURS: String(cleanup.graceHours),
+        FAILURE_QUEUE_URL: props.failureQueue.queueUrl,
       },
     });
     const resettable = CLEANUP_RESETTABLE_FILES.map((file) => `account_number=*/case_number=*/${file}`);
@@ -282,6 +291,8 @@ export class CaseAnalysis extends Construct {
           resources: resettable.map((pattern) => rawBucket.arnForObjects(pattern)),
         }),
         raw.read('KeepCleanupCursor', `${CLEANUP_STATE_PREFIX}*`, ['s3:DeleteObject', 's3:GetObject', 's3:PutObject']),
+        trackFailureDeliveries(),
+        sendFailureRecords(),
         processed.read('CheckProcessedRecords', CASE_PARTITION_PATTERN),
         listBuckets([rawBucket, processedBucket]),
         new PolicyStatement({ sid: 'ListActiveExecutions', actions: ['states:ListExecutions'], resources: [stateMachineArn] }),
@@ -292,6 +303,7 @@ export class CaseAnalysis extends Construct {
     for (const pattern of resettable) {
       raw.acknowledge(cleanupAccess, pattern, 'Cleanup may delete only data.json, communications.json and workflow.json of abandoned cases (conditional on the checked ETag); checkpoints and terminal markers are never deletable.');
     }
+    raw.acknowledge(cleanupAccess, FAILURE_DELIVERY_PATTERN, 'Cleanup preserves and delivers failure-delivery markers of closed failed executions under the case failure-deliveries/ prefix; it can write but never delete them.');
     raw.acknowledge(cleanupAccess, `${CLEANUP_STATE_PREFIX}*`, 'The cleanup resume cursor lives under the cleanup-state/ prefix of the raw bucket; its name is fixed but the policy keeps the prefix for future cursor versions.');
     processed.acknowledge(cleanupAccess, CASE_PARTITION_PATTERN, 'Cleanup only lists and reads (HEAD) processed records so committed cases are never reset; keys are account and case IDs discovered at run time.');
     acknowledgeExecutions(cleanupAccess, names.caseAnalysisStateMachine, 'Cleanup describes the execution named by a case ownership marker; DescribeExecution is limited to executions of this deployment CaseAnalysis state machine.');
@@ -455,7 +467,8 @@ function nagArnPart(value: string, pseudo: string): string {
   return Token.isUnresolved(value) ? `<AWS::${pseudo}>` : value;
 }
 
-function acknowledgeExecutions(policy: IConstruct, stateMachineName: string, reason: string): void {
+/** Acknowledges DescribeExecution on every execution of one CaseAnalysis state machine. */
+export function acknowledgeExecutions(policy: IConstruct, stateMachineName: string, reason: string): void {
   const stack = Stack.of(policy);
   const resource = [
     'arn',

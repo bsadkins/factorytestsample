@@ -7,13 +7,22 @@ time and resets a case only when every check agrees the work is abandoned:
 - every object for the case is older than the grace period;
 - no RUNNING or PENDING_REDRIVE execution of the CaseAnalysis state machine belongs to the case;
 - the case's ownership marker, if any, names an execution that is closed (or that never started);
+- a closed FAILED, TIMED_OUT or ABORTED execution has its failure record confirmed on the
+  workflow failure queue first (see `common.failure_delivery`): a pending failure-delivery
+  marker is written and delivered before the ownership marker can be deleted, because a
+  whole-execution timeout or abort bypasses the workflow's failure handler;
 - the processed record is checked again immediately before deleting.
 
 A reset deletes only the current versions of `data.json`, `communications.json` and the
 ownership marker `workflow.json`, each with an S3 conditional delete on the ETag that was checked,
 so anything a new run wrote meanwhile survives. Stage checkpoints and terminal failure markers
-are kept: valid checkpoints are reused by the next attempt and stale ones are ignored. Unknown or
-failed status checks never lead to a deletion; they are counted as cleanup errors.
+are kept: valid checkpoints are reused by the next attempt and stale ones are ignored. Failure-
+delivery markers are never deleted and do not count as recent activity. Unknown or failed status
+checks, and failure records that could not be preserved or sent, never lead to a deletion; they
+are counted as cleanup errors and retried on the next run.
+
+Every case partition visited, including processed, recent and active ones, also has its pending
+failure-delivery markers delivered, so evidence kept by the workflow starter reaches the queue.
 
 The next daily run retrieves the case again because it still has no processed record. When the
 time budget runs out the position is saved under `cleanup-state/` and the next run resumes there.
@@ -33,6 +42,13 @@ import boto3
 from aws_lambda_powertools import Logger, Metrics, Tracer
 from aws_lambda_powertools.metrics import MetricUnit
 from common.aws import client_config
+from common.failure_delivery import (
+    DELIVERY_DIR,
+    DeliveryTally,
+    FailureQueue,
+    deliver_pending_markers,
+    reconcile_closed_attempt,
+)
 from common.processed import case_record_key, get_existing_cases_batch
 from common.s3_json import (
     S3JsonDecodeError,
@@ -46,6 +62,7 @@ from common.s3_json import (
 from common.safe_logging import error_fields
 from common.workflow import (
     ACTIVE_STATUSES,
+    FAILED_STATUSES,
     MARKER_FILE,
     MAX_MARKER_BYTES,
     SUCCEEDED_STATUS,
@@ -60,6 +77,7 @@ from common.workflow import (
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
     from types_boto3_s3.client import S3Client
+    from types_boto3_sqs.client import SQSClient
     from types_boto3_stepfunctions.client import SFNClient
 
 logger = Logger()
@@ -95,6 +113,7 @@ class Settings:
     raw_bucket: str
     processed_bucket: str
     state_machine_arn: str
+    failure_queue_url: str
     grace: timedelta
 
     @classmethod
@@ -106,6 +125,7 @@ class Settings:
             raw_bucket=os.environ["RAW_BUCKET"],
             processed_bucket=os.environ["PROCESSED_BUCKET"],
             state_machine_arn=os.environ["STATE_MACHINE_ARN"],
+            failure_queue_url=os.environ["FAILURE_QUEUE_URL"],
             grace=timedelta(hours=hours),
         )
 
@@ -114,6 +134,7 @@ class Settings:
 class Clients:
     s3: S3Client
     sfn: SFNClient
+    sqs: SQSClient
 
 
 @cache
@@ -121,6 +142,7 @@ def clients() -> Clients:
     return Clients(
         s3=boto3.client("s3", config=client_config()),
         sfn=boto3.client("stepfunctions", config=client_config()),
+        sqs=boto3.client("sqs", config=client_config()),
     )
 
 
@@ -147,6 +169,13 @@ class CaseObjects:
     def last_key(self) -> str:
         return max(item.key for item in self.objects.values())
 
+    @property
+    def work_objects(self) -> list[StoredObject]:
+        """Objects written by case work; failure-delivery markers are bookkeeping only."""
+        return [
+            item for name, item in self.objects.items() if not name.startswith(f"{DELIVERY_DIR}/")
+        ]
+
 
 @dataclass(slots=True)
 class Summary:
@@ -156,6 +185,7 @@ class Summary:
     errors: int = 0
     skipped: dict[str, int] = field(default_factory=dict)
     complete: bool = True
+    deliveries: DeliveryTally = field(default_factory=DeliveryTally)
 
     def skip(self, reason: str) -> None:
         self.skipped[reason] = self.skipped.get(reason, 0) + 1
@@ -211,6 +241,8 @@ class Cleaner:
         self.aws = aws
         self.started = started
         self.active = active_cases(aws.sfn, settings.state_machine_arn)
+        self.queue = FailureQueue(aws.sqs, settings.failure_queue_url)
+        self.deliveries = DeliveryTally()
         self._processed: dict[str, set[str]] = {}
 
     def processed(self, account_id: str) -> set[str]:
@@ -224,8 +256,25 @@ class Cleaner:
         key = case_record_key(case.account_id, case.display_id)
         return object_exists(self.aws.s3, self.settings.processed_bucket, key)
 
+    def deliver_pending(self, case: CaseObjects) -> None:
+        """Deliver failure records kept as pending markers in the case partition."""
+        deliver_pending_markers(
+            self.aws.s3,
+            self.settings.raw_bucket,
+            self.queue,
+            account_id=case.account_id,
+            display_id=case.display_id,
+            names=list(case.objects),
+            now=now(),
+            tally=self.deliveries,
+        )
+
     def marker_closed(self, case: CaseObjects) -> str:
-        """`closed`, `active`, `processed` or `unknown` for the case's ownership marker."""
+        """`closed`, `active`, `processed` or `unknown` for the case's ownership marker.
+
+        A closed failed execution is `closed` only once its failure record is preserved and sent;
+        S3 or SQS errors propagate, so the marker is not deleted.
+        """
         key = case.objects[MARKER_FILE].key
         try:
             document = read_json_if_exists(
@@ -244,6 +293,21 @@ class Cleaner:
             return "active"
         if status == SUCCEEDED_STATUS and self.is_processed_now(case):
             return "processed"
+        if status in FAILED_STATUSES:
+            try:
+                outcome, created = reconcile_closed_attempt(
+                    self.aws.s3,
+                    self.settings.raw_bucket,
+                    self.queue,
+                    marker.case_ref,
+                    attempt=marker.attempt,
+                    execution_status=status,
+                    now=now(),
+                )
+            except Exception:
+                self.deliveries.errors += 1
+                raise
+            self.deliveries.add(outcome, created=created)
         return "closed"
 
     def evaluate(self, case: CaseObjects) -> str:  # noqa: PLR0911
@@ -252,7 +316,7 @@ class Cleaner:
             return "nothing"
         if case.display_id in self.processed(case.account_id):
             return "processed"
-        newest = max(item.last_modified for item in case.objects.values())
+        newest = max(item.last_modified for item in case.work_objects)
         if self.started - newest < self.settings.grace:
             return "recent"
         if (case.account_id, display_component(case.display_id)) in self.active:
@@ -302,6 +366,11 @@ def run_cleanup(settings: Settings, aws: Clients, context: LambdaContext) -> Sum
             break
         summary.evaluated += 1
         fields = {"account_id": case.account_id, "display_id": case.display_id}
+        errors_before = cleaner.deliveries.errors
+        cleaner.deliver_pending(case)
+        if cleaner.deliveries.errors > errors_before:
+            summary.errors += cleaner.deliveries.errors - errors_before
+            logger.warning("Pending failure record could not be delivered; kept", extra=fields)
         try:
             outcome = cleaner.evaluate(case)
         except Exception as exc:
@@ -321,6 +390,7 @@ def run_cleanup(settings: Settings, aws: Clients, context: LambdaContext) -> Sum
                     summary.errors += 1
                     logger.warning("Case ownership is unknown; left untouched", extra=fields)
         last_done = case.last_key
+    summary.deliveries = cleaner.deliveries
     if summary.complete:
         if cursor_etag is not None:
             delete_if_unchanged(aws.s3, settings.raw_bucket, CURSOR_KEY, cursor_etag)
@@ -342,6 +412,8 @@ def publish(summary: Summary) -> None:
         metrics.add_metric(name=_SKIP_METRICS[reason], unit=MetricUnit.Count, value=count)
     if not summary.complete:
         metrics.add_metric(name="CleanupIncomplete", unit=MetricUnit.Count, value=1)
+    for name, value in summary.deliveries.metrics().items():
+        metrics.add_metric(name=name, unit=MetricUnit.Count, value=value)
     logger.info(
         "Cleanup finished",
         extra={
@@ -350,6 +422,7 @@ def publish(summary: Summary) -> None:
             "errors": summary.errors,
             "skipped": summary.skipped,
             "complete": summary.complete,
+            "failureDeliveries": summary.deliveries.metrics(),
         },
     )
 

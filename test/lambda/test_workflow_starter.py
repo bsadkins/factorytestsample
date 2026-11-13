@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import boto3
 import pytest
 from common.case_refs import SummaryRef
+from common.failure_delivery import DeliveryMarker, delivery_marker_key
 from common.idempotency import persistence_layer
 from common.workflow import (
     MAX_ATTEMPTS_PER_RUN,
@@ -97,6 +98,30 @@ class Env:
         execution = self.put_marker(ref, attempt, START - timedelta(days=1))
         self.sfn.add(execution, status, encode_input(execution_input(ref, attempt)))
         return execution
+
+    def delivery(self, execution: str, display: str = DISPLAY) -> dict[str, Any] | None:
+        try:
+            body = self.s3.get_object(
+                Bucket=RAW, Key=delivery_marker_key(ACCOUNT, display, execution)
+            )
+        except self.s3.exceptions.NoSuchKey:
+            return None
+        document: dict[str, Any] = json.loads(body["Body"].read())
+        return document
+
+    def case_marker(self, run_id: str, display: str = DISPLAY) -> dict[str, Any]:
+        key = f"runs/{run_id}/cases/{ACCOUNT}/{display}.json"
+        document: dict[str, Any] = json.loads(
+            self.s3.get_object(Bucket=RAW, Key=key)["Body"].read()
+        )
+        return document
+
+    def case_outcome(self, run_id: str, display: str = DISPLAY) -> str | None:
+        try:
+            outcome: str = self.case_marker(run_id, display)["outcome"]
+        except self.s3.exceptions.NoSuchKey:
+            return None
+        return outcome
 
     def mark_processed(self, display: str = DISPLAY) -> None:
         self.s3.put_object(
@@ -241,7 +266,22 @@ def test_closed_failed_attempt_is_recovered_by_a_later_run(env: Env, status: str
     marker = env.marker()
     assert marker is not None
     assert (marker["runId"], marker["attempt"]) == (NEXT_RUN, 1)
-    assert env.metrics() == {"WorkflowsStarted": 1, "FailedAttemptsRecovered": 1}
+    # The replaced attempt never confirmed a failure record (a timeout or abort bypasses
+    # HandleFailure), so durable evidence is kept for cleanup and run completion to deliver.
+    pending = env.delivery(failed)
+    assert pending is not None
+    assert (pending["status"], pending["executionStatus"], pending["attempt"]) == (
+        "pending",
+        status,
+        1,
+    )
+    assert pending["deliveryKey"] == failed
+    assert env.case_marker(NEXT_RUN)["executionName"] == name(1, NEXT_RUN)
+    assert env.metrics() == {
+        "WorkflowsStarted": 1,
+        "FailedAttemptsRecovered": 1,
+        "FailureDeliveriesPreserved": 1,
+    }
 
 
 def test_operator_redrive_of_the_same_run_takes_the_next_attempt_name(env: Env) -> None:
@@ -265,6 +305,7 @@ def test_operator_redrive_of_the_same_run_takes_the_next_attempt_name(env: Env) 
         "WorkflowsStarted": 2,
         "DuplicateSummaryMessages": 1,
         "FailedAttemptsRecovered": 1,
+        "FailureDeliveriesPreserved": 1,
     }
 
 
@@ -438,3 +479,56 @@ def test_settings_require_every_variable(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.delenv("STATE_MACHINE_ARN")
     with pytest.raises(KeyError):
         app.Settings.from_env()
+
+
+def test_failed_attempt_with_a_confirmed_record_is_not_preserved_again(env: Env) -> None:
+    ref = summary_ref()
+    failed = env.previous_attempt(ref, 1, "FAILED")
+    sent = DeliveryMarker(ref, 1, "sent", None, "2026-11-12T01:00:00Z", "2026-11-12T01:00:01Z")
+    env.s3.put_object(Bucket=RAW, Key=sent.key, Body=json.dumps(sent.to_document()))
+
+    env.handle(summary_ref(NEXT_RUN))
+
+    stored = env.delivery(failed)
+    assert stored is not None
+    assert stored["status"] == "sent"
+    assert env.metrics() == {"WorkflowsStarted": 1, "FailedAttemptsRecovered": 1}
+
+
+def test_failure_evidence_that_cannot_be_kept_blocks_replacing_the_owner(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ref = summary_ref()
+    env.previous_attempt(ref, 1, "TIMED_OUT")
+    owner = env.marker()
+
+    def unavailable(*_: Any, **__: Any) -> None:  # noqa: ANN401
+        raise sfn_error("InternalError", "PutObject", 500)
+
+    monkeypatch.setattr(app, "preserve_pending", unavailable)
+    response = env.handle(summary_ref(NEXT_RUN))
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "m0"}]}
+    assert env.marker() == owner
+    assert env.sfn.started() == []
+    assert env.case_outcome(NEXT_RUN) is None
+    assert env.metrics() == {"WorkflowStartFailures": 1}
+
+
+def test_each_decision_is_recorded_for_run_completion(env: Env) -> None:
+    env.handle(summary_ref())
+    env.handle(summary_ref(NEXT_RUN, version="v2"))
+    env.mark_processed(display="170000000002")
+    env.handle(summary_ref(display="170000000002"))
+
+    assert env.case_marker(RUN) == {
+        "schemaVersion": 1,
+        "runId": RUN,
+        "accountId": ACCOUNT,
+        "displayId": DISPLAY,
+        "outcome": "started",
+        "executionName": name(1),
+    }
+    assert env.case_marker(NEXT_RUN)["outcome"] == "alreadyActive"
+    assert env.case_marker(NEXT_RUN)["executionName"] == name(1)
+    assert env.case_outcome(RUN, display="170000000002") == "alreadyProcessed"

@@ -88,7 +88,7 @@ def workflow(analysis_env: AnalysisEnv, monkeypatch: pytest.MonkeyPatch) -> Work
     sqs = boto3.client("sqs", region_name="us-east-1")
     url = sqs.create_queue(QueueName="workflow-failures")["QueueUrl"]
     monkeypatch.setenv("FAILURE_QUEUE_URL", url)
-    clients = failure_app.Clients(sqs=sqs)
+    clients = failure_app.Clients(sqs=sqs, s3=analysis_env.s3)
     monkeypatch.setattr(failure_app, "clients", lambda: clients)
     return Workflow(analysis_env, url, sqs)
 

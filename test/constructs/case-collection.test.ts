@@ -8,6 +8,8 @@ import {
   MEMBER_ROLE_SUPPORT_ACTIONS,
   queueVisibilityTimeoutSeconds,
   resourceNames,
+  RUN_ACCOUNT_MARKER_PATTERN,
+  RUN_CASE_MARKER_PATTERN,
   TERMINAL_MARKER_PATTERN,
 } from '../../lib';
 import { acknowledgedRules, asArray, iamPolicyStatements, nagApp, synthError, testApp, testConfig } from '../helpers/cdk';
@@ -151,6 +153,12 @@ describe('CaseCollection', () => {
         Action: 'sqs:SendMessage',
         Resource: arnOf(logicalId(core, core.queues.annotation.queue)),
       },
+      {
+        Sid: 'RecordRunAccounts',
+        Effect: 'Allow',
+        Action: 's3:PutObject',
+        Resource: { 'Fn::Join': ['', [arnOf(logicalId(core, core.storage.rawBucket)), '/runs/*/accounts/*']] },
+      },
     ]);
     expect(statementsFor(logicalId(core, core.memberAccess.annotationRole))).toEqual([
       consume(logicalId(core, core.queues.annotation.queue)),
@@ -173,6 +181,12 @@ describe('CaseCollection', () => {
         Action: 's3:ListBucket',
         Resource: arnOf(logicalId(core, core.storage.rawBucket)),
         Condition: { StringLike: { 's3:prefix': [TERMINAL_MARKER_PATTERN] } },
+      },
+      {
+        Sid: 'RecordRunCases',
+        Effect: 'Allow',
+        Action: 's3:PutObject',
+        Resource: { 'Fn::Join': ['', [arnOf(logicalId(core, core.storage.rawBucket)), '/runs/*/cases/*']] },
       },
     ]);
   });
@@ -198,9 +212,11 @@ describe('CaseCollection', () => {
         ['CaseCollection/CaseRetrieval/TelemetryPolicy', 'AwsSolutions-IAM5[Resource::*]'],
         ['CaseCollection/CaseRetrieval/Function', 'AwsSolutions-L1'],
         ['CaseCollection/CaseRetrievalAccess', rawFinding],
+        ['CaseCollection/CaseRetrievalAccess', `AwsSolutions-IAM5[Resource::<${logicalId(core, core.storage.rawBucket)}.Arn>/${RUN_ACCOUNT_MARKER_PATTERN}]`],
         ['CaseCollection/CaseAnnotation/TelemetryPolicy', 'AwsSolutions-IAM5[Resource::*]'],
         ['CaseCollection/CaseAnnotation/Function', 'AwsSolutions-L1'],
         ['CaseCollection/CaseAnnotationAccess', rawFinding],
+        ['CaseCollection/CaseAnnotationAccess', `AwsSolutions-IAM5[Resource::<${logicalId(core, core.storage.rawBucket)}.Arn>/${RUN_CASE_MARKER_PATTERN}]`],
         ['CaseCollection/CaseAnnotationAccess', `AwsSolutions-IAM5[Resource::<${logicalId(core, core.storage.rawBucket)}.Arn>/${TERMINAL_MARKER_PATTERN}]`],
       ].sort(),
     );

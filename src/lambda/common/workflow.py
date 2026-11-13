@@ -218,6 +218,11 @@ class OwnershipMarker:
             input=payload,
         )
 
+    @property
+    def case_ref(self) -> SummaryRef:
+        """The case reference the execution was (or will be) started with."""
+        return SummaryRef.parse(self.input["case"])
+
     def owns(self, ref: SummaryRef) -> bool:
         """True when the marker is for the same case as `ref`."""
         return (self.account_id, self.case_id, self.display_id) == (
@@ -229,12 +234,49 @@ class OwnershipMarker:
 
 def describe_status(sfn: SFNClient, arn: str) -> str | None:
     """Execution status, or `None` when the execution does not exist."""
+    described = describe_execution(sfn, arn)
+    return None if described is None else described.status
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionDescription:
+    """Status of an execution and the case attempt it was started for, when recognisable."""
+
+    status: str
+    case: SummaryRef | None
+    attempt: int | None
+
+
+def parse_execution_input(name: str, raw_input: object) -> tuple[SummaryRef, int] | None:
+    """The case reference and attempt of a CaseAnalysis input, if it matches execution `name`."""
+    if not isinstance(raw_input, str):
+        return None
     try:
-        return sfn.describe_execution(executionArn=arn)["status"]
+        document = json.loads(raw_input)
+        attempt = document["attempt"]["number"]
+        ref = SummaryRef.parse(document["case"])
+        expected = execution_input(ref, attempt)
+    except (ValueError, TypeError, KeyError, InvalidReferenceError):
+        return None
+    if document != expected or expected["attempt"]["executionName"] != name:
+        return None
+    return ref, attempt
+
+
+def describe_execution(sfn: SFNClient, arn: str) -> ExecutionDescription | None:
+    """Describe an execution; `None` when it does not exist. Input holds references only."""
+    try:
+        response = sfn.describe_execution(executionArn=arn)
     except ClientError as exc:
         if aws_error_code(exc) == "ExecutionDoesNotExist":
             return None
         raise
+    parsed = parse_execution_input(arn.rsplit(":", 1)[-1], response.get("input"))
+    return ExecutionDescription(
+        status=response["status"],
+        case=parsed[0] if parsed else None,
+        attempt=parsed[1] if parsed else None,
+    )
 
 
 def start_execution(

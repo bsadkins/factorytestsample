@@ -4,7 +4,9 @@ Consumes `{accountId, accountName, runId}` messages from the active-accounts que
 account it assumes `Support-Case-Analysis-Role-<uniqueId>`, pages through `DescribeCases` for the
 run's trailing calendar-month creation window, keeps resolved cases that have no processed record,
 writes their metadata to `account_number=<id>/case_number=<displayId>/data.json` in the raw bucket
-and queues one annotation reference per case.
+and queues one annotation reference per case. Finally it records the settled account, and the
+cases it queued, in the run marker `runs/<runId>/accounts/<accountId>.json` (see
+`common.run_markers`), which Run Completion uses to decide when the run has finished.
 
 A missing or untrusted role, `AccessDenied` and `SubscriptionRequiredException` are counted skips,
 not failures. Idempotency is keyed by account and run, so a skip only lasts for that run and the
@@ -33,6 +35,7 @@ from common.case_window import (
 from common.conversation import utc_timestamp
 from common.idempotency import idempotency_config
 from common.processed import case_record_key, get_existing_cases_batch, validate_display_id
+from common.run_markers import retrieved_account, skipped_account, write_account_marker
 from common.s3_json import write_json
 from common.sqs import InvalidMessageError, parse_message_body, send_messages
 from common.sqs_batch import RecordFailedError, process_sqs_batch, run_idempotent
@@ -190,6 +193,9 @@ def _retrieve_account(
         support = member.open(account_id, safe_session_name("case-retrieval", run_id))
         selection = select_cases(iter_cases(support, account_id, window), window)
     except SupportAccessSkippedError as exc:
+        write_account_marker(
+            aws.s3, settings.raw_bucket, skipped_account(run_id, account_id, exc.reason)
+        )
         return {**result, "skipped": exc.reason}
 
     candidates = [case["displayId"] for case in selection.admitted]
@@ -216,6 +222,13 @@ def _retrieve_account(
         )
         refs.append(ref)
     send_messages(aws.sqs, settings.annotation_queue_url, [ref.to_message() for ref in refs])
+    # Written last: the account counts as settled for run completion only once every case
+    # reference is queued.
+    write_account_marker(
+        aws.s3,
+        settings.raw_bucket,
+        retrieved_account(run_id, account_id, [ref.display_id for ref in refs]),
+    )
     return {
         **result,
         "skipped": None,

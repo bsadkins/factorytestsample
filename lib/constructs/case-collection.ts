@@ -15,6 +15,11 @@ import { PipelineFunction } from './pipeline-function';
 export const CASE_PARTITION_PATTERN = 'account_number=*';
 /** Terminal failure markers written by annotation; must match TERMINAL_MARKER_FILE in common/failures.py. */
 export const TERMINAL_MARKER_PATTERN = 'account_number=*/case_number=*/terminal-failure.json';
+/** Raw-bucket run markers; must match RUNS_PREFIX and the key helpers in common/run_markers.py. */
+export const RUN_MARKERS_PREFIX = 'runs/';
+export const RUN_ACCOUNT_MARKER_PATTERN = `${RUN_MARKERS_PREFIX}*/accounts/*`;
+export const RUN_CASE_MARKER_PATTERN = `${RUN_MARKERS_PREFIX}*/cases/*`;
+export const RUN_COMPLETION_PATTERN = `${RUN_MARKERS_PREFIX}*/completion.json`;
 /** One account per retrieval invocation, so a large account gets the whole function timeout. */
 export const CASE_RETRIEVAL_BATCH_SIZE = 1;
 export const CASE_ANNOTATION_BATCH_SIZE = 5;
@@ -114,8 +119,18 @@ export class CaseCollection extends Construct {
           actions: ['sqs:SendMessage'],
           resources: [props.annotationQueue.queueArn],
         }),
+        new PolicyStatement({
+          sid: 'RecordRunAccounts',
+          actions: ['s3:PutObject'],
+          resources: [rawBucket.arnForObjects(RUN_ACCOUNT_MARKER_PATTERN)],
+        }),
       ],
     });
+    acknowledgeNagFinding(
+      retrievalAccess,
+      `AwsSolutions-IAM5[Resource::<${logicalIdOf(rawBucket)}.Arn>/${RUN_ACCOUNT_MARKER_PATTERN}]`,
+      'Retrieval writes one run marker per settled account under runs/<runId>/accounts/; run and account IDs are discovered at run time and the markers hold identifiers only.',
+    );
     acknowledgeNagFinding(
       retrievalAccess,
       rawObjectsFinding,
@@ -164,8 +179,18 @@ export class CaseCollection extends Construct {
           resources: [rawBucket.bucketArn],
           conditions: { StringLike: { 's3:prefix': [TERMINAL_MARKER_PATTERN] } },
         }),
+        new PolicyStatement({
+          sid: 'RecordRunCases',
+          actions: ['s3:PutObject'],
+          resources: [rawBucket.arnForObjects(RUN_CASE_MARKER_PATTERN)],
+        }),
       ],
     });
+    acknowledgeNagFinding(
+      annotationAccess,
+      `AwsSolutions-IAM5[Resource::<${logicalIdOf(rawBucket)}.Arn>/${RUN_CASE_MARKER_PATTERN}]`,
+      'Annotation writes a run marker for each case whose work ends at annotation, under runs/<runId>/cases/; run, account and case IDs are discovered at run time.',
+    );
     acknowledgeNagFinding(
       annotationAccess,
       `AwsSolutions-IAM5[Resource::<${logicalIdOf(rawBucket)}.Arn>/${TERMINAL_MARKER_PATTERN}]`,

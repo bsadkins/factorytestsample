@@ -1335,6 +1335,39 @@ def sort_filter_rules(json_obj):
               "Sid": "KeepCleanupCursor",
             },
             {
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/failure-deliveries/*",
+                  ],
+                ],
+              },
+              "Sid": "TrackFailureDeliveries",
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesWorkflowFailures66009843",
+                  "Arn",
+                ],
+              },
+              "Sid": "SendFailureRecords",
+            },
+            {
               "Action": "s3:GetObject",
               "Effect": "Allow",
               "Resource": {
@@ -1414,6 +1447,9 @@ def sort_filter_rules(json_obj):
           "Variables": {
             "CASE_INSIGHTS_UNIQUE_ID": "scidev",
             "CLEANUP_GRACE_HOURS": "24",
+            "FAILURE_QUEUE_URL": {
+              "Ref": "QueuesWorkflowFailures66009843",
+            },
             "POWERTOOLS_LOGGER_LOG_EVENT": "false",
             "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
             "POWERTOOLS_LOG_LEVEL": "INFO",
@@ -1694,6 +1730,39 @@ def sort_filter_rules(json_obj):
               },
               "Sid": "SendFailureRecords",
             },
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/failure-deliveries/*",
+                  ],
+                ],
+              },
+              "Sid": "TrackFailureDeliveries",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageRawBucketBBD9BDC5",
+                  "Arn",
+                ],
+              },
+              "Sid": "ListCaseBuckets",
+            },
           ],
           "Version": "2012-10-17",
         },
@@ -1733,6 +1802,9 @@ def sort_filter_rules(json_obj):
             "POWERTOOLS_SERVICE_NAME": "handle-failure",
             "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
             "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
           },
         },
         "FunctionName": "Lambda-HandleFailure-scidev",
@@ -2419,6 +2491,47 @@ def sort_filter_rules(json_obj):
               "Sid": "ClaimCaseOwnership",
             },
             {
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/failure-deliveries/*",
+                  ],
+                ],
+              },
+              "Sid": "TrackFailureDeliveries",
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/runs/*/cases/*",
+                  ],
+                ],
+              },
+              "Sid": "RecordRunCases",
+            },
+            {
               "Action": "s3:GetObject",
               "Effect": "Allow",
               "Resource": {
@@ -2853,6 +2966,25 @@ def sort_filter_rules(json_obj):
               },
               "Sid": "FindTerminalMarkers",
             },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/runs/*/cases/*",
+                  ],
+                ],
+              },
+              "Sid": "RecordRunCases",
+            },
           ],
           "Version": "2012-10-17",
         },
@@ -3118,6 +3250,25 @@ def sort_filter_rules(json_obj):
                 ],
               },
               "Sid": "SendAnnotationReferences",
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/runs/*/accounts/*",
+                  ],
+                ],
+              },
+              "Sid": "RecordRunAccounts",
             },
           ],
           "Version": "2012-10-17",
@@ -3554,6 +3705,1950 @@ def sort_filter_rules(json_obj):
         ],
       },
       "Type": "AWS::IAM::Policy",
+    },
+    "ObservabilityAlarmTopicF724909D": {
+      "Properties": {
+        "DisplayName": "Support Case Insights alarms (scidev)",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "TopicName": "CaseInsights-Alarms-scidev",
+      },
+      "Type": "AWS::SNS::Topic",
+    },
+    "ObservabilityAlarmTopicPolicyA9C4040E": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sns:Publish",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false",
+                },
+              },
+              "Effect": "Deny",
+              "Principal": "*",
+              "Resource": {
+                "Ref": "ObservabilityAlarmTopicF724909D",
+              },
+              "Sid": "AllowPublishThroughSSLOnly",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Topics": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+      },
+      "Type": "AWS::SNS::TopicPolicy",
+    },
+    "ObservabilityCleanupErrorsAlarm5006E90F": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Case Cleanup could not evaluate or reset some cases; they are retried on the next daily run. Runbook: docs/runbook.md#cleanuperrors",
+        "AlarmName": "CaseInsights-scidev-CleanupErrors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "service",
+            "Value": "case-cleanup",
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "CleanupErrors",
+        "Namespace": "SupportCaseInsights",
+        "Period": 3600,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityDashboard9A1D08B3": {
+      "Properties": {
+        "DashboardBody": {
+          "Fn::Join": [
+            "",
+            [
+              "{"start":"-P7D","widgets":[{"type":"text","width":24,"height":2,"x":0,"y":0,"properties":{"markdown":"# Support Case Insights (scidev)\\nCounts only; no account or case content is published. Alarm runbook: docs/runbook.md.","background":"transparent"}},{"type":"metric","width":8,"height":4,"x":0,"y":2,"properties":{"view":"singleValue","title":"Daily runs completed (heartbeat)","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","DailyRunCompleted","service","run-completion",{"label":"Runs completed","period":86400,"stat":"Sum"}]]}},{"type":"metric","width":8,"height":4,"x":8,"y":2,"properties":{"view":"singleValue","title":"Workflow success rate","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[[{"label":"Workflow success rate (%)","expression":"100 * succeeded / (succeeded + FILL(failed, 0) + FILL(timedOut, 0) + FILL(aborted, 0))"}],["AWS/States","ExecutionsSucceeded","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Succeeded","id":"succeeded","visible":false,"stat":"Sum"}],["AWS/States","ExecutionsFailed","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Failed","id":"failed","visible":false,"stat":"Sum"}],["AWS/States","ExecutionsTimedOut","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Timed out","id":"timedOut","visible":false,"stat":"Sum"}],["AWS/States","ExecutionsAborted","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Aborted","id":"aborted","visible":false,"stat":"Sum"}]]}},{"type":"alarm","width":8,"height":4,"x":16,"y":2,"properties":{"title":"Alarms","alarms":["",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsAccountLookupAlarm8047FF94",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsAccountReaderAlarm3DE2995F",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsCaseRetrievalAlarm73A2574C",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsCaseAnnotationAlarm1E761ADC",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsWorkflowStarterAlarmC1D50BE6",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsAnalysisStagesAlarmFBAFAC57",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsUpdateCaseMetadataAlarmB84C0603",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsHandleFailureAlarmB701E5B3",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsCaseCleanupAlarm5F16AF66",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsRunCompletionAlarmBC607BF5",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityWorkflowExecutionsFailedAlarm992955DE",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityWorkflowExecutionsTimedOutAlarmC142CD0B",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityWorkflowExecutionsAbortedAlarm1C500407",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityQueueMessagesActiveAccountsDLQAlarm50740C2C",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityQueueMessagesAnnotationDLQAlarmEC27469E",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityQueueMessagesSummaryDLQAlarm8B7C54A6",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityQueueMessagesWorkflowFailuresAlarm170679B8",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityQueueMessagesAccountDiscoveryFailuresAlarm34B2E65A",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityWorkflowFailuresRecordedAlarmE62357BA",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityFailureDeliveryErrorsAlarm7858FC1E",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityCleanupErrorsAlarm5006E90F",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityRunCompletionErrorsAlarm059937D3",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityMissingDailyRunCompletionAlarm4F2C5B25",
+                  "Arn",
+                ],
+              },
+              ""]}},{"type":"metric","width":12,"height":6,"x":0,"y":6,"properties":{"view":"timeSeries","title":"Accounts discovered and skipped","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","AccountsDiscovered","service","account-lookup",{"stat":"Sum"}],["SupportCaseInsights","AccountsExcludedInactive","service","account-lookup",{"stat":"Sum"}],["SupportCaseInsights","AccountsExcludedManagement","service","account-lookup",{"stat":"Sum"}],["SupportCaseInsights","AccountsProcessed","service","case-retrieval",{"stat":"Sum"}],["SupportCaseInsights","AccountsSkipped","service","case-retrieval",{"stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":12,"height":6,"x":12,"y":6,"properties":{"view":"timeSeries","title":"Cases retrieved, processed and failed","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","CasesRetrieved","service","case-retrieval",{"stat":"Sum"}],["SupportCaseInsights","CasesAnnotated","service","case-annotation",{"stat":"Sum"}],["SupportCaseInsights","CasesProcessed","service","update-case-metadata",{"stat":"Sum"}],["SupportCaseInsights","WorkflowFailuresRecorded","service","handle-failure",{"stat":"Sum"}],["SupportCaseInsights","OversizedConversations","service","case-annotation",{"stat":"Sum"}],["SupportCaseInsights","CaseRetrievalFailures","service","case-retrieval",{"stat":"Sum"}],["SupportCaseInsights","CaseAnnotationFailures","service","case-annotation",{"stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":8,"height":6,"x":0,"y":12,"properties":{"view":"timeSeries","title":"Bedrock latency (ms)","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","BedrockLatency","service","case-analysis-stages",{"label":"Average"}],["SupportCaseInsights","BedrockLatency","service","case-analysis-stages",{"label":"p90","stat":"p90"}]],"yAxis":{}}},{"type":"metric","width":8,"height":6,"x":8,"y":12,"properties":{"view":"timeSeries","title":"Bedrock tokens","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","BedrockInputTokens","service","case-analysis-stages",{"stat":"Sum"}],["SupportCaseInsights","BedrockOutputTokens","service","case-analysis-stages",{"stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":8,"height":6,"x":16,"y":12,"properties":{"view":"timeSeries","title":"Bedrock throttles and failures","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","BedrockThrottles","service","case-analysis-stages",{"stat":"Sum"}],["SupportCaseInsights","BedrockInvocationFailures","service","case-analysis-stages",{"stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":12,"height":6,"x":0,"y":18,"properties":{"view":"timeSeries","title":"CaseAnalysis executions","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["AWS/States","ExecutionsStarted","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Started","stat":"Sum"}],["AWS/States","ExecutionsSucceeded","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Succeeded","stat":"Sum"}],["AWS/States","ExecutionsFailed","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Failed","stat":"Sum"}],["AWS/States","ExecutionsTimedOut","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Timed out","stat":"Sum"}],["AWS/States","ExecutionsAborted","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Aborted","stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":12,"height":6,"x":12,"y":18,"properties":{"view":"timeSeries","title":"Dead-letter and terminal queue depth","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","",
+              {
+                "Fn::GetAtt": [
+                  "QueuesActiveAccountsDeadLetterQueueE5038B58",
+                  "QueueName",
+                ],
+              },
+              "",{"label":"ActiveAccountsDLQ","stat":"Maximum"}],["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","",
+              {
+                "Fn::GetAtt": [
+                  "QueuesAnnotationDeadLetterQueue2F32F96A",
+                  "QueueName",
+                ],
+              },
+              "",{"label":"AnnotationDLQ","stat":"Maximum"}],["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","",
+              {
+                "Fn::GetAtt": [
+                  "QueuesSummaryDeadLetterQueueE4B9BAD4",
+                  "QueueName",
+                ],
+              },
+              "",{"label":"SummaryDLQ","stat":"Maximum"}],["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","",
+              {
+                "Fn::GetAtt": [
+                  "QueuesWorkflowFailures66009843",
+                  "QueueName",
+                ],
+              },
+              "",{"label":"WorkflowFailures","stat":"Maximum"}],["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","",
+              {
+                "Fn::GetAtt": [
+                  "QueuesAccountDiscoveryFailuresF86CAD1E",
+                  "QueueName",
+                ],
+              },
+              "",{"label":"AccountDiscoveryFailures","stat":"Maximum"}]],"yAxis":{}}},{"type":"metric","width":12,"height":6,"x":0,"y":24,"properties":{"view":"timeSeries","title":"Run completion","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","DailyRunCompleted","service","run-completion",{"period":3600,"stat":"Sum"}],["SupportCaseInsights","RunsIncomplete","service","run-completion",{"period":3600,"stat":"Maximum"}],["SupportCaseInsights","RunCasesPending","service","run-completion",{"period":3600,"stat":"Maximum"}],["SupportCaseInsights","RunCompletionErrors","service","run-completion",{"period":3600,"stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":12,"height":6,"x":12,"y":24,"properties":{"view":"timeSeries","title":"Cleanup and failure-record reconciliation","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","CleanupCasesReset","service","case-cleanup",{"period":3600,"stat":"Sum"}],["SupportCaseInsights","CleanupErrors","service","case-cleanup",{"period":3600,"stat":"Sum"}],["SupportCaseInsights","FailureDeliveriesSent","service","case-cleanup",{"label":"Cleanup deliveries","period":3600,"stat":"Sum"}],["SupportCaseInsights","FailureDeliveriesSent","service","run-completion",{"label":"Run completion deliveries","period":3600,"stat":"Sum"}],["SupportCaseInsights","FailureDeliveriesPreserved","service","workflow-starter",{"label":"Starter preserved","period":3600,"stat":"Sum"}],["SupportCaseInsights","WorkflowFailureDeliveryErrors","service","handle-failure",{"period":3600,"stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":24,"height":6,"x":0,"y":30,"properties":{"view":"timeSeries","title":"Lambda errors","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "AccountDiscoveryAccountLookupFunction47FCAEB9",
+              },
+              "",{"label":"AccountLookup","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "AccountDiscoveryAccountReaderFunction53FD32DE",
+              },
+              "",{"label":"AccountReader","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseCollectionCaseRetrievalFunctionB07B13A0",
+              },
+              "",{"label":"CaseRetrieval","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseCollectionCaseAnnotationFunctionD1470FE3",
+              },
+              "",{"label":"CaseAnnotation","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseAnalysisWorkflowStarterFunctionF4E48A10",
+              },
+              "",{"label":"WorkflowStarter","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseAnalysisAnalysisStagesFunction213D3717",
+              },
+              "",{"label":"AnalysisStages","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseAnalysisUpdateCaseMetadataFunctionCC559D57",
+              },
+              "",{"label":"UpdateCaseMetadata","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseAnalysisHandleFailureFunctionF8DDFFC4",
+              },
+              "",{"label":"HandleFailure","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseAnalysisCaseCleanupFunction86AD786C",
+              },
+              "",{"label":"CaseCleanup","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "ObservabilityRunCompletionFunctionA18ADCE8",
+              },
+              "",{"label":"RunCompletion","stat":"Sum"}]],"yAxis":{}}}]}",
+            ],
+          ],
+        },
+        "DashboardName": "CaseInsights-scidev",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::CloudWatch::Dashboard",
+    },
+    "ObservabilityFailureDeliveryErrorsAlarm7858FC1E": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "A failure record could not be written to the workflow failure queue; a pending marker or workflow retry keeps the evidence. Runbook: docs/runbook.md#failuredeliveryerrors",
+        "AlarmName": "CaseInsights-scidev-FailureDeliveryErrors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "EvaluationPeriods": 1,
+        "Metrics": [
+          {
+            "Expression": "SUM([FILL(handler, 0), FILL(cleanup, 0), FILL(completion, 0)])",
+            "Id": "expr_1",
+            "Label": "Failure delivery errors",
+            "ReturnData": true,
+          },
+          {
+            "Id": "handler",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "handle-failure",
+                  },
+                ],
+                "MetricName": "WorkflowFailureDeliveryErrors",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 3600,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+          {
+            "Id": "cleanup",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "case-cleanup",
+                  },
+                ],
+                "MetricName": "FailureDeliveryErrors",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 3600,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+          {
+            "Id": "completion",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "run-completion",
+                  },
+                ],
+                "MetricName": "FailureDeliveryErrors",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 3600,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsAccountLookupAlarm8047FF94": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The AccountLookup function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-accountlookup",
+        "AlarmName": "CaseInsights-scidev-LambdaErrors-AccountLookup",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "AccountDiscoveryAccountLookupFunction47FCAEB9",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsAccountReaderAlarm3DE2995F": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The AccountReader function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-accountreader",
+        "AlarmName": "CaseInsights-scidev-LambdaErrors-AccountReader",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "AccountDiscoveryAccountReaderFunction53FD32DE",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsAnalysisStagesAlarmFBAFAC57": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The AnalysisStages function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-analysisstages",
+        "AlarmName": "CaseInsights-scidev-LambdaErrors-AnalysisStages",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseAnalysisAnalysisStagesFunction213D3717",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsCaseAnnotationAlarm1E761ADC": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The CaseAnnotation function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-caseannotation",
+        "AlarmName": "CaseInsights-scidev-LambdaErrors-CaseAnnotation",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseCollectionCaseAnnotationFunctionD1470FE3",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsCaseCleanupAlarm5F16AF66": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The CaseCleanup function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-casecleanup",
+        "AlarmName": "CaseInsights-scidev-LambdaErrors-CaseCleanup",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseAnalysisCaseCleanupFunction86AD786C",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsCaseRetrievalAlarm73A2574C": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The CaseRetrieval function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-caseretrieval",
+        "AlarmName": "CaseInsights-scidev-LambdaErrors-CaseRetrieval",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseCollectionCaseRetrievalFunctionB07B13A0",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsHandleFailureAlarmB701E5B3": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The HandleFailure function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-handlefailure",
+        "AlarmName": "CaseInsights-scidev-LambdaErrors-HandleFailure",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseAnalysisHandleFailureFunctionF8DDFFC4",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsRunCompletionAlarmBC607BF5": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The RunCompletion function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-runcompletion",
+        "AlarmName": "CaseInsights-scidev-LambdaErrors-RunCompletion",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "ObservabilityRunCompletionFunctionA18ADCE8",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsUpdateCaseMetadataAlarmB84C0603": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The UpdateCaseMetadata function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-updatecasemetadata",
+        "AlarmName": "CaseInsights-scidev-LambdaErrors-UpdateCaseMetadata",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseAnalysisUpdateCaseMetadataFunctionCC559D57",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsWorkflowStarterAlarmC1D50BE6": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The WorkflowStarter function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-workflowstarter",
+        "AlarmName": "CaseInsights-scidev-LambdaErrors-WorkflowStarter",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseAnalysisWorkflowStarterFunctionF4E48A10",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityMissingDailyRunCompletionAlarm4F2C5B25": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "No daily run completed in the last 30 hours: discovery, retrieval, analysis or completion reconciliation is stuck or failing. Runbook: docs/runbook.md#missingdailyruncompletion",
+        "AlarmName": "CaseInsights-scidev-MissingDailyRunCompletion",
+        "ComparisonOperator": "LessThanThreshold",
+        "DatapointsToAlarm": 30,
+        "Dimensions": [
+          {
+            "Name": "service",
+            "Value": "run-completion",
+          },
+        ],
+        "EvaluationPeriods": 30,
+        "MetricName": "DailyRunCompleted",
+        "Namespace": "SupportCaseInsights",
+        "Period": 3600,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "breaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityQueueMessagesAccountDiscoveryFailuresAlarm34B2E65A": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Messages are waiting in AccountDiscoveryFailures; they need investigation and an explicit redrive. Runbook: docs/runbook.md#queuemessages-accountdiscoveryfailures",
+        "AlarmName": "CaseInsights-scidev-QueueMessages-AccountDiscoveryFailures",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "QueuesAccountDiscoveryFailuresF86CAD1E",
+                "QueueName",
+              ],
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityQueueMessagesActiveAccountsDLQAlarm50740C2C": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Messages are waiting in ActiveAccountsDLQ; they need investigation and an explicit redrive. Runbook: docs/runbook.md#queuemessages-activeaccountsdlq",
+        "AlarmName": "CaseInsights-scidev-QueueMessages-ActiveAccountsDLQ",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "QueuesActiveAccountsDeadLetterQueueE5038B58",
+                "QueueName",
+              ],
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityQueueMessagesAnnotationDLQAlarmEC27469E": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Messages are waiting in AnnotationDLQ; they need investigation and an explicit redrive. Runbook: docs/runbook.md#queuemessages-annotationdlq",
+        "AlarmName": "CaseInsights-scidev-QueueMessages-AnnotationDLQ",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "QueuesAnnotationDeadLetterQueue2F32F96A",
+                "QueueName",
+              ],
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityQueueMessagesSummaryDLQAlarm8B7C54A6": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Messages are waiting in SummaryDLQ; they need investigation and an explicit redrive. Runbook: docs/runbook.md#queuemessages-summarydlq",
+        "AlarmName": "CaseInsights-scidev-QueueMessages-SummaryDLQ",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "QueuesSummaryDeadLetterQueueE4B9BAD4",
+                "QueueName",
+              ],
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityQueueMessagesWorkflowFailuresAlarm170679B8": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Messages are waiting in WorkflowFailures; they need investigation and an explicit redrive. Runbook: docs/runbook.md#queuemessages-workflowfailures",
+        "AlarmName": "CaseInsights-scidev-QueueMessages-WorkflowFailures",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "QueuesWorkflowFailures66009843",
+                "QueueName",
+              ],
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityRunCompletionAccess9BBEDA54": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:ListBucket",
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "account-lists/*",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageAccountListBucketDB72317C",
+                  "Arn",
+                ],
+              },
+              "Sid": "ListAccountLists",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageAccountListBucketDB72317C",
+                        "Arn",
+                      ],
+                    },
+                    "/account-lists/*",
+                  ],
+                ],
+              },
+              "Sid": "ReadAccountLists",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageRawBucketBBD9BDC5",
+                  "Arn",
+                ],
+              },
+              "Sid": "ListRawBucket",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/runs/*",
+                  ],
+                ],
+              },
+              "Sid": "ReadRunMarkers",
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/runs/*/completion.json",
+                  ],
+                ],
+              },
+              "Sid": "RecordRunCompletion",
+            },
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/failure-deliveries/*",
+                  ],
+                ],
+              },
+              "Sid": "TrackFailureDeliveries",
+            },
+            {
+              "Action": "states:DescribeExecution",
+              "Effect": "Allow",
+              "Resource": "arn:aws:states:us-east-1:111111111111:execution:CaseAnalysis-scidev:*",
+              "Sid": "DescribeCaseAnalysis",
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesWorkflowFailures66009843",
+                  "Arn",
+                ],
+              },
+              "Sid": "SendFailureRecords",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ObservabilityRunCompletionAccess9BBEDA54",
+        "Roles": [
+          {
+            "Ref": "ObservabilityRunCompletionRoleD787B2A4",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ObservabilityRunCompletionErrorsAlarm059937D3": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Run Completion could not reconcile some run markers or executions for three consecutive hours. Runbook: docs/runbook.md#runcompletionerrors",
+        "AlarmName": "CaseInsights-scidev-RunCompletionErrors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 3,
+        "Dimensions": [
+          {
+            "Name": "service",
+            "Value": "run-completion",
+          },
+        ],
+        "EvaluationPeriods": 3,
+        "MetricName": "RunCompletionErrors",
+        "Namespace": "SupportCaseInsights",
+        "Period": 3600,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityRunCompletionFunctionA18ADCE8": {
+      "DependsOn": [
+        "ObservabilityRunCompletionRoleD787B2A4",
+        "ObservabilityRunCompletionTelemetryPolicyCB8E5DAC",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Emits the daily heartbeat once a run's accounts and cases are terminal (scidev)",
+        "Environment": {
+          "Variables": {
+            "ACCOUNT_LIST_BUCKET": {
+              "Ref": "StorageAccountListBucketDB72317C",
+            },
+            "CASE_INSIGHTS_UNIQUE_ID": "scidev",
+            "FAILURE_QUEUE_URL": {
+              "Ref": "QueuesWorkflowFailures66009843",
+            },
+            "MANAGEMENT_ACCOUNT_ID": "111111111111",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "run-completion",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+            "RUN_LOOKBACK_HOURS": "72",
+            "STATE_MACHINE_ARN": {
+              "Ref": "CaseAnalysisStateMachine234D35AF",
+            },
+          },
+        },
+        "FunctionName": "Lambda-RunCompletion-scidev",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ObservabilityRunCompletionLogGroup7B5871A4",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "ObservabilityRunCompletionRoleD787B2A4",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "ObservabilityRunCompletionLogGroup7B5871A4": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-RunCompletion-scidev",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "ObservabilityRunCompletionRoleD787B2A4": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-RunCompletion-scidev",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "ObservabilityRunCompletionScheduleA383E86A": {
+      "Properties": {
+        "Description": "Hourly Support Case Insights run completion check (scidev)",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF",
+        },
+        "Name": "CaseInsights-RunCompletion-scidev",
+        "ScheduleExpression": "rate(1 hour)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "ObservabilityRunCompletionFunctionA18ADCE8",
+              "Arn",
+            ],
+          },
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 1800,
+            "MaximumRetryAttempts": 2,
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "ObservabilityRunCompletionScheduleRoleFD4ECC1A",
+              "Arn",
+            ],
+          },
+        },
+      },
+      "Type": "AWS::Scheduler::Schedule",
+    },
+    "ObservabilityRunCompletionScheduleRoleDefaultPolicyBF237ACD": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ObservabilityRunCompletionFunctionA18ADCE8",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ObservabilityRunCompletionFunctionA18ADCE8",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+              ],
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ObservabilityRunCompletionScheduleRoleDefaultPolicyBF237ACD",
+        "Roles": [
+          {
+            "Ref": "ObservabilityRunCompletionScheduleRoleFD4ECC1A",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ObservabilityRunCompletionScheduleRoleFD4ECC1A": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule/default/CaseInsights-RunCompletion-scidev",
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "111111111111",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "EventBridge Scheduler role that invokes Lambda-RunCompletion-scidev",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "ObservabilityRunCompletionTelemetryPolicyCB8E5DAC": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ObservabilityRunCompletionLogGroup7B5871A4",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ObservabilityRunCompletionTelemetryPolicyCB8E5DAC",
+        "Roles": [
+          {
+            "Ref": "ObservabilityRunCompletionRoleD787B2A4",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ObservabilityWorkflowExecutionsAbortedAlarm1C500407": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "CaseAnalysis executions were stopped; reconciliation records their failures. Runbook: docs/runbook.md#workflowexecutionsaborted",
+        "AlarmName": "CaseInsights-scidev-WorkflowExecutionsAborted",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "StateMachineArn",
+            "Value": {
+              "Ref": "CaseAnalysisStateMachine234D35AF",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ExecutionsAborted",
+        "Namespace": "AWS/States",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityWorkflowExecutionsFailedAlarm992955DE": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "CaseAnalysis executions failed after task retries; each should have a failure record on the workflow failure queue. Runbook: docs/runbook.md#workflowexecutionsfailed",
+        "AlarmName": "CaseInsights-scidev-WorkflowExecutionsFailed",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "StateMachineArn",
+            "Value": {
+              "Ref": "CaseAnalysisStateMachine234D35AF",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ExecutionsFailed",
+        "Namespace": "AWS/States",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityWorkflowExecutionsTimedOutAlarmC142CD0B": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "CaseAnalysis executions hit the workflow timeout, which bypasses task error handling; reconciliation records their failures. Runbook: docs/runbook.md#workflowexecutionstimedout",
+        "AlarmName": "CaseInsights-scidev-WorkflowExecutionsTimedOut",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "StateMachineArn",
+            "Value": {
+              "Ref": "CaseAnalysisStateMachine234D35AF",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ExecutionsTimedOut",
+        "Namespace": "AWS/States",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityWorkflowFailuresRecordedAlarmE62357BA": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Failure records were written to the workflow failure queue: exhausted or closed CaseAnalysis attempts, or conversations too large to summarise. Runbook: docs/runbook.md#workflowfailuresrecorded",
+        "AlarmName": "CaseInsights-scidev-WorkflowFailuresRecorded",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "EvaluationPeriods": 1,
+        "Metrics": [
+          {
+            "Expression": "SUM([FILL(handled, 0), FILL(oversized, 0), FILL(cleanup, 0), FILL(completion, 0)])",
+            "Id": "expr_1",
+            "Label": "Failure records",
+            "ReturnData": true,
+          },
+          {
+            "Id": "handled",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "handle-failure",
+                  },
+                ],
+                "MetricName": "WorkflowFailuresRecorded",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 300,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+          {
+            "Id": "oversized",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "case-annotation",
+                  },
+                ],
+                "MetricName": "OversizedConversations",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 300,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+          {
+            "Id": "cleanup",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "case-cleanup",
+                  },
+                ],
+                "MetricName": "FailureDeliveriesSent",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 300,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+          {
+            "Id": "completion",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "run-completion",
+                  },
+                ],
+                "MetricName": "FailureDeliveriesSent",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 300,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
     },
     "QueuesAccountDiscoveryFailuresF86CAD1E": {
       "DeletionPolicy": "Delete",
@@ -6530,6 +8625,39 @@ def sort_filter_rules(json_obj):
               "Sid": "KeepCleanupCursor",
             },
             {
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/failure-deliveries/*",
+                  ],
+                ],
+              },
+              "Sid": "TrackFailureDeliveries",
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesWorkflowFailures66009843",
+                  "Arn",
+                ],
+              },
+              "Sid": "SendFailureRecords",
+            },
+            {
               "Action": "s3:GetObject",
               "Effect": "Allow",
               "Resource": {
@@ -6609,6 +8737,9 @@ def sort_filter_rules(json_obj):
           "Variables": {
             "CASE_INSIGHTS_UNIQUE_ID": "sciprod",
             "CLEANUP_GRACE_HOURS": "24",
+            "FAILURE_QUEUE_URL": {
+              "Ref": "QueuesWorkflowFailures66009843",
+            },
             "POWERTOOLS_LOGGER_LOG_EVENT": "false",
             "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
             "POWERTOOLS_LOG_LEVEL": "INFO",
@@ -6889,6 +9020,39 @@ def sort_filter_rules(json_obj):
               },
               "Sid": "SendFailureRecords",
             },
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/failure-deliveries/*",
+                  ],
+                ],
+              },
+              "Sid": "TrackFailureDeliveries",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageRawBucketBBD9BDC5",
+                  "Arn",
+                ],
+              },
+              "Sid": "ListCaseBuckets",
+            },
           ],
           "Version": "2012-10-17",
         },
@@ -6928,6 +9092,9 @@ def sort_filter_rules(json_obj):
             "POWERTOOLS_SERVICE_NAME": "handle-failure",
             "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
             "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
           },
         },
         "FunctionName": "Lambda-HandleFailure-sciprod",
@@ -7614,6 +9781,47 @@ def sort_filter_rules(json_obj):
               "Sid": "ClaimCaseOwnership",
             },
             {
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/failure-deliveries/*",
+                  ],
+                ],
+              },
+              "Sid": "TrackFailureDeliveries",
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/runs/*/cases/*",
+                  ],
+                ],
+              },
+              "Sid": "RecordRunCases",
+            },
+            {
               "Action": "s3:GetObject",
               "Effect": "Allow",
               "Resource": {
@@ -8048,6 +10256,25 @@ def sort_filter_rules(json_obj):
               },
               "Sid": "FindTerminalMarkers",
             },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/runs/*/cases/*",
+                  ],
+                ],
+              },
+              "Sid": "RecordRunCases",
+            },
           ],
           "Version": "2012-10-17",
         },
@@ -8313,6 +10540,25 @@ def sort_filter_rules(json_obj):
                 ],
               },
               "Sid": "SendAnnotationReferences",
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/runs/*/accounts/*",
+                  ],
+                ],
+              },
+              "Sid": "RecordRunAccounts",
             },
           ],
           "Version": "2012-10-17",
@@ -8693,6 +10939,1960 @@ def sort_filter_rules(json_obj):
         ],
       },
       "Type": "AWS::IAM::Policy",
+    },
+    "ObservabilityAlarmTopicF724909D": {
+      "Properties": {
+        "DisplayName": "Support Case Insights alarms (sciprod)",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "TopicName": "CaseInsights-Alarms-sciprod",
+      },
+      "Type": "AWS::SNS::Topic",
+    },
+    "ObservabilityAlarmTopicPolicyA9C4040E": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sns:Publish",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false",
+                },
+              },
+              "Effect": "Deny",
+              "Principal": "*",
+              "Resource": {
+                "Ref": "ObservabilityAlarmTopicF724909D",
+              },
+              "Sid": "AllowPublishThroughSSLOnly",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Topics": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+      },
+      "Type": "AWS::SNS::TopicPolicy",
+    },
+    "ObservabilityAlarmTopiccaseinsightsalertsexamplecom779F055D": {
+      "Properties": {
+        "Endpoint": "case-insights-alerts@example.com",
+        "Protocol": "email",
+        "TopicArn": {
+          "Ref": "ObservabilityAlarmTopicF724909D",
+        },
+      },
+      "Type": "AWS::SNS::Subscription",
+    },
+    "ObservabilityCleanupErrorsAlarm5006E90F": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Case Cleanup could not evaluate or reset some cases; they are retried on the next daily run. Runbook: docs/runbook.md#cleanuperrors",
+        "AlarmName": "CaseInsights-sciprod-CleanupErrors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "service",
+            "Value": "case-cleanup",
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "CleanupErrors",
+        "Namespace": "SupportCaseInsights",
+        "Period": 3600,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityDashboard9A1D08B3": {
+      "Properties": {
+        "DashboardBody": {
+          "Fn::Join": [
+            "",
+            [
+              "{"start":"-P7D","widgets":[{"type":"text","width":24,"height":2,"x":0,"y":0,"properties":{"markdown":"# Support Case Insights (sciprod)\\nCounts only; no account or case content is published. Alarm runbook: docs/runbook.md.","background":"transparent"}},{"type":"metric","width":8,"height":4,"x":0,"y":2,"properties":{"view":"singleValue","title":"Daily runs completed (heartbeat)","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","DailyRunCompleted","service","run-completion",{"label":"Runs completed","period":86400,"stat":"Sum"}]]}},{"type":"metric","width":8,"height":4,"x":8,"y":2,"properties":{"view":"singleValue","title":"Workflow success rate","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[[{"label":"Workflow success rate (%)","expression":"100 * succeeded / (succeeded + FILL(failed, 0) + FILL(timedOut, 0) + FILL(aborted, 0))"}],["AWS/States","ExecutionsSucceeded","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Succeeded","id":"succeeded","visible":false,"stat":"Sum"}],["AWS/States","ExecutionsFailed","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Failed","id":"failed","visible":false,"stat":"Sum"}],["AWS/States","ExecutionsTimedOut","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Timed out","id":"timedOut","visible":false,"stat":"Sum"}],["AWS/States","ExecutionsAborted","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Aborted","id":"aborted","visible":false,"stat":"Sum"}]]}},{"type":"alarm","width":8,"height":4,"x":16,"y":2,"properties":{"title":"Alarms","alarms":["",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsAccountLookupAlarm8047FF94",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsAccountReaderAlarm3DE2995F",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsCaseRetrievalAlarm73A2574C",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsCaseAnnotationAlarm1E761ADC",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsWorkflowStarterAlarmC1D50BE6",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsAnalysisStagesAlarmFBAFAC57",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsUpdateCaseMetadataAlarmB84C0603",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsHandleFailureAlarmB701E5B3",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsCaseCleanupAlarm5F16AF66",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsRunCompletionAlarmBC607BF5",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityWorkflowExecutionsFailedAlarm992955DE",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityWorkflowExecutionsTimedOutAlarmC142CD0B",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityWorkflowExecutionsAbortedAlarm1C500407",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityQueueMessagesActiveAccountsDLQAlarm50740C2C",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityQueueMessagesAnnotationDLQAlarmEC27469E",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityQueueMessagesSummaryDLQAlarm8B7C54A6",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityQueueMessagesWorkflowFailuresAlarm170679B8",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityQueueMessagesAccountDiscoveryFailuresAlarm34B2E65A",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityWorkflowFailuresRecordedAlarmE62357BA",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityFailureDeliveryErrorsAlarm7858FC1E",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityCleanupErrorsAlarm5006E90F",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityRunCompletionErrorsAlarm059937D3",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityMissingDailyRunCompletionAlarm4F2C5B25",
+                  "Arn",
+                ],
+              },
+              ""]}},{"type":"metric","width":12,"height":6,"x":0,"y":6,"properties":{"view":"timeSeries","title":"Accounts discovered and skipped","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","AccountsDiscovered","service","account-lookup",{"stat":"Sum"}],["SupportCaseInsights","AccountsExcludedInactive","service","account-lookup",{"stat":"Sum"}],["SupportCaseInsights","AccountsExcludedManagement","service","account-lookup",{"stat":"Sum"}],["SupportCaseInsights","AccountsProcessed","service","case-retrieval",{"stat":"Sum"}],["SupportCaseInsights","AccountsSkipped","service","case-retrieval",{"stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":12,"height":6,"x":12,"y":6,"properties":{"view":"timeSeries","title":"Cases retrieved, processed and failed","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","CasesRetrieved","service","case-retrieval",{"stat":"Sum"}],["SupportCaseInsights","CasesAnnotated","service","case-annotation",{"stat":"Sum"}],["SupportCaseInsights","CasesProcessed","service","update-case-metadata",{"stat":"Sum"}],["SupportCaseInsights","WorkflowFailuresRecorded","service","handle-failure",{"stat":"Sum"}],["SupportCaseInsights","OversizedConversations","service","case-annotation",{"stat":"Sum"}],["SupportCaseInsights","CaseRetrievalFailures","service","case-retrieval",{"stat":"Sum"}],["SupportCaseInsights","CaseAnnotationFailures","service","case-annotation",{"stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":8,"height":6,"x":0,"y":12,"properties":{"view":"timeSeries","title":"Bedrock latency (ms)","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","BedrockLatency","service","case-analysis-stages",{"label":"Average"}],["SupportCaseInsights","BedrockLatency","service","case-analysis-stages",{"label":"p90","stat":"p90"}]],"yAxis":{}}},{"type":"metric","width":8,"height":6,"x":8,"y":12,"properties":{"view":"timeSeries","title":"Bedrock tokens","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","BedrockInputTokens","service","case-analysis-stages",{"stat":"Sum"}],["SupportCaseInsights","BedrockOutputTokens","service","case-analysis-stages",{"stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":8,"height":6,"x":16,"y":12,"properties":{"view":"timeSeries","title":"Bedrock throttles and failures","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","BedrockThrottles","service","case-analysis-stages",{"stat":"Sum"}],["SupportCaseInsights","BedrockInvocationFailures","service","case-analysis-stages",{"stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":12,"height":6,"x":0,"y":18,"properties":{"view":"timeSeries","title":"CaseAnalysis executions","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["AWS/States","ExecutionsStarted","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Started","stat":"Sum"}],["AWS/States","ExecutionsSucceeded","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Succeeded","stat":"Sum"}],["AWS/States","ExecutionsFailed","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Failed","stat":"Sum"}],["AWS/States","ExecutionsTimedOut","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Timed out","stat":"Sum"}],["AWS/States","ExecutionsAborted","StateMachineArn","",
+              {
+                "Ref": "CaseAnalysisStateMachine234D35AF",
+              },
+              "",{"label":"Aborted","stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":12,"height":6,"x":12,"y":18,"properties":{"view":"timeSeries","title":"Dead-letter and terminal queue depth","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","",
+              {
+                "Fn::GetAtt": [
+                  "QueuesActiveAccountsDeadLetterQueueE5038B58",
+                  "QueueName",
+                ],
+              },
+              "",{"label":"ActiveAccountsDLQ","stat":"Maximum"}],["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","",
+              {
+                "Fn::GetAtt": [
+                  "QueuesAnnotationDeadLetterQueue2F32F96A",
+                  "QueueName",
+                ],
+              },
+              "",{"label":"AnnotationDLQ","stat":"Maximum"}],["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","",
+              {
+                "Fn::GetAtt": [
+                  "QueuesSummaryDeadLetterQueueE4B9BAD4",
+                  "QueueName",
+                ],
+              },
+              "",{"label":"SummaryDLQ","stat":"Maximum"}],["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","",
+              {
+                "Fn::GetAtt": [
+                  "QueuesWorkflowFailures66009843",
+                  "QueueName",
+                ],
+              },
+              "",{"label":"WorkflowFailures","stat":"Maximum"}],["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","",
+              {
+                "Fn::GetAtt": [
+                  "QueuesAccountDiscoveryFailuresF86CAD1E",
+                  "QueueName",
+                ],
+              },
+              "",{"label":"AccountDiscoveryFailures","stat":"Maximum"}]],"yAxis":{}}},{"type":"metric","width":12,"height":6,"x":0,"y":24,"properties":{"view":"timeSeries","title":"Run completion","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","DailyRunCompleted","service","run-completion",{"period":3600,"stat":"Sum"}],["SupportCaseInsights","RunsIncomplete","service","run-completion",{"period":3600,"stat":"Maximum"}],["SupportCaseInsights","RunCasesPending","service","run-completion",{"period":3600,"stat":"Maximum"}],["SupportCaseInsights","RunCompletionErrors","service","run-completion",{"period":3600,"stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":12,"height":6,"x":12,"y":24,"properties":{"view":"timeSeries","title":"Cleanup and failure-record reconciliation","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","CleanupCasesReset","service","case-cleanup",{"period":3600,"stat":"Sum"}],["SupportCaseInsights","CleanupErrors","service","case-cleanup",{"period":3600,"stat":"Sum"}],["SupportCaseInsights","FailureDeliveriesSent","service","case-cleanup",{"label":"Cleanup deliveries","period":3600,"stat":"Sum"}],["SupportCaseInsights","FailureDeliveriesSent","service","run-completion",{"label":"Run completion deliveries","period":3600,"stat":"Sum"}],["SupportCaseInsights","FailureDeliveriesPreserved","service","workflow-starter",{"label":"Starter preserved","period":3600,"stat":"Sum"}],["SupportCaseInsights","WorkflowFailureDeliveryErrors","service","handle-failure",{"period":3600,"stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":24,"height":6,"x":0,"y":30,"properties":{"view":"timeSeries","title":"Lambda errors","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "AccountDiscoveryAccountLookupFunction47FCAEB9",
+              },
+              "",{"label":"AccountLookup","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "AccountDiscoveryAccountReaderFunction53FD32DE",
+              },
+              "",{"label":"AccountReader","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseCollectionCaseRetrievalFunctionB07B13A0",
+              },
+              "",{"label":"CaseRetrieval","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseCollectionCaseAnnotationFunctionD1470FE3",
+              },
+              "",{"label":"CaseAnnotation","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseAnalysisWorkflowStarterFunctionF4E48A10",
+              },
+              "",{"label":"WorkflowStarter","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseAnalysisAnalysisStagesFunction213D3717",
+              },
+              "",{"label":"AnalysisStages","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseAnalysisUpdateCaseMetadataFunctionCC559D57",
+              },
+              "",{"label":"UpdateCaseMetadata","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseAnalysisHandleFailureFunctionF8DDFFC4",
+              },
+              "",{"label":"HandleFailure","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "CaseAnalysisCaseCleanupFunction86AD786C",
+              },
+              "",{"label":"CaseCleanup","stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","",
+              {
+                "Ref": "ObservabilityRunCompletionFunctionA18ADCE8",
+              },
+              "",{"label":"RunCompletion","stat":"Sum"}]],"yAxis":{}}}]}",
+            ],
+          ],
+        },
+        "DashboardName": "CaseInsights-sciprod",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::CloudWatch::Dashboard",
+    },
+    "ObservabilityFailureDeliveryErrorsAlarm7858FC1E": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "A failure record could not be written to the workflow failure queue; a pending marker or workflow retry keeps the evidence. Runbook: docs/runbook.md#failuredeliveryerrors",
+        "AlarmName": "CaseInsights-sciprod-FailureDeliveryErrors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "EvaluationPeriods": 1,
+        "Metrics": [
+          {
+            "Expression": "SUM([FILL(handler, 0), FILL(cleanup, 0), FILL(completion, 0)])",
+            "Id": "expr_1",
+            "Label": "Failure delivery errors",
+            "ReturnData": true,
+          },
+          {
+            "Id": "handler",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "handle-failure",
+                  },
+                ],
+                "MetricName": "WorkflowFailureDeliveryErrors",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 3600,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+          {
+            "Id": "cleanup",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "case-cleanup",
+                  },
+                ],
+                "MetricName": "FailureDeliveryErrors",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 3600,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+          {
+            "Id": "completion",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "run-completion",
+                  },
+                ],
+                "MetricName": "FailureDeliveryErrors",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 3600,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsAccountLookupAlarm8047FF94": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The AccountLookup function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-accountlookup",
+        "AlarmName": "CaseInsights-sciprod-LambdaErrors-AccountLookup",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "AccountDiscoveryAccountLookupFunction47FCAEB9",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsAccountReaderAlarm3DE2995F": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The AccountReader function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-accountreader",
+        "AlarmName": "CaseInsights-sciprod-LambdaErrors-AccountReader",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "AccountDiscoveryAccountReaderFunction53FD32DE",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsAnalysisStagesAlarmFBAFAC57": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The AnalysisStages function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-analysisstages",
+        "AlarmName": "CaseInsights-sciprod-LambdaErrors-AnalysisStages",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseAnalysisAnalysisStagesFunction213D3717",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsCaseAnnotationAlarm1E761ADC": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The CaseAnnotation function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-caseannotation",
+        "AlarmName": "CaseInsights-sciprod-LambdaErrors-CaseAnnotation",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseCollectionCaseAnnotationFunctionD1470FE3",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsCaseCleanupAlarm5F16AF66": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The CaseCleanup function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-casecleanup",
+        "AlarmName": "CaseInsights-sciprod-LambdaErrors-CaseCleanup",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseAnalysisCaseCleanupFunction86AD786C",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsCaseRetrievalAlarm73A2574C": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The CaseRetrieval function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-caseretrieval",
+        "AlarmName": "CaseInsights-sciprod-LambdaErrors-CaseRetrieval",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseCollectionCaseRetrievalFunctionB07B13A0",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsHandleFailureAlarmB701E5B3": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The HandleFailure function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-handlefailure",
+        "AlarmName": "CaseInsights-sciprod-LambdaErrors-HandleFailure",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseAnalysisHandleFailureFunctionF8DDFFC4",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsRunCompletionAlarmBC607BF5": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The RunCompletion function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-runcompletion",
+        "AlarmName": "CaseInsights-sciprod-LambdaErrors-RunCompletion",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "ObservabilityRunCompletionFunctionA18ADCE8",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsUpdateCaseMetadataAlarmB84C0603": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The UpdateCaseMetadata function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-updatecasemetadata",
+        "AlarmName": "CaseInsights-sciprod-LambdaErrors-UpdateCaseMetadata",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseAnalysisUpdateCaseMetadataFunctionCC559D57",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityLambdaErrorsWorkflowStarterAlarmC1D50BE6": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The WorkflowStarter function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-workflowstarter",
+        "AlarmName": "CaseInsights-sciprod-LambdaErrors-WorkflowStarter",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CaseAnalysisWorkflowStarterFunctionF4E48A10",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityMissingDailyRunCompletionAlarm4F2C5B25": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "No daily run completed in the last 30 hours: discovery, retrieval, analysis or completion reconciliation is stuck or failing. Runbook: docs/runbook.md#missingdailyruncompletion",
+        "AlarmName": "CaseInsights-sciprod-MissingDailyRunCompletion",
+        "ComparisonOperator": "LessThanThreshold",
+        "DatapointsToAlarm": 30,
+        "Dimensions": [
+          {
+            "Name": "service",
+            "Value": "run-completion",
+          },
+        ],
+        "EvaluationPeriods": 30,
+        "MetricName": "DailyRunCompleted",
+        "Namespace": "SupportCaseInsights",
+        "Period": 3600,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "breaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityQueueMessagesAccountDiscoveryFailuresAlarm34B2E65A": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Messages are waiting in AccountDiscoveryFailures; they need investigation and an explicit redrive. Runbook: docs/runbook.md#queuemessages-accountdiscoveryfailures",
+        "AlarmName": "CaseInsights-sciprod-QueueMessages-AccountDiscoveryFailures",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "QueuesAccountDiscoveryFailuresF86CAD1E",
+                "QueueName",
+              ],
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityQueueMessagesActiveAccountsDLQAlarm50740C2C": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Messages are waiting in ActiveAccountsDLQ; they need investigation and an explicit redrive. Runbook: docs/runbook.md#queuemessages-activeaccountsdlq",
+        "AlarmName": "CaseInsights-sciprod-QueueMessages-ActiveAccountsDLQ",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "QueuesActiveAccountsDeadLetterQueueE5038B58",
+                "QueueName",
+              ],
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityQueueMessagesAnnotationDLQAlarmEC27469E": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Messages are waiting in AnnotationDLQ; they need investigation and an explicit redrive. Runbook: docs/runbook.md#queuemessages-annotationdlq",
+        "AlarmName": "CaseInsights-sciprod-QueueMessages-AnnotationDLQ",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "QueuesAnnotationDeadLetterQueue2F32F96A",
+                "QueueName",
+              ],
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityQueueMessagesSummaryDLQAlarm8B7C54A6": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Messages are waiting in SummaryDLQ; they need investigation and an explicit redrive. Runbook: docs/runbook.md#queuemessages-summarydlq",
+        "AlarmName": "CaseInsights-sciprod-QueueMessages-SummaryDLQ",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "QueuesSummaryDeadLetterQueueE4B9BAD4",
+                "QueueName",
+              ],
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityQueueMessagesWorkflowFailuresAlarm170679B8": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Messages are waiting in WorkflowFailures; they need investigation and an explicit redrive. Runbook: docs/runbook.md#queuemessages-workflowfailures",
+        "AlarmName": "CaseInsights-sciprod-QueueMessages-WorkflowFailures",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "QueuesWorkflowFailures66009843",
+                "QueueName",
+              ],
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityRunCompletionAccess9BBEDA54": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:ListBucket",
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "account-lists/*",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageAccountListBucketDB72317C",
+                  "Arn",
+                ],
+              },
+              "Sid": "ListAccountLists",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageAccountListBucketDB72317C",
+                        "Arn",
+                      ],
+                    },
+                    "/account-lists/*",
+                  ],
+                ],
+              },
+              "Sid": "ReadAccountLists",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageRawBucketBBD9BDC5",
+                  "Arn",
+                ],
+              },
+              "Sid": "ListRawBucket",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/runs/*",
+                  ],
+                ],
+              },
+              "Sid": "ReadRunMarkers",
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/runs/*/completion.json",
+                  ],
+                ],
+              },
+              "Sid": "RecordRunCompletion",
+            },
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/failure-deliveries/*",
+                  ],
+                ],
+              },
+              "Sid": "TrackFailureDeliveries",
+            },
+            {
+              "Action": "states:DescribeExecution",
+              "Effect": "Allow",
+              "Resource": "arn:aws:states:us-east-1:111111111111:execution:CaseAnalysis-sciprod:*",
+              "Sid": "DescribeCaseAnalysis",
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesWorkflowFailures66009843",
+                  "Arn",
+                ],
+              },
+              "Sid": "SendFailureRecords",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ObservabilityRunCompletionAccess9BBEDA54",
+        "Roles": [
+          {
+            "Ref": "ObservabilityRunCompletionRoleD787B2A4",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ObservabilityRunCompletionErrorsAlarm059937D3": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Run Completion could not reconcile some run markers or executions for three consecutive hours. Runbook: docs/runbook.md#runcompletionerrors",
+        "AlarmName": "CaseInsights-sciprod-RunCompletionErrors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 3,
+        "Dimensions": [
+          {
+            "Name": "service",
+            "Value": "run-completion",
+          },
+        ],
+        "EvaluationPeriods": 3,
+        "MetricName": "RunCompletionErrors",
+        "Namespace": "SupportCaseInsights",
+        "Period": 3600,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityRunCompletionFunctionA18ADCE8": {
+      "DependsOn": [
+        "ObservabilityRunCompletionRoleD787B2A4",
+        "ObservabilityRunCompletionTelemetryPolicyCB8E5DAC",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Emits the daily heartbeat once a run's accounts and cases are terminal (sciprod)",
+        "Environment": {
+          "Variables": {
+            "ACCOUNT_LIST_BUCKET": {
+              "Ref": "StorageAccountListBucketDB72317C",
+            },
+            "CASE_INSIGHTS_UNIQUE_ID": "sciprod",
+            "FAILURE_QUEUE_URL": {
+              "Ref": "QueuesWorkflowFailures66009843",
+            },
+            "MANAGEMENT_ACCOUNT_ID": "111111111111",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "run-completion",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+            "RUN_LOOKBACK_HOURS": "72",
+            "STATE_MACHINE_ARN": {
+              "Ref": "CaseAnalysisStateMachine234D35AF",
+            },
+          },
+        },
+        "FunctionName": "Lambda-RunCompletion-sciprod",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ObservabilityRunCompletionLogGroup7B5871A4",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "ObservabilityRunCompletionRoleD787B2A4",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "ObservabilityRunCompletionLogGroup7B5871A4": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-RunCompletion-sciprod",
+        "RetentionInDays": 90,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "ObservabilityRunCompletionRoleD787B2A4": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-RunCompletion-sciprod",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "ObservabilityRunCompletionScheduleA383E86A": {
+      "Properties": {
+        "Description": "Hourly Support Case Insights run completion check (sciprod)",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF",
+        },
+        "Name": "CaseInsights-RunCompletion-sciprod",
+        "ScheduleExpression": "rate(1 hour)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "ObservabilityRunCompletionFunctionA18ADCE8",
+              "Arn",
+            ],
+          },
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 1800,
+            "MaximumRetryAttempts": 2,
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "ObservabilityRunCompletionScheduleRoleFD4ECC1A",
+              "Arn",
+            ],
+          },
+        },
+      },
+      "Type": "AWS::Scheduler::Schedule",
+    },
+    "ObservabilityRunCompletionScheduleRoleDefaultPolicyBF237ACD": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ObservabilityRunCompletionFunctionA18ADCE8",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ObservabilityRunCompletionFunctionA18ADCE8",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+              ],
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ObservabilityRunCompletionScheduleRoleDefaultPolicyBF237ACD",
+        "Roles": [
+          {
+            "Ref": "ObservabilityRunCompletionScheduleRoleFD4ECC1A",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ObservabilityRunCompletionScheduleRoleFD4ECC1A": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule/default/CaseInsights-RunCompletion-sciprod",
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "111111111111",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "EventBridge Scheduler role that invokes Lambda-RunCompletion-sciprod",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "ObservabilityRunCompletionTelemetryPolicyCB8E5DAC": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ObservabilityRunCompletionLogGroup7B5871A4",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ObservabilityRunCompletionTelemetryPolicyCB8E5DAC",
+        "Roles": [
+          {
+            "Ref": "ObservabilityRunCompletionRoleD787B2A4",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ObservabilityWorkflowExecutionsAbortedAlarm1C500407": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "CaseAnalysis executions were stopped; reconciliation records their failures. Runbook: docs/runbook.md#workflowexecutionsaborted",
+        "AlarmName": "CaseInsights-sciprod-WorkflowExecutionsAborted",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "StateMachineArn",
+            "Value": {
+              "Ref": "CaseAnalysisStateMachine234D35AF",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ExecutionsAborted",
+        "Namespace": "AWS/States",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityWorkflowExecutionsFailedAlarm992955DE": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "CaseAnalysis executions failed after task retries; each should have a failure record on the workflow failure queue. Runbook: docs/runbook.md#workflowexecutionsfailed",
+        "AlarmName": "CaseInsights-sciprod-WorkflowExecutionsFailed",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "StateMachineArn",
+            "Value": {
+              "Ref": "CaseAnalysisStateMachine234D35AF",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ExecutionsFailed",
+        "Namespace": "AWS/States",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityWorkflowExecutionsTimedOutAlarmC142CD0B": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "CaseAnalysis executions hit the workflow timeout, which bypasses task error handling; reconciliation records their failures. Runbook: docs/runbook.md#workflowexecutionstimedout",
+        "AlarmName": "CaseInsights-sciprod-WorkflowExecutionsTimedOut",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "StateMachineArn",
+            "Value": {
+              "Ref": "CaseAnalysisStateMachine234D35AF",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ExecutionsTimedOut",
+        "Namespace": "AWS/States",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityWorkflowFailuresRecordedAlarmE62357BA": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "Failure records were written to the workflow failure queue: exhausted or closed CaseAnalysis attempts, or conversations too large to summarise. Runbook: docs/runbook.md#workflowfailuresrecorded",
+        "AlarmName": "CaseInsights-sciprod-WorkflowFailuresRecorded",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "EvaluationPeriods": 1,
+        "Metrics": [
+          {
+            "Expression": "SUM([FILL(handled, 0), FILL(oversized, 0), FILL(cleanup, 0), FILL(completion, 0)])",
+            "Id": "expr_1",
+            "Label": "Failure records",
+            "ReturnData": true,
+          },
+          {
+            "Id": "handled",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "handle-failure",
+                  },
+                ],
+                "MetricName": "WorkflowFailuresRecorded",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 300,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+          {
+            "Id": "oversized",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "case-annotation",
+                  },
+                ],
+                "MetricName": "OversizedConversations",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 300,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+          {
+            "Id": "cleanup",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "case-cleanup",
+                  },
+                ],
+                "MetricName": "FailureDeliveriesSent",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 300,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+          {
+            "Id": "completion",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "run-completion",
+                  },
+                ],
+                "MetricName": "FailureDeliveriesSent",
+                "Namespace": "SupportCaseInsights",
+              },
+              "Period": 300,
+              "Stat": "Sum",
+            },
+            "ReturnData": false,
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
     },
     "QueuesAccountDiscoveryFailuresF86CAD1E": {
       "DeletionPolicy": "Delete",

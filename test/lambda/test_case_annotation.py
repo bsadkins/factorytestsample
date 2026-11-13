@@ -125,8 +125,16 @@ class Env:
     def version(self, key: str) -> str:
         return self.s3.head_object(Bucket=RAW, Key=key)["VersionId"]
 
-    def raw_keys(self) -> list[str]:
-        return sorted(o["Key"] for o in self.s3.list_objects_v2(Bucket=RAW).get("Contents", []))
+    def raw_keys(self, prefix: str = "account_number=") -> list[str]:
+        listing = self.s3.list_objects_v2(Bucket=RAW, Prefix=prefix)
+        return sorted(o["Key"] for o in listing.get("Contents", []))
+
+    def case_outcome(self, account: str, display: str, run_id: str = RUN) -> str | None:
+        key = f"runs/{run_id}/cases/{account}/{display}.json"
+        if key not in self.raw_keys("runs/"):
+            return None
+        outcome: str = self.raw(key)["outcome"]
+        return outcome
 
     def mark_processed(self, account: str, display: str) -> None:
         self.s3.put_object(Bucket=PROCESSED, Key=raw_key(account, display), Body=b"{}")
@@ -225,6 +233,8 @@ def test_stores_every_communication_page_and_queues_a_summary_reference(env: Env
         }
     ]
     assert env.failures() == []
+    # A queued summary is handed to the workflow starter, which records the case's outcome.
+    assert env.raw_keys("runs/") == []
     assert env.metrics() == {"CasesAnnotated": 1, "CommunicationsRetrieved": 5}
     logs = env.kit.logs()
     assert "Case conversation stored and queued for summary" in logs
@@ -273,6 +283,7 @@ def test_oversized_conversation_is_stored_in_full_and_fails_explicitly(env: Env)
     }
     assert filler not in json.dumps(failure)
     assert env.metrics() == {"OversizedConversations": 1}
+    assert env.case_outcome(A, "2001") == "oversized"
     marker = env.raw(terminal_marker_key(A, "2001"))
     assert marker["failureType"] == "ConversationTooLarge"
     assert marker["runId"] == RUN
@@ -306,6 +317,7 @@ def test_unchanged_oversized_conversation_is_not_reported_again_on_later_runs(en
     assert env.failures() == []
     assert env.summaries() == []
     assert env.metrics() == {"OversizedConversationsUnchanged": 1}
+    assert env.case_outcome(A, "2002", NEXT_RUN) == "oversizedUnchanged"
     assert "still too large and unchanged" in env.kit.logs()
     # The terminal diagnostic stays visible with the run that reported it.
     assert env.raw(terminal_marker_key(A, "2002"))["runId"] == RUN
@@ -354,6 +366,7 @@ def test_failed_failure_report_leaves_no_marker_so_the_retry_reports_it(
 
     assert response == {"batchItemFailures": [{"itemIdentifier": "m0"}]}
     assert terminal_marker_key(A, "2005") not in env.raw_keys()
+    assert env.case_outcome(A, "2005") is None
 
 
 def test_case_with_a_processed_record_is_not_annotated_again(env: Env) -> None:
@@ -365,6 +378,7 @@ def test_case_with_a_processed_record_is_not_annotated_again(env: Env) -> None:
     assert env.sts.calls == []
     assert env.summaries() == []
     assert env.raw_keys() == []
+    assert env.case_outcome(A, "1001") == "alreadyProcessed"
     assert env.metrics() == {"CasesAlreadyProcessed": 1}
 
 
@@ -400,6 +414,11 @@ def test_access_entitlement_and_missing_case_errors_are_counted_skips_reevaluate
         "CasesSkippedSubscriptionRequired": 1,
         "CasesNotFound": 1,
     }
+    # Each skip ends the case's work for this run, which run completion counts as settled.
+    assert [
+        env.case_outcome(target.account_id, target.display_id)
+        for target in (denied, unentitled, forbidden, missing)
+    ] == ["skippedAccessDenied", "skippedSubscriptionRequired", "skippedAccessDenied", "notFound"]
 
     env.sts.denied.clear()
     recovered = ref(B, "3001", NEXT_RUN)

@@ -11,6 +11,7 @@ import boto3
 import pytest
 from botocore.exceptions import ClientError
 from common.case_refs import SummaryRef
+from common.failure_delivery import delivery_marker_key
 from common.failures import summary_ref_from_failure
 from common.workflow import execution_input
 from handle_failure import app
@@ -18,6 +19,7 @@ from handle_failure import app
 ACCOUNT = "111122223333"
 DISPLAY = "170000000001"
 RUN = "20261113T000000Z"
+RAW = "raw-failure-test"
 NOW = datetime(2026, 11, 13, 2, 0, 0, tzinfo=UTC)
 SENTINEL = "SENTINEL-CASE-TEXT-77ab"
 REF = SummaryRef(
@@ -49,6 +51,7 @@ def state(error: object, **results: Any) -> dict[str, Any]:  # noqa: ANN401
 @dataclass
 class Env:
     sqs: Any
+    s3: Any
     queue_url: str
     capsys: pytest.CaptureFixture[str]
     kit: Any
@@ -77,11 +80,14 @@ def env(
 ) -> Env:
     sqs = boto3.client("sqs", region_name="us-east-1")
     url = sqs.create_queue(QueueName="workflow-failures")["QueueUrl"]
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=RAW)
     monkeypatch.setenv("FAILURE_QUEUE_URL", url)
-    clients = app.Clients(sqs=sqs)
+    monkeypatch.setenv("RAW_BUCKET", RAW)
+    clients = app.Clients(sqs=sqs, s3=s3)
     monkeypatch.setattr(app, "clients", lambda: clients)
     monkeypatch.setattr(app, "now", lambda: NOW)
-    return Env(sqs, url, capsys, case_collection_kit)
+    return Env(sqs, s3, url, capsys, case_collection_kit)
 
 
 @pytest.mark.parametrize(
@@ -137,6 +143,7 @@ def test_failure_at_each_stage_is_recorded_with_safe_references(
         "errorType": error["Error"],
         "executionName": f"{ACCOUNT}-{DISPLAY}-{RUN}-a2",
         "attempt": 2,
+        "deliveryKey": f"{ACCOUNT}-{DISPLAY}-{RUN}-a2",
     }
     if code is not None:
         expected["errorCode"] = code
@@ -245,3 +252,85 @@ def test_missing_queue_is_a_delivery_failure(env: Env, monkeypatch: pytest.Monke
 
     with pytest.raises(app.FailureDeliveryError):
         env.handle(state(lambda_error("BedrockThrottlingError", "x (Throttling)")))
+
+
+DELIVERY_KEY = f"{ACCOUNT}-{DISPLAY}-{RUN}-a2"
+
+
+def stored_delivery(env: Env) -> dict[str, Any] | None:
+    key = delivery_marker_key(ACCOUNT, DISPLAY, DELIVERY_KEY)
+    try:
+        body = env.s3.get_object(Bucket=RAW, Key=key)["Body"].read()
+    except env.s3.exceptions.NoSuchKey:
+        return None
+    document: dict[str, Any] = json.loads(body)
+    return document
+
+
+def test_recorded_failure_is_confirmed_in_its_delivery_marker(env: Env) -> None:
+    env.handle(state(lambda_error("BedrockThrottlingError", "x (Throttling)")))
+
+    [failure] = env.failures()
+    assert failure["deliveryKey"] == DELIVERY_KEY
+    marker = stored_delivery(env)
+    assert marker is not None
+    assert marker["status"] == "sent"
+    assert marker["deliveryKey"] == DELIVERY_KEY
+    assert marker["sentAt"] == "2026-11-13T02:00:00Z"
+    assert SENTINEL not in json.dumps(marker)
+
+
+def test_retried_handler_after_confirmed_delivery_does_not_send_again(env: Env) -> None:
+    event = state(lambda_error("BedrockThrottlingError", "x (Throttling)"))
+    env.handle(event)
+    assert len(env.failures()) == 1
+    env.capsys.readouterr()
+
+    result = env.handle(event)
+
+    assert result["status"] == "alreadyRecorded"
+    assert env.failures() == []
+    assert env.metrics() == {"FailureDeliveriesAlreadyRecorded": 1}
+
+
+def test_unconfirmed_delivery_is_still_recorded_and_left_for_reconciliation(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def crash(*_: Any, **__: Any) -> None:  # noqa: ANN401
+        raise ClientError({"Error": {"Code": "InternalError", "Message": SENTINEL}}, "PutObject")
+
+    monkeypatch.setattr(app, "record_sent", crash)
+
+    result = env.handle(state(lambda_error("BedrockThrottlingError", "x (Throttling)")))
+
+    assert result["status"] == "recorded"
+    [failure] = env.failures()
+    assert failure["deliveryKey"] == DELIVERY_KEY
+    assert stored_delivery(env) is None
+    assert env.metrics() == {"WorkflowFailuresRecorded": 1, "FailureDeliveryMarkerErrors": 1}
+    output = env.stdout + env.kit.logs()
+    assert "reconciliation may send it again" in output
+    assert SENTINEL not in output
+
+
+def test_unreadable_delivery_marker_never_stops_the_record(env: Env) -> None:
+    env.s3.put_object(
+        Bucket=RAW, Key=delivery_marker_key(ACCOUNT, DISPLAY, DELIVERY_KEY), Body=b"{bad"
+    )
+
+    result = env.handle(state(lambda_error("BedrockThrottlingError", "x (Throttling)")))
+
+    assert result["status"] == "recorded"
+    assert len(env.failures()) == 1
+    assert env.metrics()["FailureDeliveryMarkerErrors"] == 1
+
+
+def test_inconsistent_execution_identity_gets_no_delivery_marker(env: Env) -> None:
+    event = state(lambda_error("BedrockThrottlingError", "x (Throttling)"))
+    event["attempt"] = {**event["attempt"], "number": 3}
+
+    env.handle(event)
+
+    [failure] = env.failures()
+    assert "deliveryKey" not in failure
+    assert env.s3.list_objects_v2(Bucket=RAW).get("KeyCount", 0) == 0

@@ -6,6 +6,7 @@ import { CaseAnalysis } from '../constructs/case-analysis';
 import { CaseCollection } from '../constructs/case-collection';
 import { CoreStorage } from '../constructs/core-storage';
 import { MemberAccessRoles } from '../constructs/member-access-roles';
+import { Observability } from '../constructs/observability';
 import { PipelineQueues } from '../constructs/pipeline-queues';
 import { SharedLayers } from '../constructs/shared-layers';
 
@@ -27,6 +28,7 @@ export class CaseInsightsCoreStack extends Stack {
   public readonly accountDiscovery: AccountDiscovery;
   public readonly caseCollection: CaseCollection;
   public readonly caseAnalysis: CaseAnalysis;
+  public readonly observability: Observability;
 
   public constructor(scope: Construct, id: string, props: CaseInsightsCoreStackProps) {
     super(scope, id, props);
@@ -66,6 +68,33 @@ export class CaseInsightsCoreStack extends Stack {
       commonLayer: this.layers.commonLayer,
       templatesLayer: this.layers.templatesLayer,
       templateEnvironment: this.layers.templateEnvironment,
+    });
+    const { accountDiscovery, caseCollection, caseAnalysis, queues } = this;
+    this.observability = new Observability(this, 'Observability', {
+      config: props.config,
+      accountListBucket: this.storage.accountListBucket,
+      rawBucket: this.storage.rawBucket,
+      commonLayer: this.layers.commonLayer,
+      stateMachine: caseAnalysis.stateMachine,
+      failureQueue: queues.workflowFailures,
+      functions: [
+        accountDiscovery.lookupFunction,
+        accountDiscovery.readerFunction,
+        caseCollection.retrievalFunction,
+        caseCollection.annotationFunction,
+        caseAnalysis.starterFunction,
+        caseAnalysis.stagesFunction,
+        caseAnalysis.updateFunction,
+        caseAnalysis.failureFunction,
+        caseAnalysis.cleanupFunction,
+      ],
+      deadLetterQueues: [
+        { label: 'ActiveAccountsDLQ', queue: queues.activeAccounts.deadLetterQueue },
+        { label: 'AnnotationDLQ', queue: queues.annotation.deadLetterQueue },
+        { label: 'SummaryDLQ', queue: queues.summary.deadLetterQueue },
+        { label: 'WorkflowFailures', queue: queues.workflowFailures },
+        { label: 'AccountDiscoveryFailures', queue: queues.accountDiscoveryFailures },
+      ],
     });
   }
 }

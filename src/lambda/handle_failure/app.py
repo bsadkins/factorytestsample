@@ -9,6 +9,12 @@ output and never logs or forwards error text, which can echo case content.
 If the message cannot be delivered the handler raises `FailureDeliveryError`; the workflow retries
 it and, when retries run out, fails with a distinct error, so a lost failure record is visible in
 Step Functions metrics rather than silently acknowledged.
+
+After a successful send the handler confirms delivery in the execution's failure-delivery marker
+(`common.failure_delivery`), and a retried invocation that finds the marker confirmed does not
+send again. A closed execution without a confirmed marker, including one whose handler exhausted
+its retries or one that timed out or was aborted, is recorded later by cleanup or run completion
+under the same `deliveryKey`; delivery is at least once.
 """
 
 from __future__ import annotations
@@ -35,6 +41,13 @@ from common.analysis import (
 )
 from common.aws import client_config
 from common.conversation import utc_timestamp
+from common.failure_delivery import (
+    PENDING,
+    SENT,
+    DeliveryMarker,
+    read_delivery_marker,
+    record_sent,
+)
 from common.failures import (
     CONVERSATION_TOO_LARGE,
     FAILURE_SCHEMA_VERSION,
@@ -42,11 +55,13 @@ from common.failures import (
     WORKFLOW_TASK_FAILED,
     failure_message,
 )
+from common.safe_logging import error_fields
 from common.sqs import send_messages
-from common.workflow import parse_execution_name
+from common.workflow import MAX_ATTEMPTS_PER_RUN, execution_name, parse_execution_name
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
+    from types_boto3_s3.client import S3Client
     from types_boto3_sqs.client import SQSClient
 
 logger = Logger()
@@ -83,20 +98,27 @@ class FailureDeliveryError(Exception):
 @dataclass(frozen=True, slots=True)
 class Settings:
     failure_queue_url: str
+    raw_bucket: str
 
     @classmethod
     def from_env(cls) -> Settings:
-        return cls(failure_queue_url=os.environ["FAILURE_QUEUE_URL"])
+        return cls(
+            failure_queue_url=os.environ["FAILURE_QUEUE_URL"], raw_bucket=os.environ["RAW_BUCKET"]
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class Clients:
     sqs: SQSClient
+    s3: S3Client
 
 
 @cache
 def clients() -> Clients:
-    return Clients(sqs=boto3.client("sqs", config=client_config()))
+    return Clients(
+        sqs=boto3.client("sqs", config=client_config()),
+        s3=boto3.client("s3", config=client_config()),
+    )
 
 
 def now() -> datetime:
@@ -142,7 +164,32 @@ def _execution_fields(state: Mapping[str, Any]) -> dict[str, Any]:
     return {"executionName": name, "attempt": number if isinstance(number, int) else None}
 
 
-def build_failure(state: Mapping[str, Any], failed_at: datetime) -> dict[str, Any]:
+def delivery_for(state: Mapping[str, Any], failed_at: datetime) -> DeliveryMarker | None:
+    """The failure-delivery marker of the failing execution, when its identity is consistent."""
+    fields = _execution_fields(state)
+    attempt = fields.get("attempt")
+    try:
+        ref = parse_workflow_input(state)
+    except InvalidWorkflowInputError:
+        return None
+    if not isinstance(attempt, int) or not 1 <= attempt <= MAX_ATTEMPTS_PER_RUN:
+        return None
+    if execution_name(ref.account_id, ref.display_id, ref.run_id, attempt) != fields.get(
+        "executionName"
+    ):
+        return None
+    return DeliveryMarker(
+        case=ref,
+        attempt=attempt,
+        status=PENDING,
+        execution_status=None,
+        recorded_at=utc_timestamp(failed_at),
+    )
+
+
+def build_failure(
+    state: Mapping[str, Any], failed_at: datetime, delivery_key: str | None = None
+) -> dict[str, Any]:
     """The failure-queue message for a caught workflow error. References only."""
     error_type, code = error_details(state.get("error"))
     stage = failed_stage(state)
@@ -173,12 +220,32 @@ def build_failure(state: Mapping[str, Any], failed_at: datetime) -> dict[str, An
         errorType=error_type,
         errorCode=code,
         **_execution_fields(state),
+        deliveryKey=delivery_key,
     )
+
+
+def _already_recorded(delivery: DeliveryMarker, settings: Settings, aws: Clients) -> bool:
+    """True when an earlier invocation confirmed this execution's failure record."""
+    try:
+        stored = read_delivery_marker(
+            aws.s3,
+            settings.raw_bucket,
+            delivery.case.account_id,
+            delivery.case.display_id,
+            delivery.delivery_key,
+        )
+    except Exception as exc:  # an unreadable marker must not stop the record
+        metrics.add_metric(name="FailureDeliveryMarkerErrors", unit=MetricUnit.Count, value=1)
+        logger.warning("Failure-delivery marker could not be read", extra=error_fields(exc))
+        return False
+    return stored is not None and stored.marker.status == SENT
 
 
 @tracer.capture_method(capture_response=False)
 def record_failure(state: Mapping[str, Any], settings: Settings, aws: Clients) -> dict[str, Any]:
-    message = build_failure(state, now())
+    failed_at = now()
+    delivery = delivery_for(state, failed_at)
+    message = build_failure(state, failed_at, delivery.delivery_key if delivery else None)
     fields = {
         "failure_type": message["failureType"],
         "stage": message["stage"],
@@ -189,6 +256,17 @@ def record_failure(state: Mapping[str, Any], settings: Settings, aws: Clients) -
         "run_id": message.get("runId"),
         "execution_name": message.get("executionName"),
     }
+    result = {
+        "status": "recorded",
+        "failureType": message["failureType"],
+        "stage": message["stage"],
+        "errorType": message["errorType"],
+        "retryable": message["retryable"],
+    }
+    if delivery is not None and _already_recorded(delivery, settings, aws):
+        metrics.add_metric(name="FailureDeliveriesAlreadyRecorded", unit=MetricUnit.Count, value=1)
+        logger.info("Failure record already confirmed for this execution; not resent", extra=fields)
+        return {**result, "status": "alreadyRecorded"}
     try:
         send_messages(aws.sqs, settings.failure_queue_url, [message])
     except Exception as exc:
@@ -202,13 +280,16 @@ def record_failure(state: Mapping[str, Any], settings: Settings, aws: Clients) -
     if message["failureType"] == CONVERSATION_TOO_LARGE:
         metrics.add_metric(name="OversizedConversations", unit=MetricUnit.Count, value=1)
     logger.error("Case analysis attempt failed and was recorded", extra=fields)
-    return {
-        "status": "recorded",
-        "failureType": message["failureType"],
-        "stage": message["stage"],
-        "errorType": message["errorType"],
-        "retryable": message["retryable"],
-    }
+    if delivery is not None:
+        try:
+            record_sent(aws.s3, settings.raw_bucket, delivery, failed_at)
+        except Exception as exc:  # the record is sent; reconciliation may repeat it
+            metrics.add_metric(name="FailureDeliveryMarkerErrors", unit=MetricUnit.Count, value=1)
+            logger.warning(
+                "Failure record sent but not confirmed; reconciliation may send it again",
+                extra={**fields, **error_fields(exc)},
+            )
+    return result
 
 
 @logger.inject_lambda_context(log_event=False, clear_state=True)

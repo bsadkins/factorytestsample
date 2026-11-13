@@ -106,7 +106,12 @@ class FakeStepFunctions:
         execution = self.executions.get(name)
         if execution is None:
             raise sfn_error("ExecutionDoesNotExist", "DescribeExecution")
-        return {"executionArn": execution.arn, "name": name, "status": execution.status}
+        return {
+            "executionArn": execution.arn,
+            "name": name,
+            "status": execution.status,
+            "input": execution.input,
+        }
 
     def list_executions(
         self,

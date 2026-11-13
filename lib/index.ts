@@ -11,6 +11,7 @@ export * from './constructs/case-collection';
 export * from './constructs/core-storage';
 export * from './constructs/environment';
 export * from './constructs/member-access-roles';
+export * from './constructs/observability';
 export * from './constructs/pipeline-function';
 export * from './constructs/pipeline-queues';
 export * from './constructs/shared-layers';

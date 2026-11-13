@@ -28,6 +28,11 @@ describe('resource names', () => {
       handleFailureFunction: 'Lambda-HandleFailure-sci-dev',
       caseCleanupFunction: 'Lambda-CaseCleanup-sci-dev',
       caseCleanupSchedule: 'CaseInsights-CaseCleanup-sci-dev',
+      runCompletionFunction: 'Lambda-RunCompletion-sci-dev',
+      runCompletionSchedule: 'CaseInsights-RunCompletion-sci-dev',
+      alarmTopic: 'CaseInsights-Alarms-sci-dev',
+      dashboard: 'CaseInsights-sci-dev',
+      alarmPrefix: 'CaseInsights-sci-dev-',
       glueDatabase: 'case_insights_sci_dev',
       glueTable: 'case_summary',
       crawler: 'case-insights-partition-crawler-sci-dev',
@@ -55,6 +60,8 @@ describe('resource names', () => {
       names.handleFailureFunction,
       names.caseCleanupFunction,
       names.caseCleanupSchedule,
+      names.runCompletionFunction,
+      names.runCompletionSchedule,
     ]) {
       expect(name.length).toBeLessThanOrEqual(64);
     }
@@ -62,6 +69,10 @@ describe('resource names', () => {
     expect(names.memberRoleStack.length).toBeLessThanOrEqual(128);
     expect(names.memberRoleStackSet.length).toBeLessThanOrEqual(128);
     expect(names.athenaWorkgroup.length).toBeLessThanOrEqual(128);
+    expect(names.alarmTopic).toMatch(/^[A-Za-z0-9_-]{1,256}$/);
+    expect(names.dashboard).toMatch(/^[A-Za-z0-9_-]{1,255}$/);
+    // Longest alarm purpose suffix used by Observability.
+    expect(`${names.alarmPrefix}LambdaErrors-UpdateCaseMetadata`.length).toBeLessThanOrEqual(255);
     for (const queue of [names.activeAccountsQueue, names.annotationQueue, names.summaryQueue, names.workflowFailureQueue]) {
       expect(deadLetterQueueName(queue).length).toBeLessThanOrEqual(80);
     }

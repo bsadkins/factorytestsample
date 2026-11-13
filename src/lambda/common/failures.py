@@ -1,10 +1,11 @@
 """Workflow failure messages and terminal failure markers.
 
 Failure messages go to the terminal workflow failure queue (`CaseInsights-WorkflowFailures-<id>`)
-from two places: Case Annotation, for a conversation too large to summarise, and the workflow's
-failure handler, for a case-analysis attempt whose task retries are exhausted. Both carry the
-same case reference fields as a summary-queue message, so an operator can redrive any of them to
-the summary queue; they never carry case content or error text.
+from three places: Case Annotation, for a conversation too large to summarise; the workflow's
+failure handler, for a case-analysis attempt whose task retries are exhausted; and failure-delivery
+reconciliation (see `common.failure_delivery`), for a closed attempt the handler never recorded.
+All carry the same case reference fields as a summary-queue message, so an operator can redrive
+any of them to the summary queue; they never carry case content or error text.
 
 A conversation that is too large fails the same way every time until its content changes, so
 annotation records `terminal-failure.json` next to the case with a digest of the rendered
@@ -25,6 +26,9 @@ FAILURE_SCHEMA_VERSION: Final = 1
 CONVERSATION_TOO_LARGE: Final = "ConversationTooLarge"
 WORKFLOW_TASK_FAILED: Final = "WorkflowTaskFailed"
 INVALID_WORKFLOW_INPUT: Final = "InvalidWorkflowInput"
+# Recorded by reconciliation for a closed execution whose failure handler never confirmed a
+# record, for example a whole-execution timeout or abort, which bypasses every task Catch.
+WORKFLOW_EXECUTION_CLOSED: Final = "WorkflowExecutionClosed"
 TERMINAL_MARKER_FILE: Final = "terminal-failure.json"
 TERMINAL_MARKER_SCHEMA_VERSION: Final = 1
 MAX_TERMINAL_MARKER_BYTES: Final = 16 * 1024

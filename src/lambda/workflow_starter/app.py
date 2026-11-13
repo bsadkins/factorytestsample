@@ -11,6 +11,12 @@ the case's S3 ownership marker with the Step Functions status of the execution i
   treated as abandoned;
 - a closed FAILED, TIMED_OUT or ABORTED execution is recovered with the next attempt name for
   this run (or attempt 1 of a new run), claimed with a conditional write on the marker's ETag.
+  Before the marker is replaced, a pending failure-delivery marker is kept for the closed attempt
+  unless its failure record is already confirmed (see `common.failure_delivery`), so a timeout or
+  abort that bypassed HandleFailure still reaches the workflow failure queue.
+
+The decision is recorded in the run marker `runs/<runId>/cases/<accountId>/<displayId>.json`
+(the owning execution, or `alreadyProcessed`) for run completion.
 
 `ExecutionAlreadyExists` is never treated as success: the name is described on the next round.
 Event source maximum concurrency limits how fast executions start; it is not a limit on running
@@ -30,8 +36,10 @@ from aws_lambda_powertools import Logger, Metrics, Tracer
 from aws_lambda_powertools.metrics import MetricUnit
 from common.aws import client_config
 from common.case_refs import InvalidReferenceError, SummaryRef
+from common.failure_delivery import preserve_pending
 from common.idempotency import idempotency_config
 from common.processed import case_record_key
+from common.run_markers import HANDOFF_OUTCOMES, CaseMarker, write_case_marker
 from common.s3_json import (
     S3JsonDecodeError,
     S3ObjectTooLargeError,
@@ -129,6 +137,7 @@ class Reconciliation:
     name_conflicts: int = 0
     lost_claims: int = 0
     recovered_status: str | None = None
+    preserved_deliveries: int = 0
 
 
 def _read_marker(
@@ -223,6 +232,17 @@ def reconcile_case(ref: SummaryRef, settings: Settings, aws: Clients) -> dict[st
                 return _outcome("alreadyProcessed", ref)
             if status in FAILED_STATUSES:
                 stats.recovered_status = status
+                # The marker is about to be replaced; keep durable evidence that this attempt
+                # still needs its failure record (a timeout or abort bypasses HandleFailure).
+                _, created = preserve_pending(
+                    aws.s3,
+                    settings.raw_bucket,
+                    marker.case_ref,
+                    attempt=marker.attempt,
+                    execution_status=status,
+                    now=now(),
+                )
+                stats.preserved_deliveries += int(created)
             attempt = marker.attempt + 1 if marker.run_id == ref.run_id else 1
         if attempt > MAX_ATTEMPTS_PER_RUN:
             raise AttemptsExhaustedError
@@ -238,6 +258,7 @@ def reconcile_case(ref: SummaryRef, settings: Settings, aws: Clients) -> dict[st
                 attempt=attempt,
                 completedClaim=False,
                 recoveredFrom=stats.recovered_status,
+                preservedDeliveries=stats.preserved_deliveries,
                 nameConflicts=stats.name_conflicts,
                 lostClaims=stats.lost_claims,
             )
@@ -254,9 +275,22 @@ def start_case(
     """Idempotent per summary reference; errors carry only type and AWS error code."""
     del key
     try:
-        return {"invocation": invocation, **reconcile_case(ref, settings, aws)}
+        result = reconcile_case(ref, settings, aws)
+        outcome = str(result["outcome"])
+        write_case_marker(
+            aws.s3,
+            settings.raw_bucket,
+            CaseMarker(
+                ref.run_id,
+                ref.account_id,
+                ref.display_id,
+                outcome,
+                result.get("executionName") if outcome in HANDOFF_OUTCOMES else None,
+            ),
+        )
     except Exception as exc:
         raise RecordFailedError.from_exception(exc) from None
+    return {"invocation": invocation, **result}
 
 
 def record_outcome(result: dict[str, Any], log_fields: dict[str, Any]) -> None:
@@ -264,6 +298,12 @@ def record_outcome(result: dict[str, Any], log_fields: dict[str, Any]) -> None:
     metrics.add_metric(name=_OUTCOME_METRICS[outcome], unit=MetricUnit.Count, value=1)
     if result.get("recoveredFrom"):
         metrics.add_metric(name="FailedAttemptsRecovered", unit=MetricUnit.Count, value=1)
+    if result.get("preservedDeliveries"):
+        metrics.add_metric(
+            name="FailureDeliveriesPreserved",
+            unit=MetricUnit.Count,
+            value=int(result["preservedDeliveries"]),
+        )
     if result.get("completedClaim"):
         metrics.add_metric(name="OwnershipClaimsCompleted", unit=MetricUnit.Count, value=1)
     if result.get("nameConflicts"):

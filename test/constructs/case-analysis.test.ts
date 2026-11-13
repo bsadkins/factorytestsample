@@ -9,6 +9,7 @@ import {
   CLEANUP_RESETTABLE_FILES,
   CLEANUP_SCHEDULE_RETRY_ATTEMPTS,
   CLEANUP_STATE_PREFIX,
+  FAILURE_DELIVERY_PATTERN,
   REPO_ROOT,
   TERMINAL_MARKER_PATTERN,
   queueVisibilityTimeoutSeconds,
@@ -250,6 +251,13 @@ describe('CaseAnalysis', () => {
       Resource: [arnOf(logicalId(core, core.storage.processedBucket)), arnOf(logicalId(core, core.storage.rawBucket))],
     };
     const checkProcessed = { Sid: 'CheckProcessedRecords', Effect: 'Allow', Action: 's3:GetObject', Resource: processed };
+    const trackDeliveries = {
+      Sid: 'TrackFailureDeliveries',
+      Effect: 'Allow',
+      Action: ['s3:GetObject', 's3:PutObject'],
+      Resource: raw('account_number=*/case_number=*/failure-deliveries/*'),
+    };
+    const sendFailures = { Sid: 'SendFailureRecords', Effect: 'Allow', Action: 'sqs:SendMessage', Resource: arnOf(logicalId(core, core.queues.workflowFailures)) };
     const statementsFor = (roleId: string): unknown[] =>
       iamPolicyStatements(template)
         .filter(({ roles }) => JSON.stringify(roles) === JSON.stringify([{ Ref: roleId }]))
@@ -264,6 +272,8 @@ describe('CaseAnalysis', () => {
         Resource: arnOf(logicalId(core, core.queues.summary.queue)),
       },
       { Sid: 'ClaimCaseOwnership', Effect: 'Allow', Action: ['s3:GetObject', 's3:PutObject'], Resource: raw('account_number=*/case_number=*/workflow.json') },
+      trackDeliveries,
+      { Sid: 'RecordRunCases', Effect: 'Allow', Action: 's3:PutObject', Resource: raw('runs/*/cases/*') },
       checkProcessed,
       listBuckets,
       { Sid: 'StartCaseAnalysis', Effect: 'Allow', Action: 'states:StartExecution', Resource: stateMachineArn },
@@ -282,7 +292,9 @@ describe('CaseAnalysis', () => {
       listBuckets,
     ]);
     expect(statementsFor(logicalId(core, failureFunction.role))).toEqual([
-      { Sid: 'SendFailureRecords', Effect: 'Allow', Action: 'sqs:SendMessage', Resource: arnOf(logicalId(core, core.queues.workflowFailures)) },
+      sendFailures,
+      trackDeliveries,
+      { Sid: 'ListCaseBuckets', Effect: 'Allow', Action: 's3:ListBucket', Resource: arnOf(logicalId(core, core.storage.rawBucket)) },
     ]);
     expect(statementsFor(logicalId(core, cleanupFunction.role))).toEqual([
       { Sid: 'ReadCaseOwnership', Effect: 'Allow', Action: 's3:GetObject', Resource: raw('account_number=*') },
@@ -293,6 +305,8 @@ describe('CaseAnalysis', () => {
         Resource: ['communications.json', 'data.json', 'workflow.json'].map((file) => raw(`account_number=*/case_number=*/${file}`)),
       },
       { Sid: 'KeepCleanupCursor', Effect: 'Allow', Action: ['s3:DeleteObject', 's3:GetObject', 's3:PutObject'], Resource: raw('cleanup-state/*') },
+      trackDeliveries,
+      sendFailures,
       checkProcessed,
       listBuckets,
       { Sid: 'ListActiveExecutions', Effect: 'Allow', Action: 'states:ListExecutions', Resource: stateMachineArn },
@@ -329,6 +343,7 @@ describe('CaseAnalysis', () => {
     expect([constant(cleanup, 'RAW_FILE'), constant(cleanup, 'COMMUNICATIONS_FILE'), constant(workflow, 'MARKER_FILE')]).toEqual([...CLEANUP_RESETTABLE_FILES]);
     expect(cleanup).toMatch(/^RESETTABLE_FILES: Final = \(RAW_FILE, COMMUNICATIONS_FILE, MARKER_FILE\)$/m);
     expect(TERMINAL_MARKER_PATTERN.endsWith(`/${constant(python('common/failures.py'), 'TERMINAL_MARKER_FILE')}`)).toBe(true);
+    expect(FAILURE_DELIVERY_PATTERN).toBe(`account_number=*/case_number=*/${constant(python('common/failure_delivery.py'), 'DELIVERY_DIR')}/*`);
   });
 
   test('passes cdk-nag with specific acknowledgements only', () => {
@@ -362,6 +377,9 @@ describe('CaseAnalysis', () => {
         ['CaseAnalysis/UpdateCaseMetadataAccess', rawFinding('account_number=*')],
         ['CaseAnalysis/UpdateCaseMetadataAccess', processedFinding],
         ['CaseAnalysis/WorkflowStarterAccess', rawFinding('account_number=*/case_number=*/workflow.json')],
+        ['CaseAnalysis/WorkflowStarterAccess', rawFinding(FAILURE_DELIVERY_PATTERN)],
+        ['CaseAnalysis/WorkflowStarterAccess', rawFinding('runs/*/cases/*')],
+        ['CaseAnalysis/HandleFailureAccess', rawFinding(FAILURE_DELIVERY_PATTERN)],
         ['CaseAnalysis/WorkflowStarterAccess', processedFinding],
         ['CaseAnalysis/WorkflowStarterAccess', executionsFinding],
         ['CaseAnalysis/CaseCleanupAccess', rawFinding('account_number=*')],
@@ -369,6 +387,7 @@ describe('CaseAnalysis', () => {
         ['CaseAnalysis/CaseCleanupAccess', rawFinding('account_number=*/case_number=*/communications.json')],
         ['CaseAnalysis/CaseCleanupAccess', rawFinding('account_number=*/case_number=*/workflow.json')],
         ['CaseAnalysis/CaseCleanupAccess', rawFinding('cleanup-state/*')],
+        ['CaseAnalysis/CaseCleanupAccess', rawFinding(FAILURE_DELIVERY_PATTERN)],
         ['CaseAnalysis/CaseCleanupAccess', processedFinding],
         ['CaseAnalysis/CaseCleanupAccess', executionsFinding],
         ['CaseAnalysis/StateMachine/Role', 'AwsSolutions-IAM5[Resource::*]'],

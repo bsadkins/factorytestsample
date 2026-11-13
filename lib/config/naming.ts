@@ -33,6 +33,12 @@ export interface ResourceNames {
   readonly handleFailureFunction: string;
   readonly caseCleanupFunction: string;
   readonly caseCleanupSchedule: string;
+  readonly runCompletionFunction: string;
+  readonly runCompletionSchedule: string;
+  readonly alarmTopic: string;
+  readonly dashboard: string;
+  /** Prefix of every CloudWatch alarm name, followed by the alarm's purpose. */
+  readonly alarmPrefix: string;
   readonly glueDatabase: string;
   readonly glueTable: string;
   readonly crawler: string;
@@ -67,6 +73,11 @@ export function resourceNames(config: Pick<CaseInsightsConfig, 'uniqueId'>): Res
     handleFailureFunction: `Lambda-HandleFailure-${id}`,
     caseCleanupFunction: `Lambda-CaseCleanup-${id}`,
     caseCleanupSchedule: `CaseInsights-CaseCleanup-${id}`,
+    runCompletionFunction: `Lambda-RunCompletion-${id}`,
+    runCompletionSchedule: `CaseInsights-RunCompletion-${id}`,
+    alarmTopic: `CaseInsights-Alarms-${id}`,
+    dashboard: `CaseInsights-${id}`,
+    alarmPrefix: `CaseInsights-${id}-`,
     // Glue database names allow only lower-case letters, digits and underscores.
     glueDatabase: `case_insights_${id.replace(/-/g, '_')}`,
     glueTable: 'case_summary',

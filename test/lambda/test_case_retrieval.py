@@ -111,8 +111,12 @@ class Env:
     def annotation_messages(self) -> list[dict[str, Any]]:
         return self.kit.drain(self.sqs, self.queue_url)
 
-    def raw_keys(self) -> list[str]:
-        return sorted(o["Key"] for o in self.s3.list_objects_v2(Bucket=RAW).get("Contents", []))
+    def raw_keys(self, prefix: str = "account_number=") -> list[str]:
+        listing = self.s3.list_objects_v2(Bucket=RAW, Prefix=prefix)
+        return sorted(o["Key"] for o in listing.get("Contents", []))
+
+    def account_marker(self, account: str, run_id: str = RUN) -> dict[str, Any]:
+        return self.raw(f"runs/{run_id}/accounts/{account}.json")
 
     def raw(self, key: str) -> dict[str, Any]:
         document: dict[str, Any] = json.loads(
@@ -205,6 +209,14 @@ def test_pages_all_cases_and_queues_only_new_resolved_cases_in_the_window(env: E
         }
         for d in new
     ]
+    assert env.account_marker(A) == {
+        "schemaVersion": 1,
+        "runId": RUN,
+        "accountId": A,
+        "outcome": "retrieved",
+        "cases": new,
+        "skipReason": None,
+    }
     assert env.raw(raw_key(A, "1001")) == {
         "schemaVersion": 1,
         "accountId": A,
@@ -281,6 +293,16 @@ def test_inaccessible_and_unentitled_accounts_are_counted_skips_and_reevaluated_
         "CasesAlreadyProcessed": 0,
         "CasesRetrieved": 1,
     }
+
+    # Skipped accounts are settled for the run, so run completion does not wait for them.
+    for account, reason in ((B, "AccessDenied"), (C, "SubscriptionRequired"), (D, "AccessDenied")):
+        marker = env.account_marker(account)
+        assert (marker["outcome"], marker["skipReason"], marker["cases"]) == (
+            "skipped",
+            reason,
+            [],
+        )
+    assert env.account_marker(A)["cases"] == ["3001"]
 
     # A redelivery within the same run replays the recorded skip without calling AWS again.
     calls = len(env.sts.calls)
@@ -369,7 +391,7 @@ def test_support_server_error_fails_the_record_without_logging_error_text(
     response = env.handle(message(A))
 
     assert response == {"batchItemFailures": [{"itemIdentifier": "m0"}]}
-    assert env.raw_keys() == []
+    assert env.raw_keys("") == []
     logs = env.kit.logs()
     assert '"error_type":"InternalServerError","error_code":"InternalServerError"' in logs
     assert "SENTINEL-ERROR-TEXT" not in logs + caplog.text
@@ -427,3 +449,20 @@ def test_account_with_no_eligible_cases_succeeds_without_messages(env: Env) -> N
     assert env.handle(message(A)) == {"batchItemFailures": []}
     assert env.annotation_messages() == []
     assert env.raw_keys() == []
+    # A zero-case account is settled for the run.
+    assert env.account_marker(A)["cases"] == []
+    assert env.account_marker(A)["outcome"] == "retrieved"
+
+
+def test_account_is_not_settled_until_every_reference_is_queued(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.support.stub(A).add_response("describe_cases", {"cases": [case(A, "9001")]}, params())
+
+    def failing_send(*_: Any, **__: Any) -> int:  # noqa: ANN401
+        raise SqsSendError(1, ("InternalError",))
+
+    monkeypatch.setattr(app, "send_messages", failing_send)
+
+    assert env.handle(message(A)) == {"batchItemFailures": [{"itemIdentifier": "m0"}]}
+    assert env.raw_keys("runs/") == []
