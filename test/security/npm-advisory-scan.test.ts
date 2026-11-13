@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
+import { ownedTempDir } from '../helpers/temp-dirs';
 
 interface Location { location: string; name: string; version: string; dev: boolean }
 interface Finding { name: string; id: number; severity: string; url: string; range: string; affected: Location[] }
@@ -77,7 +77,7 @@ describe('npm advisory scanner', () => {
   });
 
   test('exception files require a specific reason and review date', () => {
-    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'scan-')), 'exceptions.json');
+    const file = path.join(ownedTempDir('scan-'), 'exceptions.json');
     fs.writeFileSync(file, JSON.stringify({ exceptions: [exception({ reason: 'ok' })] }));
     expect(() => scanner.readExceptions(file)).toThrow(/Malformed advisory exception/);
   });

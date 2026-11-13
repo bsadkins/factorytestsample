@@ -1,14 +1,15 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { App, Stack, Validations } from 'aws-cdk-lib';
 import type { Template } from 'aws-cdk-lib/assertions';
 import type { IConstruct } from 'constructs';
 import { type CaseInsightsConfig, enableNagChecks, parseConfig, REPO_ROOT } from '../../lib';
 import { type JsonObject, minimalConfig } from '../config/helpers';
+import { ownedTempDir } from './temp-dirs';
 
+/** A fresh directory for a cloud assembly or fixture, removed after the current test file. */
 export function tempOutdir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'case-insights-cdk-'));
+  return ownedTempDir('case-insights-cdk-');
 }
 
 /**

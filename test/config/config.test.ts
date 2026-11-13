@@ -1,5 +1,4 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   CONFIG_DIR,
@@ -12,6 +11,7 @@ import {
   queueVisibilityTimeoutSeconds,
   resolveEnvironmentName,
 } from '../../lib';
+import { ownedTempDir } from '../helpers/temp-dirs';
 import { minimalConfig, readConfigJson, type JsonObject } from './helpers';
 
 function issuesFor(raw: unknown): readonly string[] {
@@ -234,13 +234,13 @@ describe('environment selection', () => {
   });
 
   test('rejects a file whose environment does not match the requested one', () => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'case-insights-config-'));
+    const configDir = ownedTempDir('case-insights-config-');
     fs.writeFileSync(path.join(configDir, 'prod.json'), JSON.stringify(readConfigJson('dev.json')));
     expect(() => loadEnvironmentConfig('prod', { configDir })).toThrow(/\/environment is "dev" but the file was loaded for -c env=prod/);
   });
 
   test('reports unreadable and malformed files as configuration errors', () => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'case-insights-config-'));
+    const configDir = ownedTempDir('case-insights-config-');
     expect(() => loadEnvironmentConfig('dev', { configDir })).toThrow(/cannot read file/);
     fs.writeFileSync(path.join(configDir, 'dev.json'), '{ "uniqueId": ');
     expect(() => loadEnvironmentConfig('dev', { configDir })).toThrow(/invalid JSON/);

@@ -1,5 +1,4 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { Duration } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
@@ -8,9 +7,10 @@ import { Code, LayerVersion } from 'aws-cdk-lib/aws-lambda';
 import type { Stack } from 'aws-cdk-lib';
 import { type CaseInsightsConfig, PipelineFunction, type PipelineFunctionProps, SAFE_POWERTOOLS_ENVIRONMENT } from '../../lib';
 import { acknowledgedRules, iamPolicyStatements, nagApp, synthError, testApp, testConfig, testStack } from '../helpers/cdk';
+import { ownedTempDir } from '../helpers/temp-dirs';
 
 function handlerDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'case-insights-handler-'));
+  const dir = ownedTempDir('case-insights-handler-');
   fs.writeFileSync(path.join(dir, 'app.py'), 'def handler(event, context):\n    return None\n');
   return dir;
 }
@@ -18,7 +18,7 @@ function handlerDir(): string {
 let layerCount = 0;
 
 function layer(stack: Stack): LayerVersion {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'case-insights-layer-'));
+  const dir = ownedTempDir('case-insights-layer-');
   fs.mkdirSync(path.join(dir, 'python'));
   fs.writeFileSync(path.join(dir, 'python', 'placeholder.py'), '');
   layerCount += 1;
