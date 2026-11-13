@@ -129,6 +129,9 @@ class Harness:
         result = app.handler(event, self.context())
         assert set(result) == {"statusCode", "headers", "body", "isBase64Encoded"}
         assert result["isBase64Encoded"] is False
+        # The Python Lambda runtime serialises the proxy response with ensure_ascii=False and
+        # sends it as UTF-8, so every response must survive that encoding.
+        json.dumps(result, ensure_ascii=False).encode("utf-8")
         return Reply(result["statusCode"], result["headers"], result["body"])
 
     def rpc(self, method: str, params: object = None, request_id: object = 1, **kw: Any) -> Reply:  # noqa: ANN401
@@ -170,12 +173,33 @@ def initialize_params(version: object = LATEST_PROTOCOL_VERSION) -> dict[str, An
     }
 
 
+def assert_error_response_schema(document: dict[str, Any]) -> None:
+    """MCP 2025-11-25 schema.ts: `JSONRPCErrorResponse { jsonrpc: "2.0"; id?: RequestId;
+    error: Error }` with `RequestId = string | number`. The id is optional but never null
+    (basic/index: error responses carry the request's ID "except in error cases where the ID
+    could not be read due a malformed request")."""
+    assert set(document) <= {"jsonrpc", "id", "error"}
+    assert document["jsonrpc"] == "2.0"
+    if "id" in document:
+        request_id = document["id"]
+        assert isinstance(request_id, (str, int))
+        assert not isinstance(request_id, bool)
+    error = document["error"]
+    assert isinstance(error["code"], int)
+    assert not isinstance(error["code"], bool)
+    assert isinstance(error["message"], str)
+
+
 def assert_error(reply: Reply, status: int, code: int, request_id: object) -> dict[str, Any]:
+    """`request_id=None` means the request ID could not be read, so the error has no `id`."""
     assert reply.status == status, reply.body
     assert reply.headers["Content-Type"] == "application/json"
     document = reply.json()
-    assert document["jsonrpc"] == "2.0"
-    assert document["id"] == request_id
+    assert_error_response_schema(document)
+    if request_id is None:
+        assert "id" not in document
+    else:
+        assert document["id"] == request_id
     assert "result" not in document
     assert document["error"]["code"] == code
     assert isinstance(document["error"]["message"], str)
@@ -333,6 +357,8 @@ def test_unknown_methods_are_method_not_found(harness: Harness, method: str) -> 
         {"jsonrpc": "2.0", "method": "notifications/roots/list_changed"},
         {"jsonrpc": "2.0", "id": 5, "result": {}},
         {"jsonrpc": "2.0", "id": "x", "error": {"code": -32601, "message": "nope"}},
+        # 2025-11-25 JSONRPCErrorResponse: a client error response may omit the id.
+        {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}},
     ],
 )
 def test_notifications_and_responses_get_no_jsonrpc_response(
@@ -358,7 +384,10 @@ def test_unacceptable_notifications_are_rejected_without_work(
 ) -> None:
     reply = harness.post(message)
     assert reply.status == 400
-    assert reply.json()["id"] is None
+    # 2025-11-25 transports: a rejected notification's body "MAY comprise a JSON-RPC error
+    # response that has no id".
+    assert_error_response_schema(reply.json())
+    assert "id" not in reply.json()
     assert reply.json()["error"]["code"] in {INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS}
     assert harness.kit.external_calls() == 0
 
@@ -382,6 +411,36 @@ def test_malformed_json_is_a_parse_error(harness: Harness, body: str) -> None:
     reply = harness.post(body, encode=False)
     error = assert_error(reply, 400, PARSE_ERROR, None)
     assert "data" not in error or SENTINEL not in json.dumps(error)
+
+
+def test_unreadable_id_error_matches_the_pinned_schema_exactly(harness: Harness) -> None:
+    """MCP 2025-11-25 schema.ts defines `JSONRPCErrorResponse.id?: RequestId` where
+    `RequestId = string | number`: an error whose request ID cannot be read omits `id`;
+    `id: null` is not valid under the pinned revision."""
+    headers = {**JSON_HEADERS, "MCP-Protocol-Version": LATEST_PROTOCOL_VERSION}
+    reply = harness.post("{", encode=False, headers=headers)
+    assert reply.status == 400
+    assert reply.json() == {
+        "jsonrpc": "2.0",
+        "error": {"code": PARSE_ERROR, "message": "Parse error"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("headers", "status"),
+    [
+        ({**JSON_HEADERS, "Origin": "https://attacker.example"}, 403),
+        ({**JSON_HEADERS, "Content-Type": "text/plain"}, 415),
+        ({**JSON_HEADERS, "Accept": "text/html"}, 406),
+    ],
+)
+def test_transport_rejections_carry_no_id(
+    harness: Harness, headers: dict[str, str], status: int
+) -> None:
+    """2025-11-25 transports: the 403 for an invalid Origin "MAY comprise a JSON-RPC error
+    response that has no id"; the other pre-dispatch rejections follow the same shape."""
+    reply = harness.rpc("ping", request_id=21, headers=headers)
+    assert_error(reply, status, INVALID_REQUEST, None)
 
 
 def test_parse_errors_do_not_echo_the_body(harness: Harness) -> None:
@@ -415,6 +474,11 @@ def test_parse_errors_do_not_echo_the_body(harness: Harness) -> None:
         ({"jsonrpc": "2.0", "id": 1, "method": "ping", "result": {}}, 1),
         ({"jsonrpc": "2.0", "result": {}}, None),
         ({"jsonrpc": "2.0", "id": 1, "error": "bad"}, 1),
+        # 2025-11-25 schema.ts: request, result and error ids are RequestId, never null.
+        ({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "m"}}, None),
+        ({"jsonrpc": "2.0", "id": None, "result": {}}, None),
+        ({"jsonrpc": "2.0", "error": "bad"}, None),
+        ({"jsonrpc": "2.0", "error": {"code": -32600, "message": "m"}, "data": 1}, None),
     ],
 )
 def test_invalid_envelopes_are_invalid_requests(
@@ -803,6 +867,57 @@ def test_invalid_utf8_is_a_parse_error(harness: Harness) -> None:
 def test_lone_surrogate_in_body_is_a_parse_error(harness: Harness) -> None:
     body = '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"_meta":{"x":"\ud800"}}}'
     assert_error(harness.post(body, encode=False), 400, PARSE_ERROR, None)
+
+
+# Raw strings: the wire bytes are ASCII and carry literal \uXXXX escapes, which JSON decodes to
+# unpaired surrogate code points that cannot be encoded as UTF-8.
+ESCAPED_LONE_SURROGATE_BODIES = [
+    r'{"jsonrpc":"2.0","id":"\ud800","method":"ping"}',
+    r'{"jsonrpc":"2.0","id":"\udfff","method":"ping"}',
+    r'{"jsonrpc":"2.0","id":"call-\ud83d","method":"ping"}',
+    r'{"jsonrpc":"2.0","id":"\ude00\ud83d","method":"ping"}',
+    r'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query_athena",'
+    r'"arguments":{"sql":"SELECT \ud800 AS n FROM case_summary"}}}',
+    r'{"jsonrpc":"2.0","id":1,"method":"ping","params":{"_meta":{"\udc00":1}}}',
+    r'{"jsonrpc":"2.0","method":"notifications/initialized","params":{"x":["\ud800"]}}',
+    r'{"jsonrpc":"2.0","id":"\ud800","error":{"code":-32600,"message":"m"}}',
+    r'"\ud800"',
+]
+
+
+@pytest.mark.parametrize("body", ESCAPED_LONE_SURROGATE_BODIES)
+@pytest.mark.parametrize("b64", [False, True])
+def test_escaped_lone_surrogates_are_invalid_requests(
+    harness: Harness, body: str, b64: bool
+) -> None:
+    """MCP 2025-11-25 transports: "JSON-RPC messages MUST be UTF-8 encoded"; text holding an
+    unpaired surrogate has no UTF-8 encoding, so it is refused without echoing the id."""
+    assert body.isascii()
+    assert "\\u" in body
+    reply = harness.post(body, encode=False, b64=b64)
+    assert_error(reply, 400, INVALID_REQUEST, None)
+    reply.body.encode("utf-8")
+    assert harness.kit.external_calls() == 0
+
+
+def test_escaped_surrogate_pair_id_is_preserved(harness: Harness) -> None:
+    reply = harness.post(r'{"jsonrpc":"2.0","id":"\ud83d\ude00","method":"ping"}', encode=False)
+    assert reply.json() == {"jsonrpc": "2.0", "id": "\U0001f600", "result": {}}
+    reply.body.encode("utf-8")
+
+
+def test_unpaired_surrogate_in_model_output_still_yields_a_utf8_response(
+    harness: Harness,
+) -> None:
+    # json.dumps escapes the surrogate, so the stubbed InvokeModel body is valid ASCII JSON that
+    # decodes to an unpaired surrogate, as an escaped one in a real model reply would.
+    harness.kit.bedrock.reply("Invented \ud800 analysis.")
+    reply = harness.call("analyze_with_bedrock", {"question": "q"}, request_id=36)
+    reply.body.encode("utf-8")
+    result = tool_result(reply, 36)
+    assert result["isError"] is False
+    structured = json.dumps(result["structuredContent"], ensure_ascii=False)
+    assert "Invented \ud800 analysis." in structured
 
 
 # Telemetry ------------------------------------------------------------------------------------

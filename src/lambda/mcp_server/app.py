@@ -8,7 +8,9 @@ when a tool actually runs, so `initialize` and `tools/list` never need them.
 
 Logs, traces and metrics carry bounded labels only: the method (known names or `unknown`), the
 tool name when it is registered, the outcome, status and error code. Request bodies, IDs,
-arguments, SQL, case content and model replies are never logged.
+arguments, SQL, case content and model replies are never logged. Exceptions recorded on trace
+subsegments, including the automatic Athena and Bedrock SDK subsegments, keep their type but
+not their message (`common.tracing`).
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Final
 from aws_lambda_powertools import Logger, Metrics, Tracer
 from aws_lambda_powertools.metrics import MetricUnit
 from common.safe_logging import error_fields
+from common.tracing import withhold_exception_messages
 from mcp_tools.context import McpClients, McpSettings, ToolContext
 from mcp_tools.registry import build_registry
 
@@ -31,6 +34,7 @@ if TYPE_CHECKING:
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+withhold_exception_messages()
 
 REGISTRY: Final = build_registry()
 

@@ -19,7 +19,7 @@ Metrics are in the `SupportCaseInsights` namespace with a single `service` dimen
    | limit 100
    ```
 
-4. Use the X-Ray trace of a failing invocation to see which AWS call failed. Traces hold no request or response payloads.
+4. Use the X-Ray trace of a failing invocation to see which AWS call failed. Traces hold no request or response payloads. The MCP function's traces record the type of each exception, such as `InvalidRequestException`, but not its message, because AWS error messages can repeat SQL or case text; its logs give the controlled error code.
 5. Fix the cause, then let the next scheduled run retry: completed cases are never processed again, and unfinished cases are retried by the next run or reset by daily cleanup.
 
 ## Lambda errors

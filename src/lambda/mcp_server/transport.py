@@ -10,6 +10,10 @@ Checks run before any parsing or dispatch, in this order: method, ambiguous repe
 size. The 32 KiB limit applies to the request's actual bytes: the UTF-8 encoding of a text body,
 or the decoded bytes of a base64 body, so multibyte characters cannot slip past a character
 count. Oversized base64 is refused from its encoded length without being decoded.
+
+MCP requires UTF-8 JSON-RPC messages. A body made only of ASCII can still decode, through JSON
+unicode escapes, to text containing an unpaired surrogate, which has no UTF-8 encoding; such a
+message is refused before classification, so no part of it is echoed or reaches a tool.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Final
@@ -32,6 +37,8 @@ _SINGLE_VALUED: Final = ("content-type", "accept", "origin", PROTOCOL_VERSION_HE
 _ACCEPTABLE_MEDIA_RANGES: Final = frozenset({"application/json", "application/*", "*/*"})
 _UTF8_CHARSETS: Final = frozenset({"utf-8", "utf8"})
 _BASE_HEADERS: Final = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+# The JSON decoder joins valid escaped pairs into one code point, so any surrogate left is unpaired.
+_SURROGATE: Final = re.compile("[\ud800-\udfff]")
 
 
 class Rejected(Exception):  # noqa: N818
@@ -148,6 +155,21 @@ def decode_json(data: bytes) -> object:
         raise _reject(400, PARSE_ERROR, "Parse error") from None
 
 
+def _has_unpaired_surrogate(document: object) -> bool:
+    pending = [document]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, str):
+            if _SURROGATE.search(value):
+                return True
+        elif isinstance(value, dict):
+            pending.extend(value)
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    return False
+
+
 def read_request(event: object) -> McpHttpRequest:
     """Validate the API Gateway event and classify its JSON-RPC message; raise `Rejected`."""
     if not isinstance(event, dict):
@@ -158,11 +180,28 @@ def read_request(event: object) -> McpHttpRequest:
         raise rejected
     protocol_header = _check_headers(_headers(event))
     document = decode_json(body_bytes(event))
+    if _has_unpaired_surrogate(document):
+        raise _reject(400, INVALID_REQUEST, "Request is not valid UTF-8 text")
     try:
         message = classify(document)
     except InvalidMessage as exc:
         raise Rejected(protocol_error(400, exc.request_id, INVALID_REQUEST, exc.message)) from None
     return McpHttpRequest(message=message, protocol_header=protocol_header)
+
+
+def _json_body(response: Mapping[str, Any]) -> str:
+    """Compact JSON that the Lambda runtime can always send as UTF-8.
+
+    Requests with unpaired surrogates are refused, but a downstream value (for example an escaped
+    surrogate in a model reply) can still carry one; escaping to ASCII keeps such a body valid
+    JSON instead of failing in the runtime's UTF-8 encoding.
+    """
+    body = json.dumps(response, ensure_ascii=False, separators=(",", ":"))
+    try:
+        body.encode("utf-8")
+    except UnicodeEncodeError:
+        body = json.dumps(response, ensure_ascii=True, separators=(",", ":"))
+    return body
 
 
 def http_response(outcome: Outcome) -> dict[str, Any]:
@@ -173,7 +212,7 @@ def http_response(outcome: Outcome) -> dict[str, Any]:
     body = ""
     if outcome.response is not None:
         headers["Content-Type"] = "application/json"
-        body = json.dumps(outcome.response, ensure_ascii=False, separators=(",", ":"))
+        body = _json_body(outcome.response)
     return {
         "statusCode": outcome.status,
         "headers": headers,

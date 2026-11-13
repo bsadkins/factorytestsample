@@ -1,9 +1,11 @@
 """JSON-RPC 2.0 message classification and response builders for the MCP server.
 
-Messages follow the MCP rules on top of JSON-RPC 2.0: one message per HTTP body (no batches),
-request IDs are strings or integers and never null, `params` is an object, and envelopes carry
-no members beyond those JSON-RPC defines. Error messages are fixed strings; they never echo
-method names, IDs, parameters or any other client-supplied value.
+Messages follow the MCP 2025-11-25 schema on top of JSON-RPC 2.0: one message per HTTP body (no
+batches), request IDs are strings or integers and never null, `params` is an object, and
+envelopes carry no members beyond those JSON-RPC defines. `JSONRPCErrorResponse.id` is optional
+but never null, so an error whose request ID could not be read omits `id` instead of sending
+`id: null`, and a client error response without `id` is accepted. Error messages are fixed
+strings; they never echo method names, IDs, parameters or any other client-supplied value.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ _REQUEST_MEMBERS: Final = frozenset({"jsonrpc", "id", "method", "params"})
 _NOTIFICATION_MEMBERS: Final = frozenset({"jsonrpc", "method", "params"})
 _RESULT_MEMBERS: Final = frozenset({"jsonrpc", "id", "result"})
 _ERROR_MEMBERS: Final = frozenset({"jsonrpc", "id", "error"})
+_ID_LESS_ERROR_MEMBERS: Final = frozenset({"jsonrpc", "error"})
 
 RequestId = str | int
 
@@ -45,7 +48,8 @@ class Message:
     """A classified JSON-RPC message.
 
     `kind` is `request` (has an ID and expects a response), `notification` (no ID, no response)
-    or `response` (a client's reply to a server request; accepted and ignored).
+    or `response` (a client's reply to a server request, or an ID-less client error response;
+    accepted and ignored).
     """
 
     kind: Literal["request", "notification", "response"]
@@ -96,6 +100,10 @@ def _classify_call(document: dict[str, Any], request_id: RequestId | None) -> Me
 
 def _classify_response(document: dict[str, Any], request_id: RequestId | None) -> Message:
     members = frozenset(document)
+    if members == _ID_LESS_ERROR_MEMBERS:
+        if not _is_error_object(document["error"]):
+            raise InvalidMessage("Response error must be an error object")
+        return Message(kind="response", method=None, request_id=None, params=None, has_params=False)
     if members in (_RESULT_MEMBERS, _ERROR_MEMBERS):
         if request_id is None:
             raise InvalidMessage("Response id must be a string or an integer")
@@ -128,7 +136,12 @@ def error_response(
     message: str,
     data: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """A JSON-RPC error response; without a readable request ID it has no `id` member."""
     error: dict[str, Any] = {"code": code, "message": message}
     if data is not None:
         error["data"] = dict(data)
-    return {"jsonrpc": "2.0", "id": request_id, "error": error}
+    response: dict[str, Any] = {"jsonrpc": "2.0"}
+    if request_id is not None:
+        response["id"] = request_id
+    response["error"] = error
+    return response
