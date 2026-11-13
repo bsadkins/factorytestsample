@@ -69,6 +69,37 @@ export function asArray<T>(value: T | T[] | undefined): T[] {
   return Array.isArray(value) ? value : [value];
 }
 
+/**
+ * The ARN EventBridge Scheduler sends as aws:SourceArn when it assumes the execution role of a
+ * schedule in the default group. Scheduler always sends the schedule group ARN, never the ARN of an
+ * individual schedule.
+ */
+export function defaultScheduleGroupArn(config: CaseInsightsConfig): string {
+  return `arn:aws:scheduler:${config.region}:${config.managementAccountId}:schedule-group/default`;
+}
+
+/** The single trust statement of a schedule execution role in the deployment's default schedule group. */
+export function schedulerTrustStatement(config: CaseInsightsConfig): PolicyStatementJson {
+  return {
+    Action: 'sts:AssumeRole',
+    Effect: 'Allow',
+    Principal: { Service: 'scheduler.amazonaws.com' },
+    Condition: {
+      StringEquals: { 'aws:SourceAccount': config.managementAccountId, 'aws:SourceArn': defaultScheduleGroupArn(config) },
+    },
+  };
+}
+
+/** The trust policy statements of one AWS::IAM::Role. */
+export function trustStatements(template: Template, roleLogicalId: string): PolicyStatementJson[] {
+  const roles = template.findResources('AWS::IAM::Role') as Record<string, { Properties: { AssumeRolePolicyDocument: { Statement: PolicyStatementJson[] } } }>;
+  const role = roles[roleLogicalId];
+  if (role === undefined) {
+    throw new Error(`role ${roleLogicalId} not found`);
+  }
+  return role.Properties.AssumeRolePolicyDocument.Statement;
+}
+
 /** Every statement of every AWS::IAM::Policy, keyed by the policy's logical ID. */
 export function iamPolicyStatements(template: Template): { logicalId: string; roles: unknown[]; statement: PolicyStatementJson }[] {
   const policies = template.findResources('AWS::IAM::Policy') as Record<

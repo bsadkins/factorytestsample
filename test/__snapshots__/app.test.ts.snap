@@ -281,11 +281,9 @@ exports[`Support Case Insights app dev core stack template snapshot 1`] = `
             {
               "Action": "sts:AssumeRole",
               "Condition": {
-                "ArnLike": {
-                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule/default/CaseInsights-AccountLookup-scidev",
-                },
                 "StringEquals": {
                   "aws:SourceAccount": "111111111111",
+                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule-group/default",
                 },
               },
               "Effect": "Allow",
@@ -1601,11 +1599,9 @@ def sort_filter_rules(json_obj):
             {
               "Action": "sts:AssumeRole",
               "Condition": {
-                "ArnLike": {
-                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule/default/CaseInsights-CaseCleanup-scidev",
-                },
                 "StringEquals": {
                   "aws:SourceAccount": "111111111111",
+                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule-group/default",
                 },
               },
               "Effect": "Allow",
@@ -2312,6 +2308,7 @@ def sort_filter_rules(json_obj):
         "Environment": {
           "Variables": {
             "BEDROCK_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "CASE_INSIGHTS_TEMPLATES_DIR": "/opt/templates",
             "CASE_INSIGHTS_UNIQUE_ID": "scidev",
             "POWERTOOLS_LOGGER_LOG_EVENT": "false",
             "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
@@ -2333,6 +2330,9 @@ def sort_filter_rules(json_obj):
         "Layers": [
           {
             "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+          {
+            "Ref": "SharedLayersTemplatesLayer1DC6F067",
           },
         ],
         "LoggingConfig": {
@@ -3744,6 +3744,25 @@ def sort_filter_rules(json_obj):
                 "Ref": "ObservabilityAlarmTopicF724909D",
               },
               "Sid": "AllowPublishThroughSSLOnly",
+            },
+            {
+              "Action": "sns:Publish",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:cloudwatch:us-east-1:111111111111:alarm:CaseInsights-scidev-*",
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "111111111111",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudwatch.amazonaws.com",
+              },
+              "Resource": {
+                "Ref": "ObservabilityAlarmTopicF724909D",
+              },
+              "Sid": "AllowCloudWatchAlarmsToPublish",
             },
           ],
           "Version": "2012-10-17",
@@ -5338,11 +5357,9 @@ def sort_filter_rules(json_obj):
             {
               "Action": "sts:AssumeRole",
               "Condition": {
-                "ArnLike": {
-                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule/default/CaseInsights-RunCompletion-scidev",
-                },
                 "StringEquals": {
                   "aws:SourceAccount": "111111111111",
+                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule-group/default",
                 },
               },
               "Effect": "Allow",
@@ -7571,11 +7588,9 @@ exports[`Support Case Insights app prod core stack template snapshot 1`] = `
             {
               "Action": "sts:AssumeRole",
               "Condition": {
-                "ArnLike": {
-                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule/default/CaseInsights-AccountLookup-sciprod",
-                },
                 "StringEquals": {
                   "aws:SourceAccount": "111111111111",
+                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule-group/default",
                 },
               },
               "Effect": "Allow",
@@ -8891,11 +8906,9 @@ def sort_filter_rules(json_obj):
             {
               "Action": "sts:AssumeRole",
               "Condition": {
-                "ArnLike": {
-                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule/default/CaseInsights-CaseCleanup-sciprod",
-                },
                 "StringEquals": {
                   "aws:SourceAccount": "111111111111",
+                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule-group/default",
                 },
               },
               "Effect": "Allow",
@@ -9602,6 +9615,7 @@ def sort_filter_rules(json_obj):
         "Environment": {
           "Variables": {
             "BEDROCK_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "CASE_INSIGHTS_TEMPLATES_DIR": "/opt/templates",
             "CASE_INSIGHTS_UNIQUE_ID": "sciprod",
             "POWERTOOLS_LOGGER_LOG_EVENT": "false",
             "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
@@ -9623,6 +9637,9 @@ def sort_filter_rules(json_obj):
         "Layers": [
           {
             "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+          {
+            "Ref": "SharedLayersTemplatesLayer1DC6F067",
           },
         ],
         "LoggingConfig": {
@@ -10978,6 +10995,25 @@ def sort_filter_rules(json_obj):
                 "Ref": "ObservabilityAlarmTopicF724909D",
               },
               "Sid": "AllowPublishThroughSSLOnly",
+            },
+            {
+              "Action": "sns:Publish",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:cloudwatch:us-east-1:111111111111:alarm:CaseInsights-sciprod-*",
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "111111111111",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudwatch.amazonaws.com",
+              },
+              "Resource": {
+                "Ref": "ObservabilityAlarmTopicF724909D",
+              },
+              "Sid": "AllowCloudWatchAlarmsToPublish",
             },
           ],
           "Version": "2012-10-17",
@@ -12582,11 +12618,9 @@ def sort_filter_rules(json_obj):
             {
               "Action": "sts:AssumeRole",
               "Condition": {
-                "ArnLike": {
-                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule/default/CaseInsights-RunCompletion-sciprod",
-                },
                 "StringEquals": {
                   "aws:SourceAccount": "111111111111",
+                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule-group/default",
                 },
               },
               "Effect": "Allow",

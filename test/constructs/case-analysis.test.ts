@@ -16,7 +16,17 @@ import {
   resourceNames,
   STARTER_BATCH_SIZE,
 } from '../../lib';
-import { acknowledgedRules, asArray, iamPolicyStatements, nagApp, synthError, testApp, testConfig } from '../helpers/cdk';
+import {
+  acknowledgedRules,
+  asArray,
+  iamPolicyStatements,
+  nagApp,
+  schedulerTrustStatement,
+  synthError,
+  testApp,
+  testConfig,
+  trustStatements,
+} from '../helpers/cdk';
 
 function coreStack(overrides: Parameters<typeof testConfig>[0] = {}): CaseInsightsCoreStack {
   const config = testConfig(overrides);
@@ -201,7 +211,7 @@ describe('CaseAnalysis', () => {
     });
   });
 
-  test('daily cleanup runs on the configured schedule through a role only that schedule can assume', () => {
+  test('daily cleanup runs on the configured schedule through its own role trusted only in the default schedule group', () => {
     const { core, template } = coreTemplate({ schedules: { cleanup: 'cron(15 21 * * ? *)' }, operations: { cleanup: { graceHours: 36 } } });
     const names = resourceNames(core.config);
     const cleanupArn = arnOf(logicalId(core, core.caseAnalysis.cleanupFunction.function));
@@ -215,21 +225,17 @@ describe('CaseAnalysis', () => {
         RetryPolicy: { MaximumRetryAttempts: CLEANUP_SCHEDULE_RETRY_ATTEMPTS, MaximumEventAgeInSeconds: 21600 },
       },
     });
-    template.hasResourceProperties('AWS::IAM::Role', {
-      AssumeRolePolicyDocument: {
-        Statement: [
-          Match.objectLike({
-            Principal: { Service: 'scheduler.amazonaws.com' },
-            Condition: {
-              StringEquals: { 'aws:SourceAccount': core.config.managementAccountId },
-              ArnLike: {
-                'aws:SourceArn': `arn:aws:scheduler:${core.config.region}:${core.config.managementAccountId}:schedule/default/${names.caseCleanupSchedule}`,
-              },
-            },
-          }),
-        ],
-      },
+    const roleId = logicalId(core, core.caseAnalysis.node.findChild('CaseCleanupScheduleRole'));
+    template.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: names.caseCleanupSchedule,
+      GroupName: Match.absent(),
+      Target: Match.objectLike({ RoleArn: { 'Fn::GetAtt': [roleId, 'Arn'] } }),
     });
+    expect(trustStatements(template, roleId)).toEqual([schedulerTrustStatement(core.config)]);
+    const invoke = iamPolicyStatements(template)
+      .filter(({ roles }) => JSON.stringify(roles) === JSON.stringify([{ Ref: roleId }]))
+      .map(({ statement }) => statement);
+    expect(invoke).toEqual([{ Action: 'lambda:InvokeFunction', Effect: 'Allow', Resource: [cleanupArn, { 'Fn::Join': ['', [cleanupArn, ':*']] }] }]);
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: names.caseCleanupFunction,
       Environment: { Variables: Match.objectLike({ CLEANUP_GRACE_HOURS: '36', POWERTOOLS_SERVICE_NAME: 'case-cleanup' }) },

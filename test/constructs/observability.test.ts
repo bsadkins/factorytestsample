@@ -14,7 +14,17 @@ import {
   RUN_MARKERS_PREFIX,
   resourceNames,
 } from '../../lib';
-import { acknowledgedRules, iamPolicyStatements, nagApp, synthError, testApp, testConfig } from '../helpers/cdk';
+import {
+  acknowledgedRules,
+  iamPolicyStatements,
+  nagApp,
+  type PolicyStatementJson,
+  schedulerTrustStatement,
+  synthError,
+  testApp,
+  testConfig,
+  trustStatements,
+} from '../helpers/cdk';
 
 function coreTemplate(overrides: Parameters<typeof testConfig>[0] = {}): { core: CaseInsightsCoreStack; template: Template } {
   const config = testConfig(overrides);
@@ -94,7 +104,7 @@ const PIPELINE_FUNCTIONS = [
 const MONITORED_QUEUES = ['ActiveAccountsDLQ', 'AnnotationDLQ', 'SummaryDLQ', 'WorkflowFailures', 'AccountDiscoveryFailures'];
 
 describe('Observability', () => {
-  test('Run Completion runs hourly through a role only its schedule can assume', () => {
+  test('Run Completion runs hourly through its own role trusted only in the default schedule group', () => {
     const { core, template } = coreTemplate();
     const names = resourceNames(core.config);
     const fn = core.observability.runCompletionFunction;
@@ -125,21 +135,18 @@ describe('Observability', () => {
       State: 'ENABLED',
       Target: Match.objectLike({ Arn: arnOf(logicalId(core, fn.function)) }),
     });
-    template.hasResourceProperties('AWS::IAM::Role', {
-      AssumeRolePolicyDocument: {
-        Statement: [
-          Match.objectLike({
-            Principal: { Service: 'scheduler.amazonaws.com' },
-            Condition: {
-              StringEquals: { 'aws:SourceAccount': core.config.managementAccountId },
-              ArnLike: {
-                'aws:SourceArn': `arn:aws:scheduler:${core.config.region}:${core.config.managementAccountId}:schedule/default/${names.runCompletionSchedule}`,
-              },
-            },
-          }),
-        ],
-      },
+    const roleId = logicalId(core, core.observability.node.findChild('RunCompletionScheduleRole'));
+    template.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: names.runCompletionSchedule,
+      GroupName: Match.absent(),
+      Target: Match.objectLike({ RoleArn: { 'Fn::GetAtt': [roleId, 'Arn'] } }),
     });
+    expect(trustStatements(template, roleId)).toEqual([schedulerTrustStatement(core.config)]);
+    const fnArn = arnOf(logicalId(core, fn.function));
+    const invoke = iamPolicyStatements(template)
+      .filter(({ roles }) => JSON.stringify(roles) === JSON.stringify([{ Ref: roleId }]))
+      .map(({ statement }) => statement);
+    expect(invoke).toEqual([{ Action: 'lambda:InvokeFunction', Effect: 'Allow', Resource: [fnArn, { 'Fn::Join': ['', [fnArn, ':*']] }] }]);
   });
 
   test('Run Completion holds only the run evidence, status and failure-record access it uses', () => {
@@ -196,6 +203,47 @@ describe('Observability', () => {
     });
     template.resourcePropertiesCountIs('AWS::SNS::Subscription', { Protocol: 'email', Endpoint: 'ops@example.com' }, 1);
     template.resourceCountIs('AWS::KMS::Key', 0);
+  });
+
+  test.each(['dev', 'prod'] as const)('%s: only CloudWatch alarms of this deployment may publish to the alarm topic, always over TLS', (env) => {
+    const { core } = addCaseInsightsStacks(testApp(), { env });
+    const template = Template.fromStack(core);
+    const { region, managementAccountId } = core.config;
+    const prefix = resourceNames(core.config).alarmPrefix;
+    const topic = { Ref: logicalId(core, core.observability.alarmTopic) };
+    const policies = Object.values(template.findResources('AWS::SNS::TopicPolicy')).map(
+      (policy) => policy.Properties as { Topics: unknown[]; PolicyDocument: { Statement: PolicyStatementJson[] } },
+    );
+    expect(policies).toHaveLength(1);
+    expect(policies[0]?.Topics).toEqual([topic]);
+    expect(policies[0]?.PolicyDocument.Statement).toEqual([
+      {
+        Sid: 'AllowPublishThroughSSLOnly',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: 'sns:Publish',
+        Resource: topic,
+        Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+      },
+      {
+        Sid: 'AllowCloudWatchAlarmsToPublish',
+        Effect: 'Allow',
+        Principal: { Service: 'cloudwatch.amazonaws.com' },
+        Action: 'sns:Publish',
+        Resource: topic,
+        Condition: {
+          ArnLike: { 'aws:SourceArn': `arn:aws:cloudwatch:${region}:${managementAccountId}:alarm:${prefix}*` },
+          StringEquals: { 'aws:SourceAccount': managementAccountId },
+        },
+      },
+    ]);
+    // Every alarm that notifies the topic falls under the allowed alarm ARN prefix.
+    const notifying = alarms(template).filter((alarm) => JSON.stringify(alarm.AlarmActions) === JSON.stringify([topic]));
+    expect(notifying).toHaveLength(alarms(template).length);
+    for (const alarm of notifying) {
+      expect(alarm.AlarmName.startsWith(prefix)).toBe(true);
+    }
+    template.hasResourceProperties('AWS::SNS::Topic', { TopicName: resourceNames(core.config).alarmTopic, KmsMasterKeyId: Match.absent() });
   });
 
   test('without alarmEmail the topic has no subscription; prod always subscribes its required address', () => {

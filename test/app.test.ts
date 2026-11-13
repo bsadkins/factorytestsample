@@ -10,7 +10,7 @@ import {
   ConfigValidationError,
 } from '../lib';
 import { normaliseAssetHashes } from './helpers/assets';
-import { acknowledgedRules, synthError, tempOutdir, testApp } from './helpers/cdk';
+import { acknowledgedRules, schedulerTrustStatement, synthError, tempOutdir, testApp, trustStatements } from './helpers/cdk';
 
 describe('Support Case Insights app', () => {
   test('dev configuration adds the namespaced core and member-role stacks in the management account', () => {
@@ -56,6 +56,27 @@ describe('Support Case Insights app', () => {
     expect(assembly.stacks.map((stack) => stack.stackName).sort()).toEqual(
       [`CaseInsightsCoreStack-${config.uniqueId}`, `CaseInsightsMemberRoleStack-${config.uniqueId}`].sort(),
     );
+  });
+
+  test.each(['dev', 'prod'] as const)('%s schedules run in the default group, each through its own role trusted only in that group', (env) => {
+    const { core } = addCaseInsightsStacks(testApp(), { env });
+    const template = Template.fromStack(core);
+    const schedules = Object.values(template.findResources('AWS::Scheduler::Schedule')).map(
+      (schedule) => schedule.Properties as { GroupName?: string; Target: { RoleArn: { 'Fn::GetAtt': [string, string] } } },
+    );
+    expect(schedules).toHaveLength(3);
+    for (const schedule of schedules) {
+      expect(schedule.GroupName).toBeUndefined();
+    }
+    const scheduleRoles = schedules.map((schedule) => schedule.Target.RoleArn['Fn::GetAtt'][0]);
+    expect(new Set(scheduleRoles).size).toBe(schedules.length);
+    const schedulerTrusted = Object.entries(template.findResources('AWS::IAM::Role'))
+      .filter(([, role]) => JSON.stringify(role.Properties).includes('scheduler.amazonaws.com'))
+      .map(([id]) => id);
+    expect(schedulerTrusted.sort()).toEqual([...scheduleRoles].sort());
+    for (const roleId of scheduleRoles) {
+      expect(trustStatements(template, roleId)).toEqual([schedulerTrustStatement(core.config)]);
+    }
   });
 
   test.each(['dev', 'prod'] as const)('%s core stack template snapshot', (env) => {

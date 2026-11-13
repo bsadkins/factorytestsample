@@ -29,7 +29,7 @@ import { acknowledgeNagFinding } from '../nag';
 import { ACCOUNT_LIST_PREFIX } from './account-discovery';
 import { acknowledgeExecutions, FAILURE_DELIVERY_PATTERN } from './case-analysis';
 import { RUN_COMPLETION_PATTERN, RUN_MARKERS_PREFIX } from './case-collection';
-import { handlerDirectory, logicalIdOf } from './construct-utils';
+import { handlerDirectory, logicalIdOf, schedulerPrincipal } from './construct-utils';
 import { METRICS_NAMESPACE, PipelineFunction } from './pipeline-function';
 
 /** Run Completion checks open runs this often; each check is idempotent. */
@@ -100,7 +100,8 @@ interface AlarmSpec {
  * Telemetry carries counts with the bounded `service` dimension only, never account or case IDs.
  * The alarm topic is not encrypted at rest: CloudWatch alarms can only publish to an encrypted topic
  * through a customer managed KMS key, which this solution does not use. Alarm notifications hold
- * alarm names and metric states, never case content.
+ * alarm names and metric states, never case content. The topic policy lets CloudWatch publish only
+ * for this account's alarms named with the deployment alarm prefix, and denies publishing without TLS.
  */
 export class Observability extends Construct {
   public readonly runCompletionFunction: PipelineFunction;
@@ -136,6 +137,27 @@ export class Observability extends Construct {
       // The recipient must confirm the subscription before notifications are delivered.
       this.alarmTopic.addSubscription(new EmailSubscription(config.alarmEmail));
     }
+    // An alarm action names the topic but does not authorise CloudWatch to publish to it.
+    const stack = Stack.of(this);
+    this.alarmTopic.addToResourcePolicy(
+      new PolicyStatement({
+        sid: 'AllowCloudWatchAlarmsToPublish',
+        principals: [new ServicePrincipal('cloudwatch.amazonaws.com')],
+        actions: ['sns:Publish'],
+        resources: [this.alarmTopic.topicArn],
+        conditions: {
+          ArnLike: {
+            'aws:SourceArn': stack.formatArn({
+              service: 'cloudwatch',
+              resource: 'alarm',
+              resourceName: `${this.alarmPrefix}*`,
+              arnFormat: ArnFormat.COLON_RESOURCE_NAME,
+            }),
+          },
+          StringEquals: { 'aws:SourceAccount': stack.account },
+        },
+      }),
+    );
     this.alarmAction = new SnsAction(this.alarmTopic);
 
     this.runCompletionFunction = this.buildRunCompletion(props);
@@ -335,18 +357,10 @@ export class Observability extends Construct {
 
   private buildRunCompletionSchedule(config: CaseInsightsConfig): Schedule {
     const names = resourceNames(config);
-    const stack = Stack.of(this);
     const fn = this.runCompletionFunction.function;
     const role = new Role(this, 'RunCompletionScheduleRole', {
       description: `EventBridge Scheduler role that invokes ${names.runCompletionFunction}`,
-      assumedBy: new ServicePrincipal('scheduler.amazonaws.com', {
-        conditions: {
-          StringEquals: { 'aws:SourceAccount': stack.account },
-          ArnLike: {
-            'aws:SourceArn': stack.formatArn({ service: 'scheduler', resource: 'schedule', resourceName: `default/${names.runCompletionSchedule}` }),
-          },
-        },
-      }),
+      assumedBy: schedulerPrincipal(this),
     });
     acknowledgeNagFinding(
       role,

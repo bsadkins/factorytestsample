@@ -1,6 +1,6 @@
 import { Duration, Stack, TimeZone } from 'aws-cdk-lib';
 import type { ITable } from 'aws-cdk-lib/aws-dynamodb';
-import { Policy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
+import { Policy, PolicyStatement, Role } from 'aws-cdk-lib/aws-iam';
 import type { ILayerVersion } from 'aws-cdk-lib/aws-lambda';
 import { SqsDestination } from 'aws-cdk-lib/aws-lambda-destinations';
 import { EventType, type IBucket } from 'aws-cdk-lib/aws-s3';
@@ -11,7 +11,7 @@ import type { IQueue } from 'aws-cdk-lib/aws-sqs';
 import { Construct, type IConstruct } from 'constructs';
 import { type CaseInsightsConfig, resourceNames } from '../config';
 import { acknowledgeNagFinding } from '../nag';
-import { handlerDirectory, logicalIdOf } from './construct-utils';
+import { handlerDirectory, logicalIdOf, schedulerPrincipal } from './construct-utils';
 import { PipelineFunction } from './pipeline-function';
 
 /** Key prefix of run-scoped account lists; must equal ACCOUNT_LIST_PREFIX in common/account_list.py. */
@@ -153,21 +153,9 @@ export class AccountDiscovery extends Construct {
       'CDK-managed custom resource that applies the bucket notification configuration at deployment; the AWS managed basic execution policy only allows it to write its own CloudWatch Logs.',
     );
 
-    const stack = Stack.of(this);
     const scheduleRole = new Role(this, 'AccountLookupScheduleRole', {
       description: `EventBridge Scheduler role that invokes ${names.accountLookupFunction}`,
-      assumedBy: new ServicePrincipal('scheduler.amazonaws.com', {
-        conditions: {
-          StringEquals: { 'aws:SourceAccount': stack.account },
-          ArnLike: {
-            'aws:SourceArn': stack.formatArn({
-              service: 'scheduler',
-              resource: 'schedule',
-              resourceName: `default/${names.accountLookupSchedule}`,
-            }),
-          },
-        },
-      }),
+      assumedBy: schedulerPrincipal(this),
     });
     acknowledgeNagFinding(
       scheduleRole,

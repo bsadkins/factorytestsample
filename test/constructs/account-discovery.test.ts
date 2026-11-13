@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { ACCOUNT_LIST_PREFIX, addCaseInsightsStacks, CaseInsightsCoreStack, REPO_ROOT, resourceNames } from '../../lib';
-import { acknowledgedRules, iamPolicyStatements, nagApp, synthError, testApp, testConfig } from '../helpers/cdk';
+import { acknowledgedRules, iamPolicyStatements, nagApp, schedulerTrustStatement, synthError, testApp, testConfig, trustStatements } from '../helpers/cdk';
 
 function coreTemplate(overrides: Parameters<typeof testConfig>[0] = {}): { core: CaseInsightsCoreStack; template: Template } {
   const config = testConfig(overrides);
@@ -44,29 +44,19 @@ describe('AccountDiscovery', () => {
     });
   });
 
-  test('the schedule role may only be assumed by this schedule and only invokes account lookup', () => {
+  test('the schedule role trusts only Scheduler in the default schedule group of this account and only invokes account lookup', () => {
     const { core, template } = coreTemplate();
     const names = resourceNames(core.config);
     const discovery = core.accountDiscovery;
-    template.hasResourceProperties('AWS::IAM::Role', {
-      AssumeRolePolicyDocument: {
-        Statement: [
-          {
-            Action: 'sts:AssumeRole',
-            Effect: 'Allow',
-            Principal: { Service: 'scheduler.amazonaws.com' },
-            Condition: {
-              StringEquals: { 'aws:SourceAccount': core.config.managementAccountId },
-              ArnLike: {
-                'aws:SourceArn': `arn:aws:scheduler:${core.config.region}:${core.config.managementAccountId}:schedule/default/${names.accountLookupSchedule}`,
-              },
-            },
-          },
-        ],
-      },
-    });
     const lookupArn = { 'Fn::GetAtt': [logicalId(core, discovery.lookupFunction.function), 'Arn'] };
     const scheduleRoleId = logicalId(core, core.node.findChild('AccountDiscovery').node.findChild('AccountLookupScheduleRole'));
+    // Scheduler sends the schedule group ARN as aws:SourceArn, so the role trusts that group.
+    expect(trustStatements(template, scheduleRoleId)).toEqual([schedulerTrustStatement(core.config)]);
+    template.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: names.accountLookupSchedule,
+      GroupName: Match.absent(),
+      Target: Match.objectLike({ RoleArn: { 'Fn::GetAtt': [scheduleRoleId, 'Arn'] } }),
+    });
     const statements = iamPolicyStatements(template)
       .filter(({ roles }) => JSON.stringify(roles) === JSON.stringify([{ Ref: scheduleRoleId }]))
       .map(({ statement }) => statement);

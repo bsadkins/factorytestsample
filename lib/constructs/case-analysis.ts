@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { ArnFormat, Duration, Stack, TimeZone, Token } from 'aws-cdk-lib';
 import type { ITable } from 'aws-cdk-lib/aws-dynamodb';
-import { Policy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
+import { Policy, PolicyStatement, Role } from 'aws-cdk-lib/aws-iam';
 import type { ILayerVersion } from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
@@ -28,7 +28,7 @@ import { acknowledgeNagFinding } from '../nag';
 import { lambdaPackagesCode, REPO_ROOT } from '../packaging/python-assets';
 import { BedrockInvokePolicy } from './bedrock-invoke-policy';
 import { CASE_PARTITION_PATTERN, RUN_CASE_MARKER_PATTERN } from './case-collection';
-import { handlerDirectory, logicalIdOf } from './construct-utils';
+import { handlerDirectory, logicalIdOf, schedulerPrincipal } from './construct-utils';
 import { dataRemovalPolicy } from './environment';
 import { logRetention, PipelineFunction } from './pipeline-function';
 
@@ -182,9 +182,10 @@ export class CaseAnalysis extends Construct {
       description: `Commits the validated processed record for one case (${config.uniqueId})`,
       handlerDir: handlerDirectory('update_case_metadata'),
       serviceName: 'update-case-metadata',
-      layers: [commonLayer],
+      // Every commit computes Prompt_Version from the template files in the templates layer.
+      layers: [commonLayer, props.templatesLayer],
       timeout: analysisTimeout,
-      environment: { ...buckets, BEDROCK_MODEL_ID: config.bedrockModelId },
+      environment: { ...buckets, ...props.templateEnvironment, BEDROCK_MODEL_ID: config.bedrockModelId },
     });
     const updateAccess = new Policy(this, 'UpdateCaseMetadataAccess', {
       roles: [this.updateFunction.role],
@@ -406,17 +407,9 @@ export class CaseAnalysis extends Construct {
   }
 
   private buildCleanupSchedule(config: CaseInsightsConfig, scheduleName: string): Schedule {
-    const stack = Stack.of(this);
     const role = new Role(this, 'CaseCleanupScheduleRole', {
       description: `EventBridge Scheduler role that invokes ${this.cleanupFunction.function.node.id}`,
-      assumedBy: new ServicePrincipal('scheduler.amazonaws.com', {
-        conditions: {
-          StringEquals: { 'aws:SourceAccount': stack.account },
-          ArnLike: {
-            'aws:SourceArn': stack.formatArn({ service: 'scheduler', resource: 'schedule', resourceName: `default/${scheduleName}` }),
-          },
-        },
-      }),
+      assumedBy: schedulerPrincipal(this),
     });
     acknowledgeNagFinding(
       role,
