@@ -10,12 +10,13 @@ This branch currently contains the project foundation and the shared Python runt
 - the CDK entry point, which validates configuration, registers cdk-nag and synthesises `CaseInsightsCoreStack-<uniqueId>` and `CaseInsightsMemberRoleStack-<uniqueId>`;
 - the core storage and coordination foundation: account-list, raw and processed buckets plus a dedicated access-log bucket, the Powertools idempotency table, the stage queues with their dead-letter queues, and the two execution roles that member accounts trust;
 - the service-managed `CaseInsights-MemberRole-<uniqueId>` StackSet, which deploys the read-only `Support-Case-Analysis-Role-<uniqueId>` to every account under the configured root or OUs;
+- scheduled account discovery (`AccountDiscovery`): an EventBridge Scheduler schedule (default 00:00 UTC) invokes `Lambda-AccountLookup-<uniqueId>`, which pages through Organizations `ListAccounts`, keeps `ACTIVE` member accounts other than the management account and writes `account-lists/<runId>.json`; the S3 notification invokes `Lambda-AccountReader-<uniqueId>`, which validates the list and sends one `{accountId, accountName, runId}` message per account to the active-accounts queue. Scheduled runs take their run ID from the schedule time, so a repeated delivery does not start a second run, and the reader uses Powertools idempotency so duplicate S3 events do not enqueue a run twice. Malformed lists fail visibly and, after retries, land in `CaseInsights-AccountDiscoveryFailures-<uniqueId>`. Writing the account list starts a run; it is not reported as pipeline completion;
 - reusable constructs for later pipeline stages: a standard Python function factory (`PipelineFunction`) and the Bedrock model allowlist policy (`BedrockInvokePolicy`);
 - the shared Python package `src/lambda/common/` (taxonomies, prompt rendering, model-output validation, Bedrock, STS, S3, SQS and retry helpers) and the prompt templates in `src/templates/`, packaged as two Lambda layers;
 - strict TypeScript and Python tooling, exact dependency pins, an npm lockfile and hash-locked Python requirements;
 - local lint, type-check, test, synth and security commands.
 
-The data pipeline Lambda functions, workflow, schedules, dashboard and alarms, Analytics stack, MCP server, CDK pipeline and full documentation are **not implemented yet**. The core stack currently contains storage, queues, roles and the two Lambda layers but no functions, so it is not a working deployment. Nothing has been deployed to AWS; StackSet instance creation is untested until a real deployment.
+Case retrieval, annotation, the analysis workflow, cleanup, dashboard and alarms, Analytics stack, MCP server, CDK pipeline and full documentation are **not implemented yet**. The core stack currently runs account discovery only, so it is not a working end-to-end deployment. Nothing has been deployed to AWS; StackSet instance creation is untested until a real deployment.
 
 ## Security foundation
 

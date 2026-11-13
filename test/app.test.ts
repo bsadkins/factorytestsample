@@ -46,7 +46,7 @@ describe('Support Case Insights app', () => {
 
   test('every cdk-nag acknowledgement is listed here with a specific reason', () => {
     const app = testApp();
-    const { config } = addCaseInsightsStacks(app, { env: 'dev' });
+    const { config, core: coreStack } = addCaseInsightsStacks(app, { env: 'dev' });
     const acknowledged = acknowledgedRules(app).map(({ path: constructPath, id, reason }) => ({
       path: constructPath,
       id: id.replace(/^.*::(?=AwsSolutions-)/, ''),
@@ -54,11 +54,27 @@ describe('Support Case Insights app', () => {
     }));
     const core = `CaseInsightsCoreStack-${config.uniqueId}`;
     const memberRoleFinding = `AwsSolutions-IAM5[Resource::arn:aws:iam::*:role/Support-Case-Analysis-Role-${config.uniqueId}]`;
+    const accountListsFinding = `AwsSolutions-IAM5[Resource::<${coreStack.getLogicalId(coreStack.storage.accountListBucket.node.defaultChild as never)}.Arn>/account-lists/*]`;
+    const lookupVersionsFinding = `AwsSolutions-IAM5[Resource::<${coreStack.getLogicalId(coreStack.accountDiscovery.lookupFunction.function.node.defaultChild as never)}.Arn>:*]`;
+    const notificationsHandler = coreStack.node.children.find((child) => child.node.id.startsWith('BucketNotificationsHandler'));
     expect(acknowledged.map(({ path: constructPath, id }) => [constructPath, id]).sort()).toEqual(
       [
         [`${core}/MemberAccess/CaseAnnotationRoleMemberRoleAccess`, memberRoleFinding],
         [`${core}/MemberAccess/CaseRetrievalRoleMemberRoleAccess`, memberRoleFinding],
         [`${core}/Queues/WorkflowFailures`, 'AwsSolutions-SQS3'],
+        [`${core}/Queues/AccountDiscoveryFailures`, 'AwsSolutions-SQS3'],
+        [`${core}/AccountDiscovery/AccountLookup/TelemetryPolicy`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/AccountDiscovery/AccountLookup/Function`, 'AwsSolutions-L1'],
+        [`${core}/AccountDiscovery/AccountReader/TelemetryPolicy`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/AccountDiscovery/AccountReader/Function`, 'AwsSolutions-L1'],
+        [`${core}/AccountDiscovery/AccountLookupAccess`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/AccountDiscovery/AccountLookupAccess`, accountListsFinding],
+        [`${core}/AccountDiscovery/AccountReaderAccess`, accountListsFinding],
+        [`${core}/AccountDiscovery/AccountLookupScheduleRole`, lookupVersionsFinding],
+        [
+          `${notificationsHandler?.node.path ?? 'missing'}/Role`,
+          'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]',
+        ],
       ].sort(),
     );
     for (const { reason } of acknowledged) {

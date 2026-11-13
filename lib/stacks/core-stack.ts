@@ -1,6 +1,7 @@
 import { Stack, type StackProps } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import type { CaseInsightsConfig } from '../config';
+import { AccountDiscovery } from '../constructs/account-discovery';
 import { CoreStorage } from '../constructs/core-storage';
 import { MemberAccessRoles } from '../constructs/member-access-roles';
 import { PipelineQueues } from '../constructs/pipeline-queues';
@@ -21,6 +22,7 @@ export class CaseInsightsCoreStack extends Stack {
   public readonly storage: CoreStorage;
   public readonly queues: PipelineQueues;
   public readonly memberAccess: MemberAccessRoles;
+  public readonly accountDiscovery: AccountDiscovery;
 
   public constructor(scope: Construct, id: string, props: CaseInsightsCoreStackProps) {
     super(scope, id, props);
@@ -29,5 +31,13 @@ export class CaseInsightsCoreStack extends Stack {
     this.queues = new PipelineQueues(this, 'Queues', { config: props.config });
     this.memberAccess = new MemberAccessRoles(this, 'MemberAccess', { config: props.config });
     this.layers = new SharedLayers(this, 'SharedLayers', { uniqueId: props.config.uniqueId });
+    this.accountDiscovery = new AccountDiscovery(this, 'AccountDiscovery', {
+      config: props.config,
+      accountListBucket: this.storage.accountListBucket,
+      idempotencyTable: this.storage.idempotencyTable,
+      activeAccountsQueue: this.queues.activeAccounts.queue,
+      failureQueue: this.queues.accountDiscoveryFailures,
+      commonLayer: this.layers.commonLayer,
+    });
   }
 }

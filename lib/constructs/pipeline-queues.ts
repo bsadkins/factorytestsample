@@ -15,6 +15,8 @@ export interface PipelineQueueResources {
   readonly summary: StageQueueResources;
   /** Terminal queue for case-analysis attempts that exhausted their workflow retries. */
   readonly workflowFailures: IQueue;
+  /** Terminal queue for discovery schedule deliveries and asynchronous invocations that exhausted retries. */
+  readonly accountDiscoveryFailures: IQueue;
 }
 
 export interface PipelineQueuesProps {
@@ -27,6 +29,7 @@ export class PipelineQueues extends Construct implements PipelineQueueResources 
   public readonly annotation: StageQueue;
   public readonly summary: StageQueue;
   public readonly workflowFailures: Queue;
+  public readonly accountDiscoveryFailures: Queue;
 
   public constructor(scope: Construct, id: string, props: PipelineQueuesProps) {
     super(scope, id);
@@ -53,6 +56,18 @@ export class PipelineQueues extends Construct implements PipelineQueueResources 
       this.workflowFailures,
       'AwsSolutions-SQS3',
       'Terminal dead-letter destination written by the workflow failure handler after task retries are exhausted; it has no consumer, so a further DLQ would never receive messages. Operators redrive it explicitly.',
+    );
+
+    this.accountDiscoveryFailures = new Queue(this, 'AccountDiscoveryFailures', {
+      queueName: names.accountDiscoveryFailureQueue,
+      encryption: QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: Duration.days(dlqRetentionDays),
+    });
+    acknowledgeNagFinding(
+      this.accountDiscoveryFailures,
+      'AwsSolutions-SQS3',
+      'Terminal dead-letter destination for the discovery schedule and the asynchronous account lookup and reader invocations after their retries; it has no consumer, so a further DLQ would never receive messages.',
     );
   }
 }

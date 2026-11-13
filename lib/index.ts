@@ -4,6 +4,7 @@ export * from './nag';
 export * from './stacks/core-stack';
 export * from './stacks/member-role-stack';
 export * from './stacks/member-role-template';
+export * from './constructs/account-discovery';
 export * from './constructs/bedrock-invoke-policy';
 export * from './constructs/core-storage';
 export * from './constructs/environment';

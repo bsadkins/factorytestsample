@@ -11,6 +11,881 @@ exports[`Support Case Insights app dev core stack template snapshot 1`] = `
     },
   },
   "Resources": {
+    "AccountDiscoveryAccountLookupAccessE7524C41": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "organizations:ListAccounts",
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "ListOrganizationAccounts",
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageAccountListBucketDB72317C",
+                        "Arn",
+                      ],
+                    },
+                    "/account-lists/*",
+                  ],
+                ],
+              },
+              "Sid": "WriteAccountLists",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountLookupAccessE7524C41",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountLookupRoleA80EB863",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AccountDiscoveryAccountLookupFunction47FCAEB9": {
+      "DependsOn": [
+        "AccountDiscoveryAccountLookupRoleDefaultPolicy81FCF90D",
+        "AccountDiscoveryAccountLookupRoleA80EB863",
+        "AccountDiscoveryAccountLookupTelemetryPolicy2A42639D",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Lists active member accounts and writes the run account list (scidev)",
+        "Environment": {
+          "Variables": {
+            "ACCOUNT_LIST_BUCKET": {
+              "Ref": "StorageAccountListBucketDB72317C",
+            },
+            "CASE_INSIGHTS_UNIQUE_ID": "scidev",
+            "MANAGEMENT_ACCOUNT_ID": "111111111111",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "account-lookup",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+          },
+        },
+        "FunctionName": "Lambda-AccountLookup-scidev",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "AccountDiscoveryAccountLookupLogGroupC70D8D3F",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "AccountDiscoveryAccountLookupRoleA80EB863",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "AccountDiscoveryAccountLookupFunctionEventInvokeConfigF3F7EA9A": {
+      "DependsOn": [
+        "AccountDiscoveryAccountLookupTelemetryPolicy2A42639D",
+      ],
+      "Properties": {
+        "DestinationConfig": {
+          "OnFailure": {
+            "Destination": {
+              "Fn::GetAtt": [
+                "QueuesAccountDiscoveryFailuresF86CAD1E",
+                "Arn",
+              ],
+            },
+          },
+        },
+        "FunctionName": {
+          "Ref": "AccountDiscoveryAccountLookupFunction47FCAEB9",
+        },
+        "MaximumEventAgeInSeconds": 21600,
+        "MaximumRetryAttempts": 2,
+        "Qualifier": "$LATEST",
+      },
+      "Type": "AWS::Lambda::EventInvokeConfig",
+    },
+    "AccountDiscoveryAccountLookupLogGroupC70D8D3F": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-AccountLookup-scidev",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "AccountDiscoveryAccountLookupRoleA80EB863": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-AccountLookup-scidev",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "AccountDiscoveryAccountLookupRoleDefaultPolicy81FCF90D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:SendMessage",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesAccountDiscoveryFailuresF86CAD1E",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountLookupRoleDefaultPolicy81FCF90D",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountLookupRoleA80EB863",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AccountDiscoveryAccountLookupSchedule729E11B8": {
+      "Properties": {
+        "Description": "Daily Support Case Insights account discovery (scidev)",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF",
+        },
+        "Name": "CaseInsights-AccountLookup-scidev",
+        "ScheduleExpression": "cron(0 0 * * ? *)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "AccountDiscoveryAccountLookupFunction47FCAEB9",
+              "Arn",
+            ],
+          },
+          "DeadLetterConfig": {
+            "Arn": {
+              "Fn::GetAtt": [
+                "QueuesAccountDiscoveryFailuresF86CAD1E",
+                "Arn",
+              ],
+            },
+          },
+          "Input": "{"scheduledTime":"<aws.scheduler.scheduled-time>"}",
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 21600,
+            "MaximumRetryAttempts": 3,
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "AccountDiscoveryAccountLookupScheduleRole0374AF09",
+              "Arn",
+            ],
+          },
+        },
+      },
+      "Type": "AWS::Scheduler::Schedule",
+    },
+    "AccountDiscoveryAccountLookupScheduleRole0374AF09": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule/default/CaseInsights-AccountLookup-scidev",
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "111111111111",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "EventBridge Scheduler role that invokes Lambda-AccountLookup-scidev",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "AccountDiscoveryAccountLookupScheduleRoleDefaultPolicy6F5263A5": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "AccountDiscoveryAccountLookupFunction47FCAEB9",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "AccountDiscoveryAccountLookupFunction47FCAEB9",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesAccountDiscoveryFailuresF86CAD1E",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountLookupScheduleRoleDefaultPolicy6F5263A5",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountLookupScheduleRole0374AF09",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AccountDiscoveryAccountLookupTelemetryPolicy2A42639D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "AccountDiscoveryAccountLookupLogGroupC70D8D3F",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountLookupTelemetryPolicy2A42639D",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountLookupRoleA80EB863",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AccountDiscoveryAccountReaderAccessEF0C8AA3": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageAccountListBucketDB72317C",
+                        "Arn",
+                      ],
+                    },
+                    "/account-lists/*",
+                  ],
+                ],
+              },
+              "Sid": "ReadAccountLists",
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesActiveAccountsQueueB932EA89",
+                  "Arn",
+                ],
+              },
+              "Sid": "SendAccountReferences",
+            },
+            {
+              "Action": [
+                "dynamodb:DeleteItem",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageIdempotencyTable5D6E4193",
+                  "Arn",
+                ],
+              },
+              "Sid": "IdempotencyRecords",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountReaderAccessEF0C8AA3",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountReaderRole3DC5E1CC",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AccountDiscoveryAccountReaderFunction53FD32DE": {
+      "DependsOn": [
+        "AccountDiscoveryAccountReaderRoleDefaultPolicy798472E4",
+        "AccountDiscoveryAccountReaderRole3DC5E1CC",
+        "AccountDiscoveryAccountReaderTelemetryPolicy26011F40",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Enqueues one active-account reference per account in a new account list (scidev)",
+        "Environment": {
+          "Variables": {
+            "ACCOUNT_LIST_BUCKET": {
+              "Ref": "StorageAccountListBucketDB72317C",
+            },
+            "ACTIVE_ACCOUNTS_QUEUE_URL": {
+              "Ref": "QueuesActiveAccountsQueueB932EA89",
+            },
+            "CASE_INSIGHTS_UNIQUE_ID": "scidev",
+            "IDEMPOTENCY_TABLE_NAME": {
+              "Ref": "StorageIdempotencyTable5D6E4193",
+            },
+            "MANAGEMENT_ACCOUNT_ID": "111111111111",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "account-reader",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+          },
+        },
+        "FunctionName": "Lambda-AccountReader-scidev",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "AccountDiscoveryAccountReaderLogGroup3C019B2A",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "AccountDiscoveryAccountReaderRole3DC5E1CC",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "AccountDiscoveryAccountReaderFunctionEventInvokeConfig21174B25": {
+      "DependsOn": [
+        "AccountDiscoveryAccountReaderTelemetryPolicy26011F40",
+      ],
+      "Properties": {
+        "DestinationConfig": {
+          "OnFailure": {
+            "Destination": {
+              "Fn::GetAtt": [
+                "QueuesAccountDiscoveryFailuresF86CAD1E",
+                "Arn",
+              ],
+            },
+          },
+        },
+        "FunctionName": {
+          "Ref": "AccountDiscoveryAccountReaderFunction53FD32DE",
+        },
+        "MaximumEventAgeInSeconds": 21600,
+        "MaximumRetryAttempts": 2,
+        "Qualifier": "$LATEST",
+      },
+      "Type": "AWS::Lambda::EventInvokeConfig",
+    },
+    "AccountDiscoveryAccountReaderLogGroup3C019B2A": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-AccountReader-scidev",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "AccountDiscoveryAccountReaderRole3DC5E1CC": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-AccountReader-scidev",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "AccountDiscoveryAccountReaderRoleDefaultPolicy798472E4": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:SendMessage",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesAccountDiscoveryFailuresF86CAD1E",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountReaderRoleDefaultPolicy798472E4",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountReaderRole3DC5E1CC",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AccountDiscoveryAccountReaderTelemetryPolicy26011F40": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "AccountDiscoveryAccountReaderLogGroup3C019B2A",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountReaderTelemetryPolicy26011F40",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountReaderRole3DC5E1CC",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "BucketNotificationsHandler050a0587b7544547bf325f094a3db8347ECC3691": {
+      "DependsOn": [
+        "BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC",
+      ],
+      "Properties": {
+        "Code": {
+          "ZipFile": "import boto3  # type: ignore
+import json
+import logging
+import urllib.request
+
+s3 = boto3.client("s3")
+
+EVENTBRIDGE_CONFIGURATION = 'EventBridgeConfiguration'
+CONFIGURATION_TYPES = ["TopicConfigurations", "QueueConfigurations", "LambdaFunctionConfigurations"]
+
+def handler(event: dict, context):
+  response_status = "SUCCESS"
+  error_message = ""
+  try:
+    props = event["ResourceProperties"]
+    notification_configuration = props["NotificationConfiguration"]
+    managed = props.get('Managed', 'true').lower() == 'true'
+    skipDestinationValidation = props.get('SkipDestinationValidation', 'false').lower() == 'true'
+    stack_id = event['StackId']
+    old = event.get("OldResourceProperties", {}).get("NotificationConfiguration", {})
+    if managed:
+      config = handle_managed(event["RequestType"], notification_configuration)
+    else:
+      config = handle_unmanaged(props["BucketName"], stack_id, event["RequestType"], notification_configuration, old)
+    s3.put_bucket_notification_configuration(Bucket=props["BucketName"], NotificationConfiguration=config, SkipDestinationValidation=skipDestinationValidation)
+  except Exception as e:
+    logging.exception("Failed to put bucket notification configuration")
+    response_status = "FAILED"
+    error_message = f"Error: {str(e)}. "
+  finally:
+    submit_response(event, context, response_status, error_message)
+
+def handle_managed(request_type, notification_configuration):
+  if request_type == 'Delete':
+    return {}
+  return notification_configuration
+
+def handle_unmanaged(bucket, stack_id, request_type, notification_configuration, old):
+  def get_id(n):
+    n['Id'] = ''
+    sorted_notifications = sort_filter_rules(n)
+    strToHash=json.dumps(sorted_notifications, sort_keys=True).replace('"Name": "prefix"', '"Name": "Prefix"').replace('"Name": "suffix"', '"Name": "Suffix"')
+    return f"{stack_id}-{hash(strToHash)}"
+  def with_id(n):
+    n['Id'] = get_id(n)
+    return n
+
+  external_notifications = {}
+  existing_notifications = s3.get_bucket_notification_configuration(Bucket=bucket)
+  for t in CONFIGURATION_TYPES:
+    if request_type == 'Update':
+        old_incoming_ids = [get_id(n) for n in old.get(t, [])]
+        external_notifications[t] = [n for n in existing_notifications.get(t, []) if not get_id(n) in old_incoming_ids]      
+    elif request_type == 'Delete':
+        external_notifications[t] = [n for n in existing_notifications.get(t, []) if not n['Id'].startswith(f"{stack_id}-")]
+    elif request_type == 'Create':
+        external_notifications[t] = [n for n in existing_notifications.get(t, [])]
+  if EVENTBRIDGE_CONFIGURATION in existing_notifications:
+    external_notifications[EVENTBRIDGE_CONFIGURATION] = existing_notifications[EVENTBRIDGE_CONFIGURATION]
+
+  if request_type == 'Delete':
+    return external_notifications
+
+  notifications = {}
+  for t in CONFIGURATION_TYPES:
+    external = external_notifications.get(t, [])
+    incoming = [with_id(n) for n in notification_configuration.get(t, [])]
+    notifications[t] = external + incoming
+
+  if EVENTBRIDGE_CONFIGURATION in notification_configuration:
+    notifications[EVENTBRIDGE_CONFIGURATION] = notification_configuration[EVENTBRIDGE_CONFIGURATION]
+  elif EVENTBRIDGE_CONFIGURATION in external_notifications:
+    notifications[EVENTBRIDGE_CONFIGURATION] = external_notifications[EVENTBRIDGE_CONFIGURATION]
+
+  return notifications
+
+def submit_response(event: dict, context, response_status: str, error_message: str):
+  response_body = json.dumps(
+    {
+      "Status": response_status,
+      "Reason": f"{error_message}See the details in CloudWatch Log Stream: {context.log_stream_name}",
+      "PhysicalResourceId": event.get("PhysicalResourceId") or event["LogicalResourceId"],
+      "StackId": event["StackId"],
+      "RequestId": event["RequestId"],
+      "LogicalResourceId": event["LogicalResourceId"],
+      "NoEcho": False,
+    }
+  ).encode("utf-8")
+  headers = {"content-type": "", "content-length": str(len(response_body))}
+  try:
+    req = urllib.request.Request(url=event["ResponseURL"], headers=headers, data=response_body, method="PUT")
+    with urllib.request.urlopen(req) as response:
+      print(response.read().decode("utf-8"))
+    print("Status code: " + response.reason)
+  except Exception as e:
+      print("send(..) failed executing request.urlopen(..): " + str(e))
+
+def sort_filter_rules(json_obj):
+  if not isinstance(json_obj, dict):
+      return json_obj
+  for key, value in json_obj.items():
+      if isinstance(value, dict):
+          json_obj[key] = sort_filter_rules(value)
+      elif isinstance(value, list):
+          json_obj[key] = [sort_filter_rules(item) for item in value]
+  if "Filter" in json_obj and "Key" in json_obj["Filter"] and "FilterRules" in json_obj["Filter"]["Key"]:
+      filter_rules = json_obj["Filter"]["Key"]["FilterRules"]
+      sorted_filter_rules = sorted(filter_rules, key=lambda x: x["Name"])
+      json_obj["Filter"]["Key"]["FilterRules"] = sorted_filter_rules
+  return json_obj",
+        },
+        "Description": "AWS CloudFormation handler for "Custom::S3BucketNotifications" resources (@aws-cdk/aws-s3)",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.13",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Timeout": 300,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
     "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F": {
       "DependsOn": [
         "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
@@ -186,6 +1061,63 @@ exports[`Support Case Insights app dev core stack template snapshot 1`] = `
         ],
       },
       "Type": "AWS::IAM::Policy",
+    },
+    "QueuesAccountDiscoveryFailuresF86CAD1E": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "MessageRetentionPeriod": 1209600,
+        "QueueName": "CaseInsights-AccountDiscoveryFailures-scidev",
+        "SqsManagedSseEnabled": true,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::SQS::Queue",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "QueuesAccountDiscoveryFailuresPolicy61CEC581": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sqs:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false",
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesAccountDiscoveryFailuresF86CAD1E",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Queues": [
+          {
+            "Ref": "QueuesAccountDiscoveryFailuresF86CAD1E",
+          },
+        ],
+      },
+      "Type": "AWS::SQS::QueuePolicy",
     },
     "QueuesActiveAccountsDeadLetterQueueE5038B58": {
       "DeletionPolicy": "Delete",
@@ -962,6 +1894,26 @@ exports[`Support Case Insights app dev core stack template snapshot 1`] = `
       },
       "Type": "AWS::S3::BucketPolicy",
     },
+    "StorageAccountListBucketAllowBucketNotificationsToCaseInsightsCoreStackscidevAccountDiscoveryAccountReaderFunction05CEBBE53CA323E4": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "AccountDiscoveryAccountReaderFunction53FD32DE",
+            "Arn",
+          ],
+        },
+        "Principal": "s3.amazonaws.com",
+        "SourceAccount": "111111111111",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "StorageAccountListBucketDB72317C",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
     "StorageAccountListBucketAutoDeleteObjectsCustomResource8EAB540D": {
       "DeletionPolicy": "Delete",
       "DependsOn": [
@@ -1051,6 +2003,82 @@ exports[`Support Case Insights app dev core stack template snapshot 1`] = `
       },
       "Type": "AWS::S3::Bucket",
       "UpdateReplacePolicy": "Delete",
+    },
+    "StorageAccountListBucketNotificationsCCD0590E": {
+      "DependsOn": [
+        "StorageAccountListBucketAllowBucketNotificationsToCaseInsightsCoreStackscidevAccountDiscoveryAccountReaderFunction05CEBBE53CA323E4",
+        "StorageAccountListBucketNotificationsHandlerPolicy6CB5BE2E",
+        "StorageAccountListBucketPolicyB7AEFC93",
+      ],
+      "Properties": {
+        "BucketName": {
+          "Ref": "StorageAccountListBucketDB72317C",
+        },
+        "Managed": true,
+        "NotificationConfiguration": {
+          "LambdaFunctionConfigurations": [
+            {
+              "Events": [
+                "s3:ObjectCreated:*",
+              ],
+              "Filter": {
+                "Key": {
+                  "FilterRules": [
+                    {
+                      "Name": "suffix",
+                      "Value": ".json",
+                    },
+                    {
+                      "Name": "prefix",
+                      "Value": "account-lists/",
+                    },
+                  ],
+                },
+              },
+              "LambdaFunctionArn": {
+                "Fn::GetAtt": [
+                  "AccountDiscoveryAccountReaderFunction53FD32DE",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+        },
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "BucketNotificationsHandler050a0587b7544547bf325f094a3db8347ECC3691",
+            "Arn",
+          ],
+        },
+        "SkipDestinationValidation": false,
+      },
+      "Type": "Custom::S3BucketNotifications",
+    },
+    "StorageAccountListBucketNotificationsHandlerPolicy6CB5BE2E": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:PutBucketNotification",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageAccountListBucketDB72317C",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "StorageAccountListBucketNotificationsHandlerPolicy6CB5BE2E",
+        "Roles": [
+          {
+            "Ref": "BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
     },
     "StorageAccountListBucketPolicyB7AEFC93": {
       "Properties": {
@@ -1685,6 +2713,881 @@ exports[`Support Case Insights app prod core stack template snapshot 1`] = `
     },
   },
   "Resources": {
+    "AccountDiscoveryAccountLookupAccessE7524C41": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "organizations:ListAccounts",
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "ListOrganizationAccounts",
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageAccountListBucketDB72317C",
+                        "Arn",
+                      ],
+                    },
+                    "/account-lists/*",
+                  ],
+                ],
+              },
+              "Sid": "WriteAccountLists",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountLookupAccessE7524C41",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountLookupRoleA80EB863",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AccountDiscoveryAccountLookupFunction47FCAEB9": {
+      "DependsOn": [
+        "AccountDiscoveryAccountLookupRoleDefaultPolicy81FCF90D",
+        "AccountDiscoveryAccountLookupRoleA80EB863",
+        "AccountDiscoveryAccountLookupTelemetryPolicy2A42639D",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Lists active member accounts and writes the run account list (sciprod)",
+        "Environment": {
+          "Variables": {
+            "ACCOUNT_LIST_BUCKET": {
+              "Ref": "StorageAccountListBucketDB72317C",
+            },
+            "CASE_INSIGHTS_UNIQUE_ID": "sciprod",
+            "MANAGEMENT_ACCOUNT_ID": "111111111111",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "account-lookup",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+          },
+        },
+        "FunctionName": "Lambda-AccountLookup-sciprod",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "AccountDiscoveryAccountLookupLogGroupC70D8D3F",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "AccountDiscoveryAccountLookupRoleA80EB863",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "AccountDiscoveryAccountLookupFunctionEventInvokeConfigF3F7EA9A": {
+      "DependsOn": [
+        "AccountDiscoveryAccountLookupTelemetryPolicy2A42639D",
+      ],
+      "Properties": {
+        "DestinationConfig": {
+          "OnFailure": {
+            "Destination": {
+              "Fn::GetAtt": [
+                "QueuesAccountDiscoveryFailuresF86CAD1E",
+                "Arn",
+              ],
+            },
+          },
+        },
+        "FunctionName": {
+          "Ref": "AccountDiscoveryAccountLookupFunction47FCAEB9",
+        },
+        "MaximumEventAgeInSeconds": 21600,
+        "MaximumRetryAttempts": 2,
+        "Qualifier": "$LATEST",
+      },
+      "Type": "AWS::Lambda::EventInvokeConfig",
+    },
+    "AccountDiscoveryAccountLookupLogGroupC70D8D3F": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-AccountLookup-sciprod",
+        "RetentionInDays": 90,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "AccountDiscoveryAccountLookupRoleA80EB863": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-AccountLookup-sciprod",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "AccountDiscoveryAccountLookupRoleDefaultPolicy81FCF90D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:SendMessage",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesAccountDiscoveryFailuresF86CAD1E",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountLookupRoleDefaultPolicy81FCF90D",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountLookupRoleA80EB863",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AccountDiscoveryAccountLookupSchedule729E11B8": {
+      "Properties": {
+        "Description": "Daily Support Case Insights account discovery (sciprod)",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF",
+        },
+        "Name": "CaseInsights-AccountLookup-sciprod",
+        "ScheduleExpression": "cron(0 0 * * ? *)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "AccountDiscoveryAccountLookupFunction47FCAEB9",
+              "Arn",
+            ],
+          },
+          "DeadLetterConfig": {
+            "Arn": {
+              "Fn::GetAtt": [
+                "QueuesAccountDiscoveryFailuresF86CAD1E",
+                "Arn",
+              ],
+            },
+          },
+          "Input": "{"scheduledTime":"<aws.scheduler.scheduled-time>"}",
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 21600,
+            "MaximumRetryAttempts": 3,
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "AccountDiscoveryAccountLookupScheduleRole0374AF09",
+              "Arn",
+            ],
+          },
+        },
+      },
+      "Type": "AWS::Scheduler::Schedule",
+    },
+    "AccountDiscoveryAccountLookupScheduleRole0374AF09": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule/default/CaseInsights-AccountLookup-sciprod",
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "111111111111",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "EventBridge Scheduler role that invokes Lambda-AccountLookup-sciprod",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "AccountDiscoveryAccountLookupScheduleRoleDefaultPolicy6F5263A5": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "AccountDiscoveryAccountLookupFunction47FCAEB9",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "AccountDiscoveryAccountLookupFunction47FCAEB9",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesAccountDiscoveryFailuresF86CAD1E",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountLookupScheduleRoleDefaultPolicy6F5263A5",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountLookupScheduleRole0374AF09",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AccountDiscoveryAccountLookupTelemetryPolicy2A42639D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "AccountDiscoveryAccountLookupLogGroupC70D8D3F",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountLookupTelemetryPolicy2A42639D",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountLookupRoleA80EB863",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AccountDiscoveryAccountReaderAccessEF0C8AA3": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageAccountListBucketDB72317C",
+                        "Arn",
+                      ],
+                    },
+                    "/account-lists/*",
+                  ],
+                ],
+              },
+              "Sid": "ReadAccountLists",
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesActiveAccountsQueueB932EA89",
+                  "Arn",
+                ],
+              },
+              "Sid": "SendAccountReferences",
+            },
+            {
+              "Action": [
+                "dynamodb:DeleteItem",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageIdempotencyTable5D6E4193",
+                  "Arn",
+                ],
+              },
+              "Sid": "IdempotencyRecords",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountReaderAccessEF0C8AA3",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountReaderRole3DC5E1CC",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AccountDiscoveryAccountReaderFunction53FD32DE": {
+      "DependsOn": [
+        "AccountDiscoveryAccountReaderRoleDefaultPolicy798472E4",
+        "AccountDiscoveryAccountReaderRole3DC5E1CC",
+        "AccountDiscoveryAccountReaderTelemetryPolicy26011F40",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Enqueues one active-account reference per account in a new account list (sciprod)",
+        "Environment": {
+          "Variables": {
+            "ACCOUNT_LIST_BUCKET": {
+              "Ref": "StorageAccountListBucketDB72317C",
+            },
+            "ACTIVE_ACCOUNTS_QUEUE_URL": {
+              "Ref": "QueuesActiveAccountsQueueB932EA89",
+            },
+            "CASE_INSIGHTS_UNIQUE_ID": "sciprod",
+            "IDEMPOTENCY_TABLE_NAME": {
+              "Ref": "StorageIdempotencyTable5D6E4193",
+            },
+            "MANAGEMENT_ACCOUNT_ID": "111111111111",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "account-reader",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+          },
+        },
+        "FunctionName": "Lambda-AccountReader-sciprod",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "AccountDiscoveryAccountReaderLogGroup3C019B2A",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "AccountDiscoveryAccountReaderRole3DC5E1CC",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "AccountDiscoveryAccountReaderFunctionEventInvokeConfig21174B25": {
+      "DependsOn": [
+        "AccountDiscoveryAccountReaderTelemetryPolicy26011F40",
+      ],
+      "Properties": {
+        "DestinationConfig": {
+          "OnFailure": {
+            "Destination": {
+              "Fn::GetAtt": [
+                "QueuesAccountDiscoveryFailuresF86CAD1E",
+                "Arn",
+              ],
+            },
+          },
+        },
+        "FunctionName": {
+          "Ref": "AccountDiscoveryAccountReaderFunction53FD32DE",
+        },
+        "MaximumEventAgeInSeconds": 21600,
+        "MaximumRetryAttempts": 2,
+        "Qualifier": "$LATEST",
+      },
+      "Type": "AWS::Lambda::EventInvokeConfig",
+    },
+    "AccountDiscoveryAccountReaderLogGroup3C019B2A": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-AccountReader-sciprod",
+        "RetentionInDays": 90,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "AccountDiscoveryAccountReaderRole3DC5E1CC": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-AccountReader-sciprod",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "AccountDiscoveryAccountReaderRoleDefaultPolicy798472E4": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:SendMessage",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesAccountDiscoveryFailuresF86CAD1E",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountReaderRoleDefaultPolicy798472E4",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountReaderRole3DC5E1CC",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AccountDiscoveryAccountReaderTelemetryPolicy26011F40": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "AccountDiscoveryAccountReaderLogGroup3C019B2A",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AccountDiscoveryAccountReaderTelemetryPolicy26011F40",
+        "Roles": [
+          {
+            "Ref": "AccountDiscoveryAccountReaderRole3DC5E1CC",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "BucketNotificationsHandler050a0587b7544547bf325f094a3db8347ECC3691": {
+      "DependsOn": [
+        "BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC",
+      ],
+      "Properties": {
+        "Code": {
+          "ZipFile": "import boto3  # type: ignore
+import json
+import logging
+import urllib.request
+
+s3 = boto3.client("s3")
+
+EVENTBRIDGE_CONFIGURATION = 'EventBridgeConfiguration'
+CONFIGURATION_TYPES = ["TopicConfigurations", "QueueConfigurations", "LambdaFunctionConfigurations"]
+
+def handler(event: dict, context):
+  response_status = "SUCCESS"
+  error_message = ""
+  try:
+    props = event["ResourceProperties"]
+    notification_configuration = props["NotificationConfiguration"]
+    managed = props.get('Managed', 'true').lower() == 'true'
+    skipDestinationValidation = props.get('SkipDestinationValidation', 'false').lower() == 'true'
+    stack_id = event['StackId']
+    old = event.get("OldResourceProperties", {}).get("NotificationConfiguration", {})
+    if managed:
+      config = handle_managed(event["RequestType"], notification_configuration)
+    else:
+      config = handle_unmanaged(props["BucketName"], stack_id, event["RequestType"], notification_configuration, old)
+    s3.put_bucket_notification_configuration(Bucket=props["BucketName"], NotificationConfiguration=config, SkipDestinationValidation=skipDestinationValidation)
+  except Exception as e:
+    logging.exception("Failed to put bucket notification configuration")
+    response_status = "FAILED"
+    error_message = f"Error: {str(e)}. "
+  finally:
+    submit_response(event, context, response_status, error_message)
+
+def handle_managed(request_type, notification_configuration):
+  if request_type == 'Delete':
+    return {}
+  return notification_configuration
+
+def handle_unmanaged(bucket, stack_id, request_type, notification_configuration, old):
+  def get_id(n):
+    n['Id'] = ''
+    sorted_notifications = sort_filter_rules(n)
+    strToHash=json.dumps(sorted_notifications, sort_keys=True).replace('"Name": "prefix"', '"Name": "Prefix"').replace('"Name": "suffix"', '"Name": "Suffix"')
+    return f"{stack_id}-{hash(strToHash)}"
+  def with_id(n):
+    n['Id'] = get_id(n)
+    return n
+
+  external_notifications = {}
+  existing_notifications = s3.get_bucket_notification_configuration(Bucket=bucket)
+  for t in CONFIGURATION_TYPES:
+    if request_type == 'Update':
+        old_incoming_ids = [get_id(n) for n in old.get(t, [])]
+        external_notifications[t] = [n for n in existing_notifications.get(t, []) if not get_id(n) in old_incoming_ids]      
+    elif request_type == 'Delete':
+        external_notifications[t] = [n for n in existing_notifications.get(t, []) if not n['Id'].startswith(f"{stack_id}-")]
+    elif request_type == 'Create':
+        external_notifications[t] = [n for n in existing_notifications.get(t, [])]
+  if EVENTBRIDGE_CONFIGURATION in existing_notifications:
+    external_notifications[EVENTBRIDGE_CONFIGURATION] = existing_notifications[EVENTBRIDGE_CONFIGURATION]
+
+  if request_type == 'Delete':
+    return external_notifications
+
+  notifications = {}
+  for t in CONFIGURATION_TYPES:
+    external = external_notifications.get(t, [])
+    incoming = [with_id(n) for n in notification_configuration.get(t, [])]
+    notifications[t] = external + incoming
+
+  if EVENTBRIDGE_CONFIGURATION in notification_configuration:
+    notifications[EVENTBRIDGE_CONFIGURATION] = notification_configuration[EVENTBRIDGE_CONFIGURATION]
+  elif EVENTBRIDGE_CONFIGURATION in external_notifications:
+    notifications[EVENTBRIDGE_CONFIGURATION] = external_notifications[EVENTBRIDGE_CONFIGURATION]
+
+  return notifications
+
+def submit_response(event: dict, context, response_status: str, error_message: str):
+  response_body = json.dumps(
+    {
+      "Status": response_status,
+      "Reason": f"{error_message}See the details in CloudWatch Log Stream: {context.log_stream_name}",
+      "PhysicalResourceId": event.get("PhysicalResourceId") or event["LogicalResourceId"],
+      "StackId": event["StackId"],
+      "RequestId": event["RequestId"],
+      "LogicalResourceId": event["LogicalResourceId"],
+      "NoEcho": False,
+    }
+  ).encode("utf-8")
+  headers = {"content-type": "", "content-length": str(len(response_body))}
+  try:
+    req = urllib.request.Request(url=event["ResponseURL"], headers=headers, data=response_body, method="PUT")
+    with urllib.request.urlopen(req) as response:
+      print(response.read().decode("utf-8"))
+    print("Status code: " + response.reason)
+  except Exception as e:
+      print("send(..) failed executing request.urlopen(..): " + str(e))
+
+def sort_filter_rules(json_obj):
+  if not isinstance(json_obj, dict):
+      return json_obj
+  for key, value in json_obj.items():
+      if isinstance(value, dict):
+          json_obj[key] = sort_filter_rules(value)
+      elif isinstance(value, list):
+          json_obj[key] = [sort_filter_rules(item) for item in value]
+  if "Filter" in json_obj and "Key" in json_obj["Filter"] and "FilterRules" in json_obj["Filter"]["Key"]:
+      filter_rules = json_obj["Filter"]["Key"]["FilterRules"]
+      sorted_filter_rules = sorted(filter_rules, key=lambda x: x["Name"])
+      json_obj["Filter"]["Key"]["FilterRules"] = sorted_filter_rules
+  return json_obj",
+        },
+        "Description": "AWS CloudFormation handler for "Custom::S3BucketNotifications" resources (@aws-cdk/aws-s3)",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.13",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Timeout": 300,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
     "MemberAccessCaseAnnotationRole8062B9E8": {
       "Properties": {
         "AssumeRolePolicyDocument": {
@@ -1804,6 +3707,63 @@ exports[`Support Case Insights app prod core stack template snapshot 1`] = `
         ],
       },
       "Type": "AWS::IAM::Policy",
+    },
+    "QueuesAccountDiscoveryFailuresF86CAD1E": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "MessageRetentionPeriod": 1209600,
+        "QueueName": "CaseInsights-AccountDiscoveryFailures-sciprod",
+        "SqsManagedSseEnabled": true,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::SQS::Queue",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "QueuesAccountDiscoveryFailuresPolicy61CEC581": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sqs:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false",
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesAccountDiscoveryFailuresF86CAD1E",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Queues": [
+          {
+            "Ref": "QueuesAccountDiscoveryFailuresF86CAD1E",
+          },
+        ],
+      },
+      "Type": "AWS::SQS::QueuePolicy",
     },
     "QueuesActiveAccountsDeadLetterQueueE5038B58": {
       "DeletionPolicy": "Delete",
@@ -2518,6 +4478,26 @@ exports[`Support Case Insights app prod core stack template snapshot 1`] = `
       },
       "Type": "AWS::S3::BucketPolicy",
     },
+    "StorageAccountListBucketAllowBucketNotificationsToCaseInsightsCoreStacksciprodAccountDiscoveryAccountReaderFunction54609D2BC0496C67": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "AccountDiscoveryAccountReaderFunction53FD32DE",
+            "Arn",
+          ],
+        },
+        "Principal": "s3.amazonaws.com",
+        "SourceAccount": "111111111111",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "StorageAccountListBucketDB72317C",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
     "StorageAccountListBucketDB72317C": {
       "DeletionPolicy": "Retain",
       "Properties": {
@@ -2584,6 +4564,82 @@ exports[`Support Case Insights app prod core stack template snapshot 1`] = `
       },
       "Type": "AWS::S3::Bucket",
       "UpdateReplacePolicy": "Retain",
+    },
+    "StorageAccountListBucketNotificationsCCD0590E": {
+      "DependsOn": [
+        "StorageAccountListBucketAllowBucketNotificationsToCaseInsightsCoreStacksciprodAccountDiscoveryAccountReaderFunction54609D2BC0496C67",
+        "StorageAccountListBucketNotificationsHandlerPolicy6CB5BE2E",
+        "StorageAccountListBucketPolicyB7AEFC93",
+      ],
+      "Properties": {
+        "BucketName": {
+          "Ref": "StorageAccountListBucketDB72317C",
+        },
+        "Managed": true,
+        "NotificationConfiguration": {
+          "LambdaFunctionConfigurations": [
+            {
+              "Events": [
+                "s3:ObjectCreated:*",
+              ],
+              "Filter": {
+                "Key": {
+                  "FilterRules": [
+                    {
+                      "Name": "suffix",
+                      "Value": ".json",
+                    },
+                    {
+                      "Name": "prefix",
+                      "Value": "account-lists/",
+                    },
+                  ],
+                },
+              },
+              "LambdaFunctionArn": {
+                "Fn::GetAtt": [
+                  "AccountDiscoveryAccountReaderFunction53FD32DE",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+        },
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "BucketNotificationsHandler050a0587b7544547bf325f094a3db8347ECC3691",
+            "Arn",
+          ],
+        },
+        "SkipDestinationValidation": false,
+      },
+      "Type": "Custom::S3BucketNotifications",
+    },
+    "StorageAccountListBucketNotificationsHandlerPolicy6CB5BE2E": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:PutBucketNotification",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageAccountListBucketDB72317C",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "StorageAccountListBucketNotificationsHandlerPolicy6CB5BE2E",
+        "Roles": [
+          {
+            "Ref": "BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
     },
     "StorageAccountListBucketPolicyB7AEFC93": {
       "Properties": {

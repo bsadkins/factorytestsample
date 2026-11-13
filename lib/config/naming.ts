@@ -19,6 +19,10 @@ export interface ResourceNames {
   readonly summaryQueue: string;
   readonly workflowFailureQueue: string;
   readonly accountLookupFunction: string;
+  readonly accountReaderFunction: string;
+  readonly accountLookupSchedule: string;
+  /** Terminal queue for discovery schedule deliveries and invocations that exhaust retries. */
+  readonly accountDiscoveryFailureQueue: string;
   readonly caseAnalysisStateMachine: string;
   readonly glueDatabase: string;
   readonly glueTable: string;
@@ -42,6 +46,9 @@ export function resourceNames(config: Pick<CaseInsightsConfig, 'uniqueId'>): Res
     summaryQueue: `CaseInsights-CaseSummary-${id}`,
     workflowFailureQueue: `CaseInsights-WorkflowFailures-${id}`,
     accountLookupFunction: `Lambda-AccountLookup-${id}`,
+    accountReaderFunction: `Lambda-AccountReader-${id}`,
+    accountLookupSchedule: `CaseInsights-AccountLookup-${id}`,
+    accountDiscoveryFailureQueue: `CaseInsights-AccountDiscoveryFailures-${id}`,
     caseAnalysisStateMachine: `CaseAnalysis-${id}`,
     // Glue database names allow only lower-case letters, digits and underscores.
     glueDatabase: `case_insights_${id.replace(/-/g, '_')}`,

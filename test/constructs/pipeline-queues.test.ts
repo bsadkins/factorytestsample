@@ -45,7 +45,7 @@ describe('PipelineQueues', () => {
   test('every stage queue redrives to its own DLQ with configured receive count and 6x visibility', () => {
     const { template } = queuesTemplate(config);
     const byName = queuesByName(template);
-    expect(byName.size).toBe(7);
+    expect(byName.size).toBe(8);
 
     for (const name of stageQueueNames) {
       const source = byName.get(name);
@@ -62,8 +62,11 @@ describe('PipelineQueues', () => {
       expect(dlq?.resource.Properties.RedrivePolicy).toBeUndefined();
     }
 
-    const failures = byName.get(names.workflowFailureQueue);
-    expect(failures?.resource.Properties).toMatchObject({ SqsManagedSseEnabled: true, MessageRetentionPeriod: 10 * 86400 });
+    for (const terminal of [names.workflowFailureQueue, names.accountDiscoveryFailureQueue]) {
+      const failures = byName.get(terminal);
+      expect(failures?.resource.Properties).toMatchObject({ SqsManagedSseEnabled: true, MessageRetentionPeriod: 10 * 86400 });
+      expect(failures?.resource.Properties.RedrivePolicy).toBeUndefined();
+    }
     for (const { resource } of byName.values()) {
       expect(resource.Properties.KmsMasterKeyId).toBeUndefined();
     }
@@ -88,7 +91,7 @@ describe('PipelineQueues', () => {
         )
         .flatMap((policy) => policy.Properties.Queues.map((queue) => queue.Ref)),
     );
-    expect([...byName.values()].map(({ logicalId }) => protectedQueues.has(logicalId))).toEqual(Array(7).fill(true));
+    expect([...byName.values()].map(({ logicalId }) => protectedQueues.has(logicalId))).toEqual(Array(8).fill(true));
   });
 
   test('an explicit visibility timeout override is honoured', () => {
@@ -107,13 +110,14 @@ describe('PipelineQueues', () => {
     }
   });
 
-  test('only the terminal workflow-failure queue acknowledges SQS3, with a reason', () => {
+  test('only the terminal failure queues acknowledge SQS3, with a reason', () => {
     const app = nagApp();
     const stack = testStack(app, config);
     const queues = new PipelineQueues(stack, 'Queues', { config });
     expect(synthError(app)).toBeUndefined();
     expect(acknowledgedRules(queues).map(({ path, id }) => [path, id.replace(/^.*::(?=AwsSolutions-)/, '')])).toEqual([
       ['TestStack/Queues/WorkflowFailures', 'AwsSolutions-SQS3'],
+      ['TestStack/Queues/AccountDiscoveryFailures', 'AwsSolutions-SQS3'],
     ]);
   });
 
