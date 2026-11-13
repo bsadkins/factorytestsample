@@ -8,8 +8,10 @@ ever called.
 
 A conversation too large for the summary prompt is still stored in full, but instead of being
 queued for summarisation it is reported to the workflow failure queue, so it fails visibly rather
-than being truncated. Cases that already have a processed record are skipped. Access and
-entitlement errors are counted skips for this run only.
+than being truncated. A `terminal-failure.json` marker records the digest of the reported
+conversation, so later runs report it again only when its content changes; unchanged oversized
+content is never retried automatically. Cases that already have a processed record are skipped.
+Access and entitlement errors are counted skips for this run only.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Final
 import boto3
 from aws_lambda_powertools import Logger, Metrics, Tracer
 from aws_lambda_powertools.metrics import MetricUnit
+from common.analysis import text_digest
 from common.aws import client_config
 from common.case_refs import AnnotationRef, InvalidReferenceError, SummaryRef
 from common.conversation import (
@@ -34,9 +37,23 @@ from common.conversation import (
     render_case_annotation,
     utc_timestamp,
 )
+from common.failures import (
+    CONVERSATION_TOO_LARGE,
+    MAX_TERMINAL_MARKER_BYTES,
+    TerminalMarker,
+    failure_message,
+    terminal_marker_key,
+)
 from common.idempotency import idempotency_config
 from common.processed import get_existing_cases_batch
-from common.s3_json import write_json
+from common.s3_json import (
+    S3JsonDecodeError,
+    S3ObjectNotFoundError,
+    S3ObjectTooLargeError,
+    key_exists_by_listing,
+    read_json_object,
+    write_json,
+)
 from common.sqs import InvalidMessageError, parse_message_body, send_messages
 from common.sqs_batch import RecordFailedError, process_sqs_batch, run_idempotent
 from common.sts import safe_session_name
@@ -63,13 +80,14 @@ metrics = Metrics()
 
 IDEMPOTENCY_EXPIRY_SECONDS: Final = 7 * 24 * 60 * 60
 IDEMPOTENCY_CONFIG: Final = idempotency_config(expires_after_seconds=IDEMPOTENCY_EXPIRY_SECONDS)
-OVERSIZED_FAILURE_TYPE: Final = "ConversationTooLarge"
+OVERSIZED_FAILURE_TYPE: Final = CONVERSATION_TOO_LARGE
 
 _OUTCOME_METRICS: Final = {
     "annotated": "CasesAnnotated",
     "alreadyProcessed": "CasesAlreadyProcessed",
     "notFound": "CasesNotFound",
     "oversized": "OversizedConversations",
+    "oversizedUnchanged": "OversizedConversationsUnchanged",
     "skippedAccessDenied": "CasesSkippedAccessDenied",
     "skippedSubscriptionRequired": "CasesSkippedSubscriptionRequired",
 }
@@ -174,32 +192,6 @@ def _annotate_case(
     )
     count = int(document["communicationCount"])
     result |= {"communicationCount": count}
-    try:
-        chars = check_annotation_size(
-            render_case_annotation(document["communications"]), settings.max_annotation_chars
-        )
-    except ConversationTooLargeError as exc:
-        send_messages(
-            aws.sqs,
-            settings.failure_queue_url,
-            [
-                {
-                    "failureType": OVERSIZED_FAILURE_TYPE,
-                    "stage": "annotation",
-                    "accountId": ref.account_id,
-                    "caseId": ref.case_id,
-                    "displayId": ref.display_id,
-                    "runId": ref.run_id,
-                    "rawKey": ref.raw_key,
-                    "communicationsKey": ref.communications_key,
-                    "communicationsVersionId": written.version_id,
-                    "annotationChars": exc.chars,
-                    "limitChars": exc.limit,
-                    "failedAt": utc_timestamp(retrieved_at),
-                }
-            ],
-        )
-        return {**result, "outcome": "oversized", "annotationChars": exc.chars}
     summary = SummaryRef(
         account_id=ref.account_id,
         case_id=ref.case_id,
@@ -208,8 +200,81 @@ def _annotate_case(
         communications_version_id=written.version_id,
         communication_count=count,
     )
+    annotation = render_case_annotation(document["communications"])
+    try:
+        chars = check_annotation_size(annotation, settings.max_annotation_chars)
+    except ConversationTooLargeError as exc:
+        outcome = report_oversized(
+            summary,
+            exc,
+            digest=text_digest(annotation),
+            retrieved_at=retrieved_at,
+            settings=settings,
+            aws=aws,
+        )
+        return {**result, "outcome": outcome, "annotationChars": exc.chars}
     send_messages(aws.sqs, settings.summary_queue_url, [summary.to_message()])
     return {**result, "outcome": "annotated", "annotationChars": chars}
+
+
+def read_terminal_marker(
+    s3: S3Client, bucket: str, account_id: str, display_id: str
+) -> TerminalMarker | None:
+    """The case's terminal failure marker, or `None` when absent or unreadable."""
+    key = terminal_marker_key(account_id, display_id)
+    if not key_exists_by_listing(s3, bucket, key):
+        return None
+    try:
+        document = read_json_object(s3, bucket, key, max_bytes=MAX_TERMINAL_MARKER_BYTES)
+    except (S3ObjectNotFoundError, S3JsonDecodeError, S3ObjectTooLargeError):
+        return None
+    return TerminalMarker.from_document(document)
+
+
+def report_oversized(  # noqa: PLR0913
+    summary: SummaryRef,
+    exc: ConversationTooLargeError,
+    *,
+    digest: str,
+    retrieved_at: datetime,
+    settings: Settings,
+    aws: Clients,
+) -> str:
+    """Report an oversized conversation once per distinct content; return the outcome.
+
+    The failure message is sent before the marker is written, so a failed marker write can only
+    repeat the report, never lose it.
+    """
+    previous = read_terminal_marker(
+        aws.s3, settings.raw_bucket, summary.account_id, summary.display_id
+    )
+    if previous is not None and previous.matches(OVERSIZED_FAILURE_TYPE, digest):
+        return "oversizedUnchanged"
+    failed_at = utc_timestamp(retrieved_at)
+    message = failure_message(
+        summary,
+        failure_type=OVERSIZED_FAILURE_TYPE,
+        stage="annotation",
+        failed_at=failed_at,
+        retryable=False,
+        annotationChars=exc.chars,
+        limitChars=exc.limit,
+    )
+    send_messages(aws.sqs, settings.failure_queue_url, [message])
+    marker = TerminalMarker(
+        failure_type=OVERSIZED_FAILURE_TYPE,
+        content_digest=digest,
+        reported_at=failed_at,
+        run_id=summary.run_id,
+    )
+    write_json(
+        aws.s3,
+        settings.raw_bucket,
+        terminal_marker_key(summary.account_id, summary.display_id),
+        marker.to_document(),
+        max_bytes=MAX_TERMINAL_MARKER_BYTES,
+    )
+    return "oversized"
 
 
 def record_outcome(result: dict[str, Any], log_fields: dict[str, Any]) -> None:
@@ -231,6 +296,11 @@ def record_outcome(result: dict[str, Any], log_fields: dict[str, Any]) -> None:
     elif outcome == "oversized":
         logger.error(
             "Case conversation exceeds the summary input limit; stored and reported as failed",
+            extra=fields,
+        )
+    elif outcome == "oversizedUnchanged":
+        logger.warning(
+            "Case conversation is still too large and unchanged since it was reported; not resent",
             extra=fields,
         )
     else:

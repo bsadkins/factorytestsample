@@ -224,6 +224,35 @@ export function templatesLayerCode(paths: PythonAssetPaths = defaultPythonAssetP
   });
 }
 
+/**
+ * Handler code combining several directories of `lambdaRoot` as top-level packages, so one
+ * function can import each handler module as `<directory>.app`. Hashed by directory names and
+ * file contents, excluding bytecode caches.
+ */
+export function lambdaPackagesCode(lambdaRoot: string, directories: readonly string[]): Code {
+  if (directories.length === 0 || new Set(directories).size !== directories.length) {
+    throw new Error('lambdaPackagesCode needs distinct handler directories');
+  }
+  const inputs = directories.map((name) => ({ label: name, path: path.join(lambdaRoot, name) }));
+  return Code.fromAsset(lambdaRoot, {
+    assetHash: fingerprintInputs(inputs, ['lambda-packages']),
+    assetHashType: AssetHashType.CUSTOM,
+    bundling: {
+      image: NO_DOCKER_IMAGE,
+      outputType: BundlingOutput.NOT_ARCHIVED,
+      local: localOnlyBundling((outputDir) => {
+        for (const input of inputs) {
+          for (const relative of listAssetFiles(input.path)) {
+            const target = path.join(outputDir, input.label, ...relative.split('/'));
+            fs.mkdirSync(path.dirname(target), { recursive: true });
+            fs.copyFileSync(path.join(input.path, ...relative.split('/')), target);
+          }
+        }
+      }),
+    },
+  });
+}
+
 /** Handler code for one function directory under src/lambda, excluding bytecode caches. */
 export function lambdaHandlerCode(handlerDir: string): Code {
   return Code.fromAsset(handlerDir, { exclude: ['__pycache__', '*.pyc', '*.pyo'] });

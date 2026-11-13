@@ -22,6 +22,12 @@ describe('resource names', () => {
       caseAnnotationFunction: 'Lambda-CaseAnnotation-sci-dev',
       accountDiscoveryFailureQueue: 'CaseInsights-AccountDiscoveryFailures-sci-dev',
       caseAnalysisStateMachine: 'CaseAnalysis-sci-dev',
+      workflowStarterFunction: 'Lambda-WorkflowStarter-sci-dev',
+      caseAnalysisStagesFunction: 'Lambda-CaseAnalysisStages-sci-dev',
+      updateCaseMetadataFunction: 'Lambda-UpdateCaseMetadata-sci-dev',
+      handleFailureFunction: 'Lambda-HandleFailure-sci-dev',
+      caseCleanupFunction: 'Lambda-CaseCleanup-sci-dev',
+      caseCleanupSchedule: 'CaseInsights-CaseCleanup-sci-dev',
       glueDatabase: 'case_insights_sci_dev',
       glueTable: 'case_summary',
       crawler: 'case-insights-partition-crawler-sci-dev',
@@ -42,6 +48,16 @@ describe('resource names', () => {
     expect(names.caseAnnotationFunction.length).toBeLessThanOrEqual(64);
     expect(names.accountDiscoveryFailureQueue.length).toBeLessThanOrEqual(80);
     expect(names.caseAnalysisStateMachine.length).toBeLessThanOrEqual(80);
+    for (const name of [
+      names.workflowStarterFunction,
+      names.caseAnalysisStagesFunction,
+      names.updateCaseMetadataFunction,
+      names.handleFailureFunction,
+      names.caseCleanupFunction,
+      names.caseCleanupSchedule,
+    ]) {
+      expect(name.length).toBeLessThanOrEqual(64);
+    }
     expect(names.coreStack.length).toBeLessThanOrEqual(128);
     expect(names.memberRoleStack.length).toBeLessThanOrEqual(128);
     expect(names.memberRoleStackSet.length).toBeLessThanOrEqual(128);

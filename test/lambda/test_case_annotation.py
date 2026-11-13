@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 from case_annotation import app
 from common.case_refs import AnnotationRef
 from common.conversation import MAX_CASE_ANNOTATION_CHARS
+from common.failures import summary_ref_from_failure, terminal_marker_key
 from common.idempotency import persistence_layer
 from common.s3_json import WriteResult, write_json
 
@@ -255,8 +256,10 @@ def test_oversized_conversation_is_stored_in_full_and_fails_explicitly(env: Env)
     failure = failures[0]
     assert failure["annotationChars"] > MAX_CASE_ANNOTATION_CHARS
     assert {k: v for k, v in failure.items() if k != "annotationChars"} == {
+        "schemaVersion": 1,
         "failureType": "ConversationTooLarge",
         "stage": "annotation",
+        "retryable": False,
         "accountId": A,
         "caseId": target.case_id,
         "displayId": "2001",
@@ -264,11 +267,93 @@ def test_oversized_conversation_is_stored_in_full_and_fails_explicitly(env: Env)
         "rawKey": raw_key(A, "2001"),
         "communicationsKey": key,
         "communicationsVersionId": env.version(key),
+        "communicationCount": 150,
         "limitChars": MAX_CASE_ANNOTATION_CHARS,
         "failedAt": "2026-11-13T00:07:00Z",
     }
     assert filler not in json.dumps(failure)
     assert env.metrics() == {"OversizedConversations": 1}
+    marker = env.raw(terminal_marker_key(A, "2001"))
+    assert marker["failureType"] == "ConversationTooLarge"
+    assert marker["runId"] == RUN
+    assert filler not in json.dumps(marker)
+    # An operator can redrive the failure to the summary queue as a valid reference.
+    redriven = summary_ref_from_failure(failure)
+    assert redriven.communications_version_id == env.version(key)
+    assert redriven.raw_key == raw_key(A, "2001")
+
+
+def oversized_pages(case_id: str, marker: str = "") -> list[list[dict[str, Any]]]:
+    filler = "x" * 2_600
+    return [
+        [communication(case_id, n, body=f"{page}-{n}{marker}-{filler}") for n in range(50)]
+        for page in range(3)
+    ]
+
+
+def test_unchanged_oversized_conversation_is_not_reported_again_on_later_runs(env: Env) -> None:
+    first = ref(display="2002")
+    stub_pages(env, A, first.case_id, oversized_pages(first.case_id))
+    env.handle(first.to_message())
+    assert len(env.failures()) == 1
+    env.metrics()
+
+    later = ref(display="2002", run_id=NEXT_RUN)
+    stub_pages(env, A, later.case_id, oversized_pages(later.case_id))
+    response = env.handle(later.to_message(), request_id="request-2")
+
+    assert response == {"batchItemFailures": []}
+    assert env.failures() == []
+    assert env.summaries() == []
+    assert env.metrics() == {"OversizedConversationsUnchanged": 1}
+    assert "still too large and unchanged" in env.kit.logs()
+    # The terminal diagnostic stays visible with the run that reported it.
+    assert env.raw(terminal_marker_key(A, "2002"))["runId"] == RUN
+
+
+def test_changed_oversized_conversation_is_reported_again(env: Env) -> None:
+    first = ref(display="2003")
+    stub_pages(env, A, first.case_id, oversized_pages(first.case_id))
+    env.handle(first.to_message())
+    assert len(env.failures()) == 1
+
+    later = ref(display="2003", run_id=NEXT_RUN)
+    stub_pages(env, A, later.case_id, oversized_pages(later.case_id, marker="-follow-up"))
+    env.handle(later.to_message(), request_id="request-2")
+
+    failures = env.failures()
+    assert [f["runId"] for f in failures] == [NEXT_RUN]
+    assert failures[0]["retryable"] is False
+    assert env.raw(terminal_marker_key(A, "2003"))["runId"] == NEXT_RUN
+
+
+def test_unreadable_terminal_marker_is_treated_as_never_reported(env: Env) -> None:
+    target = ref(display="2004")
+    env.s3.put_object(Bucket=RAW, Key=terminal_marker_key(A, "2004"), Body=b"not json")
+    stub_pages(env, A, target.case_id, oversized_pages(target.case_id))
+
+    env.handle(target.to_message())
+
+    assert len(env.failures()) == 1
+    assert env.raw(terminal_marker_key(A, "2004"))["schemaVersion"] == 1
+
+
+def test_failed_failure_report_leaves_no_marker_so_the_retry_reports_it(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = ref(display="2005")
+    stub_pages(env, A, target.case_id, oversized_pages(target.case_id))
+
+    def broken_send(*_: Any, **__: Any) -> None:  # noqa: ANN401
+        raise ClientError(
+            {"Error": {"Code": "ServiceUnavailable", "Message": "synthetic"}}, "SendMessage"
+        )
+
+    monkeypatch.setattr(app, "send_messages", broken_send)
+    response = env.handle(target.to_message())
+
+    assert response == {"batchItemFailures": [{"itemIdentifier": "m0"}]}
+    assert terminal_marker_key(A, "2005") not in env.raw_keys()
 
 
 def test_case_with_a_processed_record_is_not_annotated_again(env: Env) -> None:

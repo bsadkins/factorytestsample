@@ -886,6 +886,1860 @@ def sort_filter_rules(json_obj):
       },
       "Type": "AWS::IAM::Role",
     },
+    "CaseAnalysisAnalysisStagesAccess578CCFC4": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "ReadRawCases",
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/checkpoints/*",
+                  ],
+                ],
+              },
+              "Sid": "WriteStageCheckpoints",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageProcessedBucket69BE6922",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "CheckProcessedRecords",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "StorageProcessedBucket69BE6922",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "StorageRawBucketBBD9BDC5",
+                    "Arn",
+                  ],
+                },
+              ],
+              "Sid": "ListCaseBuckets",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisAnalysisStagesAccess578CCFC4",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisAnalysisStagesRoleB3AAFA88",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisAnalysisStagesBedrockPolicy9EFABFFD": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "bedrock:InvokeModel",
+              "Condition": {
+                "StringEquals": {
+                  "aws:RequestedRegion": "us-east-1",
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+              "Sid": "InvokeGlobalInferenceProfile1",
+            },
+            {
+              "Action": "bedrock:InvokeModel",
+              "Condition": {
+                "StringEquals": {
+                  "aws:RequestedRegion": "us-east-1",
+                  "bedrock:InferenceProfileArn": "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+              "Sid": "InvokeRegionalModelThroughProfile1",
+            },
+            {
+              "Action": "bedrock:InvokeModel",
+              "Condition": {
+                "StringEquals": {
+                  "aws:RequestedRegion": "unspecified",
+                  "bedrock:InferenceProfileArn": "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+              "Sid": "InvokeGlobalModelThroughProfile1",
+            },
+            {
+              "Action": [
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream",
+              ],
+              "Effect": "Deny",
+              "NotResource": [
+                "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+                "arn:aws:bedrock:::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+              ],
+              "Sid": "DenyUnapprovedModels",
+            },
+            {
+              "Action": "aws-marketplace:Subscribe",
+              "Condition": {
+                "ForAnyValue:StringEquals": {
+                  "aws-marketplace:ProductId": [
+                    "prod-xdkflymybwmvi",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "SubscribeApprovedModelProducts",
+            },
+            {
+              "Action": "aws-marketplace:ViewSubscriptions",
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "ViewModelSubscriptions",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisAnalysisStagesBedrockPolicy9EFABFFD",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisAnalysisStagesRoleB3AAFA88",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisAnalysisStagesFunction213D3717": {
+      "DependsOn": [
+        "CaseAnalysisAnalysisStagesRoleB3AAFA88",
+        "CaseAnalysisAnalysisStagesTelemetryPolicyE658DFA7",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Summary, RCA and Lifecycle Bedrock tasks of the CaseAnalysis workflow (scidev)",
+        "Environment": {
+          "Variables": {
+            "BEDROCK_MAX_TOKENS": "1000",
+            "BEDROCK_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "CASE_INSIGHTS_TEMPLATES_DIR": "/opt/templates",
+            "CASE_INSIGHTS_UNIQUE_ID": "scidev",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "case-analysis-stages",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "PROCESSED_BUCKET": {
+              "Ref": "StorageProcessedBucket69BE6922",
+            },
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+          },
+        },
+        "FunctionName": "Lambda-CaseAnalysisStages-scidev",
+        "Handler": "analysis_stages.app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+          {
+            "Ref": "SharedLayersTemplatesLayer1DC6F067",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseAnalysisAnalysisStagesLogGroupF8B70964",
+          },
+        },
+        "MemorySize": 512,
+        "ReservedConcurrentExecutions": 2,
+        "Role": {
+          "Fn::GetAtt": [
+            "CaseAnalysisAnalysisStagesRoleB3AAFA88",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Timeout": 180,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseAnalysisAnalysisStagesLogGroupF8B70964": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-CaseAnalysisStages-scidev",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "CaseAnalysisAnalysisStagesRoleB3AAFA88": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-CaseAnalysisStages-scidev",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisAnalysisStagesTelemetryPolicyE658DFA7": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseAnalysisAnalysisStagesLogGroupF8B70964",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisAnalysisStagesTelemetryPolicyE658DFA7",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisAnalysisStagesRoleB3AAFA88",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisCaseCleanupAccess9EE18283": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "ReadCaseOwnership",
+            },
+            {
+              "Action": "s3:DeleteObject",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "StorageRawBucketBBD9BDC5",
+                          "Arn",
+                        ],
+                      },
+                      "/account_number=*/case_number=*/communications.json",
+                    ],
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "StorageRawBucketBBD9BDC5",
+                          "Arn",
+                        ],
+                      },
+                      "/account_number=*/case_number=*/data.json",
+                    ],
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "StorageRawBucketBBD9BDC5",
+                          "Arn",
+                        ],
+                      },
+                      "/account_number=*/case_number=*/workflow.json",
+                    ],
+                  ],
+                },
+              ],
+              "Sid": "ResetAbandonedCases",
+            },
+            {
+              "Action": [
+                "s3:DeleteObject",
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/cleanup-state/*",
+                  ],
+                ],
+              },
+              "Sid": "KeepCleanupCursor",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageProcessedBucket69BE6922",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "CheckProcessedRecords",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "StorageProcessedBucket69BE6922",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "StorageRawBucketBBD9BDC5",
+                    "Arn",
+                  ],
+                },
+              ],
+              "Sid": "ListCaseBuckets",
+            },
+            {
+              "Action": "states:ListExecutions",
+              "Effect": "Allow",
+              "Resource": "arn:aws:states:us-east-1:111111111111:stateMachine:CaseAnalysis-scidev",
+              "Sid": "ListActiveExecutions",
+            },
+            {
+              "Action": "states:DescribeExecution",
+              "Effect": "Allow",
+              "Resource": "arn:aws:states:us-east-1:111111111111:execution:CaseAnalysis-scidev:*",
+              "Sid": "DescribeCaseAnalysis",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisCaseCleanupAccess9EE18283",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisCaseCleanupRoleA00AAF1F",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisCaseCleanupFunction86AD786C": {
+      "DependsOn": [
+        "CaseAnalysisCaseCleanupRoleA00AAF1F",
+        "CaseAnalysisCaseCleanupTelemetryPolicyCC3D7683",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Daily reset of abandoned, unfinished cases for a later run (scidev)",
+        "Environment": {
+          "Variables": {
+            "CASE_INSIGHTS_UNIQUE_ID": "scidev",
+            "CLEANUP_GRACE_HOURS": "24",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "case-cleanup",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "PROCESSED_BUCKET": {
+              "Ref": "StorageProcessedBucket69BE6922",
+            },
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+            "STATE_MACHINE_ARN": "arn:aws:states:us-east-1:111111111111:stateMachine:CaseAnalysis-scidev",
+          },
+        },
+        "FunctionName": "Lambda-CaseCleanup-scidev",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseAnalysisCaseCleanupLogGroup655843A5",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "CaseAnalysisCaseCleanupRoleA00AAF1F",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseAnalysisCaseCleanupLogGroup655843A5": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-CaseCleanup-scidev",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "CaseAnalysisCaseCleanupRoleA00AAF1F": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-CaseCleanup-scidev",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisCaseCleanupSchedule8D7BBF7A": {
+      "Properties": {
+        "Description": "Daily Support Case Insights cleanup of abandoned unfinished cases (scidev)",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF",
+        },
+        "Name": "CaseInsights-CaseCleanup-scidev",
+        "ScheduleExpression": "cron(0 22 * * ? *)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "CaseAnalysisCaseCleanupFunction86AD786C",
+              "Arn",
+            ],
+          },
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 21600,
+            "MaximumRetryAttempts": 3,
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "CaseAnalysisCaseCleanupScheduleRole338DAE06",
+              "Arn",
+            ],
+          },
+        },
+      },
+      "Type": "AWS::Scheduler::Schedule",
+    },
+    "CaseAnalysisCaseCleanupScheduleRole338DAE06": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule/default/CaseInsights-CaseCleanup-scidev",
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "111111111111",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "EventBridge Scheduler role that invokes Function",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisCaseCleanupScheduleRoleDefaultPolicy368CFBE7": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "CaseAnalysisCaseCleanupFunction86AD786C",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "CaseAnalysisCaseCleanupFunction86AD786C",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+              ],
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisCaseCleanupScheduleRoleDefaultPolicy368CFBE7",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisCaseCleanupScheduleRole338DAE06",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisCaseCleanupTelemetryPolicyCC3D7683": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseAnalysisCaseCleanupLogGroup655843A5",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisCaseCleanupTelemetryPolicyCC3D7683",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisCaseCleanupRoleA00AAF1F",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisHandleFailureAccess21D572E3": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesWorkflowFailures66009843",
+                  "Arn",
+                ],
+              },
+              "Sid": "SendFailureRecords",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisHandleFailureAccess21D572E3",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisHandleFailureRoleB55AFD0A",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisHandleFailureFunctionF8DDFFC4": {
+      "DependsOn": [
+        "CaseAnalysisHandleFailureRoleB55AFD0A",
+        "CaseAnalysisHandleFailureTelemetryPolicyEDB92F0E",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Records exhausted case-analysis attempts on the workflow failure queue (scidev)",
+        "Environment": {
+          "Variables": {
+            "CASE_INSIGHTS_UNIQUE_ID": "scidev",
+            "FAILURE_QUEUE_URL": {
+              "Ref": "QueuesWorkflowFailures66009843",
+            },
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "handle-failure",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+          },
+        },
+        "FunctionName": "Lambda-HandleFailure-scidev",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseAnalysisHandleFailureLogGroup2A2B4BD8",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "CaseAnalysisHandleFailureRoleB55AFD0A",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Timeout": 180,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseAnalysisHandleFailureLogGroup2A2B4BD8": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-HandleFailure-scidev",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "CaseAnalysisHandleFailureRoleB55AFD0A": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-HandleFailure-scidev",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisHandleFailureTelemetryPolicyEDB92F0E": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseAnalysisHandleFailureLogGroup2A2B4BD8",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisHandleFailureTelemetryPolicyEDB92F0E",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisHandleFailureRoleB55AFD0A",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisStateMachine234D35AF": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "CaseAnalysisStateMachineRoleDefaultPolicy6D78777E",
+        "CaseAnalysisStateMachineRoleC6ED391A",
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{"StartAt":"Summary","States":{"Summary":{"Next":"RCA","Retry":[{"ErrorEquals":["Lambda.ClientExecutionTimeoutException","Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2},{"ErrorEquals":["Lambda.TooManyRequestsException"],"IntervalSeconds":5,"MaxAttempts":8,"BackoffRate":2,"MaxDelaySeconds":300,"JitterStrategy":"FULL"},{"ErrorEquals":["BedrockThrottlingError","BedrockTransientError"],"IntervalSeconds":15,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":120,"JitterStrategy":"FULL"},{"ErrorEquals":["ClientError","EndpointConnectionError","ConnectTimeoutError","ReadTimeoutError","Sandbox.Timedout","States.Timeout"],"IntervalSeconds":5,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":60,"JitterStrategy":"FULL"}],"Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.error","Next":"HandleFailure"}],"Type":"Task","ResultPath":"$.summary","Resource":"",
+              {
+                "Fn::GetAtt": [
+                  "CaseAnalysisAnalysisStagesFunction213D3717",
+                  "Arn",
+                ],
+              },
+              "","Parameters":{"stage":"summary","case.$":"$.case"}},"RCA":{"Next":"Lifecycle","Retry":[{"ErrorEquals":["Lambda.ClientExecutionTimeoutException","Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2},{"ErrorEquals":["Lambda.TooManyRequestsException"],"IntervalSeconds":5,"MaxAttempts":8,"BackoffRate":2,"MaxDelaySeconds":300,"JitterStrategy":"FULL"},{"ErrorEquals":["BedrockThrottlingError","BedrockTransientError"],"IntervalSeconds":15,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":120,"JitterStrategy":"FULL"},{"ErrorEquals":["ClientError","EndpointConnectionError","ConnectTimeoutError","ReadTimeoutError","Sandbox.Timedout","States.Timeout"],"IntervalSeconds":5,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":60,"JitterStrategy":"FULL"}],"Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.error","Next":"HandleFailure"}],"Type":"Task","ResultPath":"$.rca","Resource":"",
+              {
+                "Fn::GetAtt": [
+                  "CaseAnalysisAnalysisStagesFunction213D3717",
+                  "Arn",
+                ],
+              },
+              "","Parameters":{"stage":"rca","case.$":"$.case"}},"Lifecycle":{"Next":"UpdateCaseMetadata","Retry":[{"ErrorEquals":["Lambda.ClientExecutionTimeoutException","Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2},{"ErrorEquals":["Lambda.TooManyRequestsException"],"IntervalSeconds":5,"MaxAttempts":8,"BackoffRate":2,"MaxDelaySeconds":300,"JitterStrategy":"FULL"},{"ErrorEquals":["BedrockThrottlingError","BedrockTransientError"],"IntervalSeconds":15,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":120,"JitterStrategy":"FULL"},{"ErrorEquals":["ClientError","EndpointConnectionError","ConnectTimeoutError","ReadTimeoutError","Sandbox.Timedout","States.Timeout"],"IntervalSeconds":5,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":60,"JitterStrategy":"FULL"}],"Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.error","Next":"HandleFailure"}],"Type":"Task","ResultPath":"$.lifecycle","Resource":"",
+              {
+                "Fn::GetAtt": [
+                  "CaseAnalysisAnalysisStagesFunction213D3717",
+                  "Arn",
+                ],
+              },
+              "","Parameters":{"stage":"lifecycle","case.$":"$.case"}},"UpdateCaseMetadata":{"End":true,"Retry":[{"ErrorEquals":["Lambda.ClientExecutionTimeoutException","Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2},{"ErrorEquals":["Lambda.TooManyRequestsException"],"IntervalSeconds":5,"MaxAttempts":8,"BackoffRate":2,"MaxDelaySeconds":300,"JitterStrategy":"FULL"},{"ErrorEquals":["ClientError","EndpointConnectionError","ConnectTimeoutError","ReadTimeoutError","Sandbox.Timedout","States.Timeout"],"IntervalSeconds":5,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":60,"JitterStrategy":"FULL"}],"Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.error","Next":"HandleFailure"}],"Type":"Task","ResultPath":"$.update","Resource":"",
+              {
+                "Fn::GetAtt": [
+                  "CaseAnalysisUpdateCaseMetadataFunctionCC559D57",
+                  "Arn",
+                ],
+              },
+              "","Parameters":{"case.$":"$.case"}},"HandleFailure":{"Next":"AnalysisFailed","Retry":[{"ErrorEquals":["Lambda.ClientExecutionTimeoutException","Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2},{"ErrorEquals":["FailureDeliveryError","Lambda.TooManyRequestsException","States.Timeout"],"IntervalSeconds":5,"MaxAttempts":6,"BackoffRate":2,"MaxDelaySeconds":120,"JitterStrategy":"FULL"}],"Type":"Task","ResultPath":"$.failureRecord","Resource":"",
+              {
+                "Fn::GetAtt": [
+                  "CaseAnalysisHandleFailureFunctionF8DDFFC4",
+                  "Arn",
+                ],
+              },
+              ""},"AnalysisFailed":{"Type":"Fail","Error":"CaseAnalysisFailed","Cause":"Task retries were exhausted; the failure was recorded on the workflow failure queue."}},"TimeoutSeconds":3600,"Comment":"One case attempt: Summary -> RCA -> Lifecycle -> UpdateCaseMetadata; state carries references only."}",
+            ],
+          ],
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "CaseAnalysisStateMachineLogs7856118A",
+                    "Arn",
+                  ],
+                },
+              },
+            },
+          ],
+          "IncludeExecutionData": false,
+          "Level": "ALL",
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "CaseAnalysisStateMachineRoleC6ED391A",
+            "Arn",
+          ],
+        },
+        "StateMachineName": "CaseAnalysis-scidev",
+        "StateMachineType": "STANDARD",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "TracingConfiguration": {
+          "Enabled": true,
+        },
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "CaseAnalysisStateMachineLogs7856118A": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/CaseAnalysis-scidev",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "CaseAnalysisStateMachineRoleC6ED391A": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:111111111111:stateMachine:*",
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "111111111111",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisStateMachineRoleDefaultPolicy6D78777E": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "CaseAnalysisAnalysisStagesFunction213D3717",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "CaseAnalysisHandleFailureFunctionF8DDFFC4",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "CaseAnalysisUpdateCaseMetadataFunctionCC559D57",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "CaseAnalysisAnalysisStagesFunction213D3717",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "CaseAnalysisHandleFailureFunctionF8DDFFC4",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "CaseAnalysisUpdateCaseMetadataFunctionCC559D57",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisStateMachineRoleDefaultPolicy6D78777E",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisStateMachineRoleC6ED391A",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisUpdateCaseMetadataAccessD2011E20": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "ReadRawCasesAndCheckpoints",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageProcessedBucket69BE6922",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "CheckProcessedRecords",
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageProcessedBucket69BE6922",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "CommitProcessedRecords",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "StorageProcessedBucket69BE6922",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "StorageRawBucketBBD9BDC5",
+                    "Arn",
+                  ],
+                },
+              ],
+              "Sid": "ListCaseBuckets",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisUpdateCaseMetadataAccessD2011E20",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisUpdateCaseMetadataRole248CCD89",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisUpdateCaseMetadataFunctionCC559D57": {
+      "DependsOn": [
+        "CaseAnalysisUpdateCaseMetadataRole248CCD89",
+        "CaseAnalysisUpdateCaseMetadataTelemetryPolicyD75C1365",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Commits the validated processed record for one case (scidev)",
+        "Environment": {
+          "Variables": {
+            "BEDROCK_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "CASE_INSIGHTS_UNIQUE_ID": "scidev",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "update-case-metadata",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "PROCESSED_BUCKET": {
+              "Ref": "StorageProcessedBucket69BE6922",
+            },
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+          },
+        },
+        "FunctionName": "Lambda-UpdateCaseMetadata-scidev",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseAnalysisUpdateCaseMetadataLogGroup874B42D3",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "CaseAnalysisUpdateCaseMetadataRole248CCD89",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Timeout": 180,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseAnalysisUpdateCaseMetadataLogGroup874B42D3": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-UpdateCaseMetadata-scidev",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "CaseAnalysisUpdateCaseMetadataRole248CCD89": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-UpdateCaseMetadata-scidev",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisUpdateCaseMetadataTelemetryPolicyD75C1365": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseAnalysisUpdateCaseMetadataLogGroup874B42D3",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisUpdateCaseMetadataTelemetryPolicyD75C1365",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisUpdateCaseMetadataRole248CCD89",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisWorkflowStarterAccess76657A74": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/workflow.json",
+                  ],
+                ],
+              },
+              "Sid": "ClaimCaseOwnership",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageProcessedBucket69BE6922",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "CheckProcessedRecords",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "StorageProcessedBucket69BE6922",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "StorageRawBucketBBD9BDC5",
+                    "Arn",
+                  ],
+                },
+              ],
+              "Sid": "ListCaseBuckets",
+            },
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": "arn:aws:states:us-east-1:111111111111:stateMachine:CaseAnalysis-scidev",
+              "Sid": "StartCaseAnalysis",
+            },
+            {
+              "Action": "states:DescribeExecution",
+              "Effect": "Allow",
+              "Resource": "arn:aws:states:us-east-1:111111111111:execution:CaseAnalysis-scidev:*",
+              "Sid": "DescribeCaseAnalysis",
+            },
+            {
+              "Action": [
+                "dynamodb:DeleteItem",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageIdempotencyTable5D6E4193",
+                  "Arn",
+                ],
+              },
+              "Sid": "IdempotencyRecords",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisWorkflowStarterAccess76657A74",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisWorkflowStarterRole357FCAFE",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisWorkflowStarterFunctionF4E48A10": {
+      "DependsOn": [
+        "CaseAnalysisWorkflowStarterRoleDefaultPolicy85E4C99F",
+        "CaseAnalysisWorkflowStarterRole357FCAFE",
+        "CaseAnalysisWorkflowStarterTelemetryPolicy584AD459",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Starts one CaseAnalysis execution per case attempt (scidev)",
+        "Environment": {
+          "Variables": {
+            "CASE_INSIGHTS_UNIQUE_ID": "scidev",
+            "CLAIM_SETTLE_SECONDS": "300",
+            "IDEMPOTENCY_TABLE_NAME": {
+              "Ref": "StorageIdempotencyTable5D6E4193",
+            },
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "workflow-starter",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "PROCESSED_BUCKET": {
+              "Ref": "StorageProcessedBucket69BE6922",
+            },
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+            "STATE_MACHINE_ARN": "arn:aws:states:us-east-1:111111111111:stateMachine:CaseAnalysis-scidev",
+          },
+        },
+        "FunctionName": "Lambda-WorkflowStarter-scidev",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseAnalysisWorkflowStarterLogGroup5B5F07E1",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "CaseAnalysisWorkflowStarterRole357FCAFE",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseAnalysisWorkflowStarterFunctionSqsEventSourceCaseInsightsCoreStackscidevQueuesSummaryQueue4C596BDFA08658EF": {
+      "DependsOn": [
+        "CaseAnalysisWorkflowStarterTelemetryPolicy584AD459",
+      ],
+      "Properties": {
+        "BatchSize": 10,
+        "EventSourceArn": {
+          "Fn::GetAtt": [
+            "QueuesSummaryQueue969A41CA",
+            "Arn",
+          ],
+        },
+        "FunctionName": {
+          "Ref": "CaseAnalysisWorkflowStarterFunctionF4E48A10",
+        },
+        "FunctionResponseTypes": [
+          "ReportBatchItemFailures",
+        ],
+        "ScalingConfig": {
+          "MaximumConcurrency": 2,
+        },
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Lambda::EventSourceMapping",
+    },
+    "CaseAnalysisWorkflowStarterLogGroup5B5F07E1": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-WorkflowStarter-scidev",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "CaseAnalysisWorkflowStarterRole357FCAFE": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-WorkflowStarter-scidev",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisWorkflowStarterRoleDefaultPolicy85E4C99F": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "sqs:ChangeMessageVisibility",
+                "sqs:DeleteMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:ReceiveMessage",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesSummaryQueue969A41CA",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisWorkflowStarterRoleDefaultPolicy85E4C99F",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisWorkflowStarterRole357FCAFE",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisWorkflowStarterTelemetryPolicy584AD459": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseAnalysisWorkflowStarterLogGroup5B5F07E1",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisWorkflowStarterTelemetryPolicy584AD459",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisWorkflowStarterRole357FCAFE",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
     "CaseCollectionCaseAnnotationAccess7B75099B": {
       "Properties": {
         "PolicyDocument": {
@@ -961,6 +2815,43 @@ def sort_filter_rules(json_obj):
                 },
               ],
               "Sid": "SendSummaryReferences",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/terminal-failure.json",
+                  ],
+                ],
+              },
+              "Sid": "ReadTerminalMarkers",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "account_number=*/case_number=*/terminal-failure.json",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageRawBucketBBD9BDC5",
+                  "Arn",
+                ],
+              },
+              "Sid": "FindTerminalMarkers",
             },
           ],
           "Version": "2012-10-17",
@@ -4190,6 +6081,1860 @@ def sort_filter_rules(json_obj):
       },
       "Type": "AWS::IAM::Role",
     },
+    "CaseAnalysisAnalysisStagesAccess578CCFC4": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "ReadRawCases",
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/checkpoints/*",
+                  ],
+                ],
+              },
+              "Sid": "WriteStageCheckpoints",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageProcessedBucket69BE6922",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "CheckProcessedRecords",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "StorageProcessedBucket69BE6922",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "StorageRawBucketBBD9BDC5",
+                    "Arn",
+                  ],
+                },
+              ],
+              "Sid": "ListCaseBuckets",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisAnalysisStagesAccess578CCFC4",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisAnalysisStagesRoleB3AAFA88",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisAnalysisStagesBedrockPolicy9EFABFFD": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "bedrock:InvokeModel",
+              "Condition": {
+                "StringEquals": {
+                  "aws:RequestedRegion": "us-east-1",
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+              "Sid": "InvokeGlobalInferenceProfile1",
+            },
+            {
+              "Action": "bedrock:InvokeModel",
+              "Condition": {
+                "StringEquals": {
+                  "aws:RequestedRegion": "us-east-1",
+                  "bedrock:InferenceProfileArn": "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+              "Sid": "InvokeRegionalModelThroughProfile1",
+            },
+            {
+              "Action": "bedrock:InvokeModel",
+              "Condition": {
+                "StringEquals": {
+                  "aws:RequestedRegion": "unspecified",
+                  "bedrock:InferenceProfileArn": "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+              "Sid": "InvokeGlobalModelThroughProfile1",
+            },
+            {
+              "Action": [
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream",
+              ],
+              "Effect": "Deny",
+              "NotResource": [
+                "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+                "arn:aws:bedrock:::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+              ],
+              "Sid": "DenyUnapprovedModels",
+            },
+            {
+              "Action": "aws-marketplace:Subscribe",
+              "Condition": {
+                "ForAnyValue:StringEquals": {
+                  "aws-marketplace:ProductId": [
+                    "prod-xdkflymybwmvi",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "SubscribeApprovedModelProducts",
+            },
+            {
+              "Action": "aws-marketplace:ViewSubscriptions",
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "ViewModelSubscriptions",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisAnalysisStagesBedrockPolicy9EFABFFD",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisAnalysisStagesRoleB3AAFA88",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisAnalysisStagesFunction213D3717": {
+      "DependsOn": [
+        "CaseAnalysisAnalysisStagesRoleB3AAFA88",
+        "CaseAnalysisAnalysisStagesTelemetryPolicyE658DFA7",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Summary, RCA and Lifecycle Bedrock tasks of the CaseAnalysis workflow (sciprod)",
+        "Environment": {
+          "Variables": {
+            "BEDROCK_MAX_TOKENS": "1000",
+            "BEDROCK_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "CASE_INSIGHTS_TEMPLATES_DIR": "/opt/templates",
+            "CASE_INSIGHTS_UNIQUE_ID": "sciprod",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "case-analysis-stages",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "PROCESSED_BUCKET": {
+              "Ref": "StorageProcessedBucket69BE6922",
+            },
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+          },
+        },
+        "FunctionName": "Lambda-CaseAnalysisStages-sciprod",
+        "Handler": "analysis_stages.app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+          {
+            "Ref": "SharedLayersTemplatesLayer1DC6F067",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseAnalysisAnalysisStagesLogGroupF8B70964",
+          },
+        },
+        "MemorySize": 512,
+        "ReservedConcurrentExecutions": 5,
+        "Role": {
+          "Fn::GetAtt": [
+            "CaseAnalysisAnalysisStagesRoleB3AAFA88",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Timeout": 180,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseAnalysisAnalysisStagesLogGroupF8B70964": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-CaseAnalysisStages-sciprod",
+        "RetentionInDays": 90,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "CaseAnalysisAnalysisStagesRoleB3AAFA88": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-CaseAnalysisStages-sciprod",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisAnalysisStagesTelemetryPolicyE658DFA7": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseAnalysisAnalysisStagesLogGroupF8B70964",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisAnalysisStagesTelemetryPolicyE658DFA7",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisAnalysisStagesRoleB3AAFA88",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisCaseCleanupAccess9EE18283": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "ReadCaseOwnership",
+            },
+            {
+              "Action": "s3:DeleteObject",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "StorageRawBucketBBD9BDC5",
+                          "Arn",
+                        ],
+                      },
+                      "/account_number=*/case_number=*/communications.json",
+                    ],
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "StorageRawBucketBBD9BDC5",
+                          "Arn",
+                        ],
+                      },
+                      "/account_number=*/case_number=*/data.json",
+                    ],
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "StorageRawBucketBBD9BDC5",
+                          "Arn",
+                        ],
+                      },
+                      "/account_number=*/case_number=*/workflow.json",
+                    ],
+                  ],
+                },
+              ],
+              "Sid": "ResetAbandonedCases",
+            },
+            {
+              "Action": [
+                "s3:DeleteObject",
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/cleanup-state/*",
+                  ],
+                ],
+              },
+              "Sid": "KeepCleanupCursor",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageProcessedBucket69BE6922",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "CheckProcessedRecords",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "StorageProcessedBucket69BE6922",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "StorageRawBucketBBD9BDC5",
+                    "Arn",
+                  ],
+                },
+              ],
+              "Sid": "ListCaseBuckets",
+            },
+            {
+              "Action": "states:ListExecutions",
+              "Effect": "Allow",
+              "Resource": "arn:aws:states:us-east-1:111111111111:stateMachine:CaseAnalysis-sciprod",
+              "Sid": "ListActiveExecutions",
+            },
+            {
+              "Action": "states:DescribeExecution",
+              "Effect": "Allow",
+              "Resource": "arn:aws:states:us-east-1:111111111111:execution:CaseAnalysis-sciprod:*",
+              "Sid": "DescribeCaseAnalysis",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisCaseCleanupAccess9EE18283",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisCaseCleanupRoleA00AAF1F",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisCaseCleanupFunction86AD786C": {
+      "DependsOn": [
+        "CaseAnalysisCaseCleanupRoleA00AAF1F",
+        "CaseAnalysisCaseCleanupTelemetryPolicyCC3D7683",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Daily reset of abandoned, unfinished cases for a later run (sciprod)",
+        "Environment": {
+          "Variables": {
+            "CASE_INSIGHTS_UNIQUE_ID": "sciprod",
+            "CLEANUP_GRACE_HOURS": "24",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "case-cleanup",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "PROCESSED_BUCKET": {
+              "Ref": "StorageProcessedBucket69BE6922",
+            },
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+            "STATE_MACHINE_ARN": "arn:aws:states:us-east-1:111111111111:stateMachine:CaseAnalysis-sciprod",
+          },
+        },
+        "FunctionName": "Lambda-CaseCleanup-sciprod",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseAnalysisCaseCleanupLogGroup655843A5",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "CaseAnalysisCaseCleanupRoleA00AAF1F",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseAnalysisCaseCleanupLogGroup655843A5": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-CaseCleanup-sciprod",
+        "RetentionInDays": 90,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "CaseAnalysisCaseCleanupRoleA00AAF1F": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-CaseCleanup-sciprod",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisCaseCleanupSchedule8D7BBF7A": {
+      "Properties": {
+        "Description": "Daily Support Case Insights cleanup of abandoned unfinished cases (sciprod)",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF",
+        },
+        "Name": "CaseInsights-CaseCleanup-sciprod",
+        "ScheduleExpression": "cron(0 22 * * ? *)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "CaseAnalysisCaseCleanupFunction86AD786C",
+              "Arn",
+            ],
+          },
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 21600,
+            "MaximumRetryAttempts": 3,
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "CaseAnalysisCaseCleanupScheduleRole338DAE06",
+              "Arn",
+            ],
+          },
+        },
+      },
+      "Type": "AWS::Scheduler::Schedule",
+    },
+    "CaseAnalysisCaseCleanupScheduleRole338DAE06": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:scheduler:us-east-1:111111111111:schedule/default/CaseInsights-CaseCleanup-sciprod",
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "111111111111",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "EventBridge Scheduler role that invokes Function",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisCaseCleanupScheduleRoleDefaultPolicy368CFBE7": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "CaseAnalysisCaseCleanupFunction86AD786C",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "CaseAnalysisCaseCleanupFunction86AD786C",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+              ],
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisCaseCleanupScheduleRoleDefaultPolicy368CFBE7",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisCaseCleanupScheduleRole338DAE06",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisCaseCleanupTelemetryPolicyCC3D7683": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseAnalysisCaseCleanupLogGroup655843A5",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisCaseCleanupTelemetryPolicyCC3D7683",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisCaseCleanupRoleA00AAF1F",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisHandleFailureAccess21D572E3": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesWorkflowFailures66009843",
+                  "Arn",
+                ],
+              },
+              "Sid": "SendFailureRecords",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisHandleFailureAccess21D572E3",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisHandleFailureRoleB55AFD0A",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisHandleFailureFunctionF8DDFFC4": {
+      "DependsOn": [
+        "CaseAnalysisHandleFailureRoleB55AFD0A",
+        "CaseAnalysisHandleFailureTelemetryPolicyEDB92F0E",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Records exhausted case-analysis attempts on the workflow failure queue (sciprod)",
+        "Environment": {
+          "Variables": {
+            "CASE_INSIGHTS_UNIQUE_ID": "sciprod",
+            "FAILURE_QUEUE_URL": {
+              "Ref": "QueuesWorkflowFailures66009843",
+            },
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "handle-failure",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+          },
+        },
+        "FunctionName": "Lambda-HandleFailure-sciprod",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseAnalysisHandleFailureLogGroup2A2B4BD8",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "CaseAnalysisHandleFailureRoleB55AFD0A",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Timeout": 180,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseAnalysisHandleFailureLogGroup2A2B4BD8": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-HandleFailure-sciprod",
+        "RetentionInDays": 90,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "CaseAnalysisHandleFailureRoleB55AFD0A": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-HandleFailure-sciprod",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisHandleFailureTelemetryPolicyEDB92F0E": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseAnalysisHandleFailureLogGroup2A2B4BD8",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisHandleFailureTelemetryPolicyEDB92F0E",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisHandleFailureRoleB55AFD0A",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisStateMachine234D35AF": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "CaseAnalysisStateMachineRoleDefaultPolicy6D78777E",
+        "CaseAnalysisStateMachineRoleC6ED391A",
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{"StartAt":"Summary","States":{"Summary":{"Next":"RCA","Retry":[{"ErrorEquals":["Lambda.ClientExecutionTimeoutException","Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2},{"ErrorEquals":["Lambda.TooManyRequestsException"],"IntervalSeconds":5,"MaxAttempts":8,"BackoffRate":2,"MaxDelaySeconds":300,"JitterStrategy":"FULL"},{"ErrorEquals":["BedrockThrottlingError","BedrockTransientError"],"IntervalSeconds":15,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":120,"JitterStrategy":"FULL"},{"ErrorEquals":["ClientError","EndpointConnectionError","ConnectTimeoutError","ReadTimeoutError","Sandbox.Timedout","States.Timeout"],"IntervalSeconds":5,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":60,"JitterStrategy":"FULL"}],"Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.error","Next":"HandleFailure"}],"Type":"Task","ResultPath":"$.summary","Resource":"",
+              {
+                "Fn::GetAtt": [
+                  "CaseAnalysisAnalysisStagesFunction213D3717",
+                  "Arn",
+                ],
+              },
+              "","Parameters":{"stage":"summary","case.$":"$.case"}},"RCA":{"Next":"Lifecycle","Retry":[{"ErrorEquals":["Lambda.ClientExecutionTimeoutException","Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2},{"ErrorEquals":["Lambda.TooManyRequestsException"],"IntervalSeconds":5,"MaxAttempts":8,"BackoffRate":2,"MaxDelaySeconds":300,"JitterStrategy":"FULL"},{"ErrorEquals":["BedrockThrottlingError","BedrockTransientError"],"IntervalSeconds":15,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":120,"JitterStrategy":"FULL"},{"ErrorEquals":["ClientError","EndpointConnectionError","ConnectTimeoutError","ReadTimeoutError","Sandbox.Timedout","States.Timeout"],"IntervalSeconds":5,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":60,"JitterStrategy":"FULL"}],"Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.error","Next":"HandleFailure"}],"Type":"Task","ResultPath":"$.rca","Resource":"",
+              {
+                "Fn::GetAtt": [
+                  "CaseAnalysisAnalysisStagesFunction213D3717",
+                  "Arn",
+                ],
+              },
+              "","Parameters":{"stage":"rca","case.$":"$.case"}},"Lifecycle":{"Next":"UpdateCaseMetadata","Retry":[{"ErrorEquals":["Lambda.ClientExecutionTimeoutException","Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2},{"ErrorEquals":["Lambda.TooManyRequestsException"],"IntervalSeconds":5,"MaxAttempts":8,"BackoffRate":2,"MaxDelaySeconds":300,"JitterStrategy":"FULL"},{"ErrorEquals":["BedrockThrottlingError","BedrockTransientError"],"IntervalSeconds":15,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":120,"JitterStrategy":"FULL"},{"ErrorEquals":["ClientError","EndpointConnectionError","ConnectTimeoutError","ReadTimeoutError","Sandbox.Timedout","States.Timeout"],"IntervalSeconds":5,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":60,"JitterStrategy":"FULL"}],"Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.error","Next":"HandleFailure"}],"Type":"Task","ResultPath":"$.lifecycle","Resource":"",
+              {
+                "Fn::GetAtt": [
+                  "CaseAnalysisAnalysisStagesFunction213D3717",
+                  "Arn",
+                ],
+              },
+              "","Parameters":{"stage":"lifecycle","case.$":"$.case"}},"UpdateCaseMetadata":{"End":true,"Retry":[{"ErrorEquals":["Lambda.ClientExecutionTimeoutException","Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2},{"ErrorEquals":["Lambda.TooManyRequestsException"],"IntervalSeconds":5,"MaxAttempts":8,"BackoffRate":2,"MaxDelaySeconds":300,"JitterStrategy":"FULL"},{"ErrorEquals":["ClientError","EndpointConnectionError","ConnectTimeoutError","ReadTimeoutError","Sandbox.Timedout","States.Timeout"],"IntervalSeconds":5,"MaxAttempts":3,"BackoffRate":2,"MaxDelaySeconds":60,"JitterStrategy":"FULL"}],"Catch":[{"ErrorEquals":["States.ALL"],"ResultPath":"$.error","Next":"HandleFailure"}],"Type":"Task","ResultPath":"$.update","Resource":"",
+              {
+                "Fn::GetAtt": [
+                  "CaseAnalysisUpdateCaseMetadataFunctionCC559D57",
+                  "Arn",
+                ],
+              },
+              "","Parameters":{"case.$":"$.case"}},"HandleFailure":{"Next":"AnalysisFailed","Retry":[{"ErrorEquals":["Lambda.ClientExecutionTimeoutException","Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2},{"ErrorEquals":["FailureDeliveryError","Lambda.TooManyRequestsException","States.Timeout"],"IntervalSeconds":5,"MaxAttempts":6,"BackoffRate":2,"MaxDelaySeconds":120,"JitterStrategy":"FULL"}],"Type":"Task","ResultPath":"$.failureRecord","Resource":"",
+              {
+                "Fn::GetAtt": [
+                  "CaseAnalysisHandleFailureFunctionF8DDFFC4",
+                  "Arn",
+                ],
+              },
+              ""},"AnalysisFailed":{"Type":"Fail","Error":"CaseAnalysisFailed","Cause":"Task retries were exhausted; the failure was recorded on the workflow failure queue."}},"TimeoutSeconds":3600,"Comment":"One case attempt: Summary -> RCA -> Lifecycle -> UpdateCaseMetadata; state carries references only."}",
+            ],
+          ],
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "CaseAnalysisStateMachineLogs7856118A",
+                    "Arn",
+                  ],
+                },
+              },
+            },
+          ],
+          "IncludeExecutionData": false,
+          "Level": "ALL",
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "CaseAnalysisStateMachineRoleC6ED391A",
+            "Arn",
+          ],
+        },
+        "StateMachineName": "CaseAnalysis-sciprod",
+        "StateMachineType": "STANDARD",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "TracingConfiguration": {
+          "Enabled": true,
+        },
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "CaseAnalysisStateMachineLogs7856118A": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/CaseAnalysis-sciprod",
+        "RetentionInDays": 90,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "CaseAnalysisStateMachineRoleC6ED391A": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:111111111111:stateMachine:*",
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "111111111111",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisStateMachineRoleDefaultPolicy6D78777E": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "CaseAnalysisAnalysisStagesFunction213D3717",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "CaseAnalysisHandleFailureFunctionF8DDFFC4",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "CaseAnalysisUpdateCaseMetadataFunctionCC559D57",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "CaseAnalysisAnalysisStagesFunction213D3717",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "CaseAnalysisHandleFailureFunctionF8DDFFC4",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "CaseAnalysisUpdateCaseMetadataFunctionCC559D57",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisStateMachineRoleDefaultPolicy6D78777E",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisStateMachineRoleC6ED391A",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisUpdateCaseMetadataAccessD2011E20": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "ReadRawCasesAndCheckpoints",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageProcessedBucket69BE6922",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "CheckProcessedRecords",
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageProcessedBucket69BE6922",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "CommitProcessedRecords",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "StorageProcessedBucket69BE6922",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "StorageRawBucketBBD9BDC5",
+                    "Arn",
+                  ],
+                },
+              ],
+              "Sid": "ListCaseBuckets",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisUpdateCaseMetadataAccessD2011E20",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisUpdateCaseMetadataRole248CCD89",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisUpdateCaseMetadataFunctionCC559D57": {
+      "DependsOn": [
+        "CaseAnalysisUpdateCaseMetadataRole248CCD89",
+        "CaseAnalysisUpdateCaseMetadataTelemetryPolicyD75C1365",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Commits the validated processed record for one case (sciprod)",
+        "Environment": {
+          "Variables": {
+            "BEDROCK_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "CASE_INSIGHTS_UNIQUE_ID": "sciprod",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "update-case-metadata",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "PROCESSED_BUCKET": {
+              "Ref": "StorageProcessedBucket69BE6922",
+            },
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+          },
+        },
+        "FunctionName": "Lambda-UpdateCaseMetadata-sciprod",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseAnalysisUpdateCaseMetadataLogGroup874B42D3",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "CaseAnalysisUpdateCaseMetadataRole248CCD89",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Timeout": 180,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseAnalysisUpdateCaseMetadataLogGroup874B42D3": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-UpdateCaseMetadata-sciprod",
+        "RetentionInDays": 90,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "CaseAnalysisUpdateCaseMetadataRole248CCD89": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-UpdateCaseMetadata-sciprod",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisUpdateCaseMetadataTelemetryPolicyD75C1365": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseAnalysisUpdateCaseMetadataLogGroup874B42D3",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisUpdateCaseMetadataTelemetryPolicyD75C1365",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisUpdateCaseMetadataRole248CCD89",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisWorkflowStarterAccess76657A74": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/workflow.json",
+                  ],
+                ],
+              },
+              "Sid": "ClaimCaseOwnership",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageProcessedBucket69BE6922",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "CheckProcessedRecords",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "StorageProcessedBucket69BE6922",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "StorageRawBucketBBD9BDC5",
+                    "Arn",
+                  ],
+                },
+              ],
+              "Sid": "ListCaseBuckets",
+            },
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": "arn:aws:states:us-east-1:111111111111:stateMachine:CaseAnalysis-sciprod",
+              "Sid": "StartCaseAnalysis",
+            },
+            {
+              "Action": "states:DescribeExecution",
+              "Effect": "Allow",
+              "Resource": "arn:aws:states:us-east-1:111111111111:execution:CaseAnalysis-sciprod:*",
+              "Sid": "DescribeCaseAnalysis",
+            },
+            {
+              "Action": [
+                "dynamodb:DeleteItem",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageIdempotencyTable5D6E4193",
+                  "Arn",
+                ],
+              },
+              "Sid": "IdempotencyRecords",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisWorkflowStarterAccess76657A74",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisWorkflowStarterRole357FCAFE",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisWorkflowStarterFunctionF4E48A10": {
+      "DependsOn": [
+        "CaseAnalysisWorkflowStarterRoleDefaultPolicy85E4C99F",
+        "CaseAnalysisWorkflowStarterRole357FCAFE",
+        "CaseAnalysisWorkflowStarterTelemetryPolicy584AD459",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Starts one CaseAnalysis execution per case attempt (sciprod)",
+        "Environment": {
+          "Variables": {
+            "CASE_INSIGHTS_UNIQUE_ID": "sciprod",
+            "CLAIM_SETTLE_SECONDS": "300",
+            "IDEMPOTENCY_TABLE_NAME": {
+              "Ref": "StorageIdempotencyTable5D6E4193",
+            },
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "workflow-starter",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "PROCESSED_BUCKET": {
+              "Ref": "StorageProcessedBucket69BE6922",
+            },
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+            "STATE_MACHINE_ARN": "arn:aws:states:us-east-1:111111111111:stateMachine:CaseAnalysis-sciprod",
+          },
+        },
+        "FunctionName": "Lambda-WorkflowStarter-sciprod",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseAnalysisWorkflowStarterLogGroup5B5F07E1",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "CaseAnalysisWorkflowStarterRole357FCAFE",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseAnalysisWorkflowStarterFunctionSqsEventSourceCaseInsightsCoreStacksciprodQueuesSummaryQueue79A0D97972C9F501": {
+      "DependsOn": [
+        "CaseAnalysisWorkflowStarterTelemetryPolicy584AD459",
+      ],
+      "Properties": {
+        "BatchSize": 10,
+        "EventSourceArn": {
+          "Fn::GetAtt": [
+            "QueuesSummaryQueue969A41CA",
+            "Arn",
+          ],
+        },
+        "FunctionName": {
+          "Ref": "CaseAnalysisWorkflowStarterFunctionF4E48A10",
+        },
+        "FunctionResponseTypes": [
+          "ReportBatchItemFailures",
+        ],
+        "ScalingConfig": {
+          "MaximumConcurrency": 2,
+        },
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Lambda::EventSourceMapping",
+    },
+    "CaseAnalysisWorkflowStarterLogGroup5B5F07E1": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-WorkflowStarter-sciprod",
+        "RetentionInDays": 90,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "CaseAnalysisWorkflowStarterRole357FCAFE": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-WorkflowStarter-sciprod",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CaseAnalysisWorkflowStarterRoleDefaultPolicy85E4C99F": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "sqs:ChangeMessageVisibility",
+                "sqs:DeleteMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:ReceiveMessage",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesSummaryQueue969A41CA",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisWorkflowStarterRoleDefaultPolicy85E4C99F",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisWorkflowStarterRole357FCAFE",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseAnalysisWorkflowStarterTelemetryPolicy584AD459": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseAnalysisWorkflowStarterLogGroup5B5F07E1",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseAnalysisWorkflowStarterTelemetryPolicy584AD459",
+        "Roles": [
+          {
+            "Ref": "CaseAnalysisWorkflowStarterRole357FCAFE",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
     "CaseCollectionCaseAnnotationAccess7B75099B": {
       "Properties": {
         "PolicyDocument": {
@@ -4265,6 +8010,43 @@ def sort_filter_rules(json_obj):
                 },
               ],
               "Sid": "SendSummaryReferences",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*/case_number=*/terminal-failure.json",
+                  ],
+                ],
+              },
+              "Sid": "ReadTerminalMarkers",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "account_number=*/case_number=*/terminal-failure.json",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageRawBucketBBD9BDC5",
+                  "Arn",
+                ],
+              },
+              "Sid": "FindTerminalMarkers",
             },
           ],
           "Version": "2012-10-17",

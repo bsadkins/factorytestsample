@@ -8,6 +8,7 @@ import {
   MEMBER_ROLE_SUPPORT_ACTIONS,
   queueVisibilityTimeoutSeconds,
   resourceNames,
+  TERMINAL_MARKER_PATTERN,
 } from '../../lib';
 import { acknowledgedRules, asArray, iamPolicyStatements, nagApp, synthError, testApp, testConfig } from '../helpers/cdk';
 
@@ -73,7 +74,10 @@ describe('CaseCollection', () => {
   test('both functions consume their stage queue with partial-batch failure reporting and bounded concurrency', () => {
     const { core, template } = coreTemplate();
     const { retrievalFunction, annotationFunction } = core.caseCollection;
-    template.resourceCountIs('AWS::Lambda::EventSourceMapping', 2);
+    const collectionMappings = template.findResources('AWS::Lambda::EventSourceMapping', {
+      Properties: { FunctionName: Match.objectLike({ Ref: Match.stringLikeRegexp('^CaseCollection') }) },
+    });
+    expect(Object.keys(collectionMappings)).toHaveLength(2);
     template.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
       FunctionName: { Ref: logicalId(core, retrievalFunction.function) },
       EventSourceArn: arnOf(logicalId(core, core.queues.activeAccounts.queue)),
@@ -157,6 +161,19 @@ describe('CaseCollection', () => {
         Action: 'sqs:SendMessage',
         Resource: [arnOf(logicalId(core, core.queues.summary.queue)), arnOf(logicalId(core, core.queues.workflowFailures))],
       },
+      {
+        Sid: 'ReadTerminalMarkers',
+        Effect: 'Allow',
+        Action: 's3:GetObject',
+        Resource: { 'Fn::Join': ['', [arnOf(logicalId(core, core.storage.rawBucket)), `/${TERMINAL_MARKER_PATTERN}`]] },
+      },
+      {
+        Sid: 'FindTerminalMarkers',
+        Effect: 'Allow',
+        Action: 's3:ListBucket',
+        Resource: arnOf(logicalId(core, core.storage.rawBucket)),
+        Condition: { StringLike: { 's3:prefix': [TERMINAL_MARKER_PATTERN] } },
+      },
     ]);
   });
 
@@ -184,6 +201,7 @@ describe('CaseCollection', () => {
         ['CaseCollection/CaseAnnotation/TelemetryPolicy', 'AwsSolutions-IAM5[Resource::*]'],
         ['CaseCollection/CaseAnnotation/Function', 'AwsSolutions-L1'],
         ['CaseCollection/CaseAnnotationAccess', rawFinding],
+        ['CaseCollection/CaseAnnotationAccess', `AwsSolutions-IAM5[Resource::<${logicalId(core, core.storage.rawBucket)}.Arn>/${TERMINAL_MARKER_PATTERN}]`],
       ].sort(),
     );
   });

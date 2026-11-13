@@ -176,3 +176,74 @@ def object_exists(s3: S3Client, bucket: str, key: str) -> bool:
             return False
         raise
     return True
+
+
+@dataclass(frozen=True, slots=True)
+class VersionedDocument:
+    """A JSON object together with the ETag of the version it was read from."""
+
+    document: dict[str, Any]
+    etag: str
+
+
+def read_json_with_etag(
+    s3: S3Client, bucket: str, key: str, *, max_bytes: int = DEFAULT_MAX_BYTES
+) -> VersionedDocument | None:
+    """Read a JSON object and its ETag for a later conditional write or delete.
+
+    Returns `None` when the object does not exist.
+    """
+    try:
+        response = s3.get_object(Bucket=bucket, Key=key)
+    except ClientError as exc:
+        if _is_not_found(exc):
+            return None
+        logger.warning("S3 read failed", extra={"bucket": bucket, "key": key, **error_fields(exc)})
+        raise
+    body = response["Body"]
+    try:
+        raw = body.read(max_bytes + 1)
+    finally:
+        body.close()
+    if len(raw) > max_bytes:
+        raise S3ObjectTooLargeError(f"s3://{bucket}/{key} exceeds {max_bytes} bytes")
+    try:
+        data = json.loads(raw.decode("utf-8"), parse_constant=_reject_constant)
+    except (UnicodeDecodeError, ValueError):
+        raise S3JsonDecodeError(f"s3://{bucket}/{key} is not valid UTF-8 JSON") from None
+    if not isinstance(data, dict):
+        raise S3JsonDecodeError(f"s3://{bucket}/{key} does not contain a JSON object")
+    return VersionedDocument(document=data, etag=response.get("ETag", ""))
+
+
+def delete_if_unchanged(s3: S3Client, bucket: str, key: str, etag: str) -> bool:
+    """Delete the current version of `key` only if its ETag is still `etag`.
+
+    Returns False, deleting nothing, when the object changed or no longer exists. In a versioned
+    bucket the delete adds a delete marker; earlier versions remain until lifecycle expiry.
+    """
+    try:
+        s3.delete_object(Bucket=bucket, Key=key, IfMatch=etag)
+    except ClientError as exc:
+        if (
+            aws_error_code(exc) in _PRECONDITION_CODES
+            or http_status(exc) in _HTTP_PRECONDITION
+            or _is_not_found(exc)
+        ):
+            return False
+        logger.warning(
+            "S3 delete failed", extra={"bucket": bucket, "key": key, **error_fields(exc)}
+        )
+        raise
+    return True
+
+
+def is_not_found_error(exc: BaseException) -> bool:
+    """True for an S3 404 / NoSuchKey error."""
+    return isinstance(exc, ClientError) and _is_not_found(exc)
+
+
+def key_exists_by_listing(s3: S3Client, bucket: str, key: str) -> bool:
+    """True when `key` exists, checked by listing so a prefix-scoped s3:ListBucket suffices."""
+    response = s3.list_objects_v2(Bucket=bucket, Prefix=key, MaxKeys=1)
+    return any(item.get("Key") == key for item in response.get("Contents", []))

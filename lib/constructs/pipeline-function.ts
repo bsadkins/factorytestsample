@@ -1,6 +1,14 @@
 import type { Duration } from 'aws-cdk-lib';
 import { type IRole, Policy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import { Architecture, type CfnFunction, Function as LambdaFunction, type ILayerVersion, LoggingFormat, Runtime } from 'aws-cdk-lib/aws-lambda';
+import {
+  Architecture,
+  type CfnFunction,
+  type Code,
+  Function as LambdaFunction,
+  type ILayerVersion,
+  LoggingFormat,
+  Runtime,
+} from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 import type { CaseInsightsConfig } from '../config';
@@ -34,6 +42,8 @@ export interface PipelineFunctionProps {
   readonly description: string;
   /** Absolute path of the handler directory under src/lambda. */
   readonly handlerDir: string;
+  /** Replaces the asset built from handlerDir, for a function that packages several handler directories. */
+  readonly code?: Code;
   /** Defaults to `app.handler`. */
   readonly handler?: string;
   /** Powertools service name (bounded, low-cardinality metric dimension). */
@@ -104,7 +114,7 @@ export class PipelineFunction extends Construct {
       runtime: Runtime.PYTHON_3_12,
       architecture: Architecture.X86_64,
       handler: props.handler ?? 'app.handler',
-      code: lambdaHandlerCode(props.handlerDir),
+      code: props.code ?? lambdaHandlerCode(props.handlerDir),
       layers: [...props.layers],
       role: this.role,
       timeout: props.timeout,

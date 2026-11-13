@@ -2,6 +2,7 @@ import { Stack, type StackProps } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import type { CaseInsightsConfig } from '../config';
 import { AccountDiscovery } from '../constructs/account-discovery';
+import { CaseAnalysis } from '../constructs/case-analysis';
 import { CaseCollection } from '../constructs/case-collection';
 import { CoreStorage } from '../constructs/core-storage';
 import { MemberAccessRoles } from '../constructs/member-access-roles';
@@ -25,6 +26,7 @@ export class CaseInsightsCoreStack extends Stack {
   public readonly memberAccess: MemberAccessRoles;
   public readonly accountDiscovery: AccountDiscovery;
   public readonly caseCollection: CaseCollection;
+  public readonly caseAnalysis: CaseAnalysis;
 
   public constructor(scope: Construct, id: string, props: CaseInsightsCoreStackProps) {
     super(scope, id, props);
@@ -53,6 +55,17 @@ export class CaseInsightsCoreStack extends Stack {
       retrievalRole: this.memberAccess.retrievalRole,
       annotationRole: this.memberAccess.annotationRole,
       commonLayer: this.layers.commonLayer,
+    });
+    this.caseAnalysis = new CaseAnalysis(this, 'CaseAnalysis', {
+      config: props.config,
+      rawBucket: this.storage.rawBucket,
+      processedBucket: this.storage.processedBucket,
+      idempotencyTable: this.storage.idempotencyTable,
+      summaryQueue: this.queues.summary.queue,
+      failureQueue: this.queues.workflowFailures,
+      commonLayer: this.layers.commonLayer,
+      templatesLayer: this.layers.templatesLayer,
+      templateEnvironment: this.layers.templateEnvironment,
     });
   }
 }

@@ -57,6 +57,16 @@ describe('Support Case Insights app', () => {
     const accountListsFinding = `AwsSolutions-IAM5[Resource::<${coreStack.getLogicalId(coreStack.storage.accountListBucket.node.defaultChild as never)}.Arn>/account-lists/*]`;
     const lookupVersionsFinding = `AwsSolutions-IAM5[Resource::<${coreStack.getLogicalId(coreStack.accountDiscovery.lookupFunction.function.node.defaultChild as never)}.Arn>:*]`;
     const rawObjectsFinding = `AwsSolutions-IAM5[Resource::<${coreStack.getLogicalId(coreStack.storage.rawBucket.node.defaultChild as never)}.Arn>/account_number=*]`;
+    const idOf = (construct: { node: { defaultChild?: unknown } }): string => coreStack.getLogicalId(construct.node.defaultChild as never);
+    const rawFinding = (pattern: string): string => `AwsSolutions-IAM5[Resource::<${idOf(coreStack.storage.rawBucket)}.Arn>/${pattern}]`;
+    const processedFinding = `AwsSolutions-IAM5[Resource::<${idOf(coreStack.storage.processedBucket)}.Arn>/account_number=*]`;
+    const executionsFinding = `AwsSolutions-IAM5[Resource::arn:aws:states:${config.region}:${config.managementAccountId}:execution:CaseAnalysis-${config.uniqueId}:*]`;
+    const analysis = coreStack.caseAnalysis;
+    const versionsFinding = (fn: { function: { node: { defaultChild?: unknown } } }): string => `AwsSolutions-IAM5[Resource::<${idOf(fn.function)}.Arn>:*]`;
+    const analysisFunctionAcks = ['AnalysisStages', 'UpdateCaseMetadata', 'HandleFailure', 'WorkflowStarter', 'CaseCleanup'].flatMap((id) => [
+      [`${core}/CaseAnalysis/${id}/TelemetryPolicy`, 'AwsSolutions-IAM5[Resource::*]'],
+      [`${core}/CaseAnalysis/${id}/Function`, 'AwsSolutions-L1'],
+    ]);
     const notificationsHandler = coreStack.node.children.find((child) => child.node.id.startsWith('BucketNotificationsHandler'));
     expect(acknowledged.map(({ path: constructPath, id }) => [constructPath, id]).sort()).toEqual(
       [
@@ -78,6 +88,29 @@ describe('Support Case Insights app', () => {
         [`${core}/CaseCollection/CaseAnnotation/TelemetryPolicy`, 'AwsSolutions-IAM5[Resource::*]'],
         [`${core}/CaseCollection/CaseAnnotation/Function`, 'AwsSolutions-L1'],
         [`${core}/CaseCollection/CaseAnnotationAccess`, rawObjectsFinding],
+        [`${core}/CaseCollection/CaseAnnotationAccess`, rawFinding('account_number=*/case_number=*/terminal-failure.json')],
+        ...analysisFunctionAcks,
+        [`${core}/CaseAnalysis/AnalysisStagesAccess`, rawObjectsFinding],
+        [`${core}/CaseAnalysis/AnalysisStagesAccess`, rawFinding('account_number=*/case_number=*/checkpoints/*')],
+        [`${core}/CaseAnalysis/AnalysisStagesAccess`, processedFinding],
+        [`${core}/CaseAnalysis/AnalysisStagesBedrock/Policy`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/CaseAnalysis/UpdateCaseMetadataAccess`, rawObjectsFinding],
+        [`${core}/CaseAnalysis/UpdateCaseMetadataAccess`, processedFinding],
+        [`${core}/CaseAnalysis/WorkflowStarterAccess`, rawFinding('account_number=*/case_number=*/workflow.json')],
+        [`${core}/CaseAnalysis/WorkflowStarterAccess`, processedFinding],
+        [`${core}/CaseAnalysis/WorkflowStarterAccess`, executionsFinding],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, rawObjectsFinding],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, rawFinding('account_number=*/case_number=*/data.json')],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, rawFinding('account_number=*/case_number=*/communications.json')],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, rawFinding('account_number=*/case_number=*/workflow.json')],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, rawFinding('cleanup-state/*')],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, processedFinding],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, executionsFinding],
+        [`${core}/CaseAnalysis/StateMachine/Role`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/CaseAnalysis/StateMachine/Role`, versionsFinding(analysis.stagesFunction)],
+        [`${core}/CaseAnalysis/StateMachine/Role`, versionsFinding(analysis.updateFunction)],
+        [`${core}/CaseAnalysis/StateMachine/Role`, versionsFinding(analysis.failureFunction)],
+        [`${core}/CaseAnalysis/CaseCleanupScheduleRole`, versionsFinding(analysis.cleanupFunction)],
         [
           `${notificationsHandler?.node.path ?? 'missing'}/Role`,
           'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]',

@@ -20,7 +20,7 @@ describe('AccountDiscovery', () => {
     const { core, template } = coreTemplate();
     const names = resourceNames(core.config);
     const discovery = core.accountDiscovery;
-    template.resourceCountIs('AWS::Scheduler::Schedule', 1);
+    expect(Object.keys(template.findResources('AWS::Scheduler::Schedule', { Properties: { Name: names.accountLookupSchedule } }))).toHaveLength(1);
     template.hasResourceProperties('AWS::Scheduler::Schedule', {
       Name: names.accountLookupSchedule,
       ScheduleExpression: 'cron(0 0 * * ? *)',

@@ -17,6 +17,7 @@ from common.processed import case_record_key, validate_account_id, validate_disp
 COMMUNICATIONS_FILE: Final = "communications.json"
 _CASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}$")
 _VERSION_ID = re.compile(r"^[A-Za-z0-9._+=/-]{1,1024}$")
+_REDRIVE_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 MAX_COMMUNICATION_COUNT: Final = 100_000
 
 
@@ -133,7 +134,11 @@ class AnnotationRef:
 
 @dataclass(frozen=True, slots=True)
 class SummaryRef:
-    """Summary queue message: a case whose full conversation is stored in the raw bucket."""
+    """Summary queue message: a case whose full conversation is stored in the raw bucket.
+
+    `redriveId` is optional and set only by an operator redrive, so a deliberate redrive of an
+    attempt that already ran is not suppressed as a duplicate delivery.
+    """
 
     account_id: str
     case_id: str
@@ -141,6 +146,7 @@ class SummaryRef:
     run_id: str
     communications_version_id: str | None
     communication_count: int
+    redrive_id: str | None = None
 
     _REQUIRED = frozenset(
         {
@@ -154,6 +160,7 @@ class SummaryRef:
             "communicationCount",
         }
     )
+    _OPTIONAL = frozenset({"redriveId"})
 
     @property
     def raw_key(self) -> str:
@@ -173,11 +180,25 @@ class SummaryRef:
             "communicationsKey": self.communications_key,
             "communicationsVersionId": self.communications_version_id,
             "communicationCount": self.communication_count,
+            **({"redriveId": self.redrive_id} if self.redrive_id is not None else {}),
+        }
+
+    def idempotency_key(self) -> dict[str, Any]:
+        """One start decision per case, run, conversation version and redrive."""
+        return {
+            "accountId": self.account_id,
+            "caseId": self.case_id,
+            "runId": self.run_id,
+            "communicationsVersionId": self.communications_version_id,
+            "redriveId": self.redrive_id,
         }
 
     @classmethod
     def parse(cls, body: Mapping[str, Any]) -> SummaryRef:
-        _fields(body, cls._REQUIRED, frozenset())
+        _fields(body, cls._REQUIRED, cls._OPTIONAL)
+        redrive = body.get("redriveId")
+        if redrive is not None and (not isinstance(redrive, str) or not _REDRIVE_ID.match(redrive)):
+            raise InvalidReferenceError("message field redriveId is invalid")
         version = body.get("communicationsVersionId")
         if version is not None and (not isinstance(version, str) or not _VERSION_ID.match(version)):
             raise InvalidReferenceError("message field communicationsVersionId is invalid")
@@ -195,6 +216,7 @@ class SummaryRef:
             run_id=_checked("runId", validate_run_id, _string(body, "runId")),
             communications_version_id=version,
             communication_count=count,
+            redrive_id=redrive,
         )
         if _string(body, "rawKey") != ref.raw_key or (
             _string(body, "communicationsKey") != ref.communications_key

@@ -13,6 +13,8 @@ import { PipelineFunction } from './pipeline-function';
 
 /** Raw and processed case objects live under Hive-style `account_number=<id>/` partitions. */
 export const CASE_PARTITION_PATTERN = 'account_number=*';
+/** Terminal failure markers written by annotation; must match TERMINAL_MARKER_FILE in common/failures.py. */
+export const TERMINAL_MARKER_PATTERN = 'account_number=*/case_number=*/terminal-failure.json';
 /** One account per retrieval invocation, so a large account gets the whole function timeout. */
 export const CASE_RETRIEVAL_BATCH_SIZE = 1;
 export const CASE_ANNOTATION_BATCH_SIZE = 5;
@@ -151,8 +153,24 @@ export class CaseCollection extends Construct {
           actions: ['sqs:SendMessage'],
           resources: [props.summaryQueue.queueArn, props.failureQueue.queueArn],
         }),
+        new PolicyStatement({
+          sid: 'ReadTerminalMarkers',
+          actions: ['s3:GetObject'],
+          resources: [rawBucket.arnForObjects(TERMINAL_MARKER_PATTERN)],
+        }),
+        new PolicyStatement({
+          sid: 'FindTerminalMarkers',
+          actions: ['s3:ListBucket'],
+          resources: [rawBucket.bucketArn],
+          conditions: { StringLike: { 's3:prefix': [TERMINAL_MARKER_PATTERN] } },
+        }),
       ],
     });
+    acknowledgeNagFinding(
+      annotationAccess,
+      `AwsSolutions-IAM5[Resource::<${logicalIdOf(rawBucket)}.Arn>/${TERMINAL_MARKER_PATTERN}]`,
+      'Annotation reads only the terminal-failure.json marker of a case partition to avoid re-reporting unchanged oversized conversations; keys are discovered at run time.',
+    );
     acknowledgeNagFinding(
       annotationAccess,
       rawObjectsFinding,

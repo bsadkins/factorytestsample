@@ -26,6 +26,13 @@ export interface ResourceNames {
   /** Terminal queue for discovery schedule deliveries and invocations that exhaust retries. */
   readonly accountDiscoveryFailureQueue: string;
   readonly caseAnalysisStateMachine: string;
+  readonly workflowStarterFunction: string;
+  /** One function hosting the Summary, RCA and Lifecycle tasks; see CaseAnalysis. */
+  readonly caseAnalysisStagesFunction: string;
+  readonly updateCaseMetadataFunction: string;
+  readonly handleFailureFunction: string;
+  readonly caseCleanupFunction: string;
+  readonly caseCleanupSchedule: string;
   readonly glueDatabase: string;
   readonly glueTable: string;
   readonly crawler: string;
@@ -54,6 +61,12 @@ export function resourceNames(config: Pick<CaseInsightsConfig, 'uniqueId'>): Res
     caseAnnotationFunction: `Lambda-CaseAnnotation-${id}`,
     accountDiscoveryFailureQueue: `CaseInsights-AccountDiscoveryFailures-${id}`,
     caseAnalysisStateMachine: `CaseAnalysis-${id}`,
+    workflowStarterFunction: `Lambda-WorkflowStarter-${id}`,
+    caseAnalysisStagesFunction: `Lambda-CaseAnalysisStages-${id}`,
+    updateCaseMetadataFunction: `Lambda-UpdateCaseMetadata-${id}`,
+    handleFailureFunction: `Lambda-HandleFailure-${id}`,
+    caseCleanupFunction: `Lambda-CaseCleanup-${id}`,
+    caseCleanupSchedule: `CaseInsights-CaseCleanup-${id}`,
     // Glue database names allow only lower-case letters, digits and underscores.
     glueDatabase: `case_insights_${id.replace(/-/g, '_')}`,
     glueTable: 'case_summary',
