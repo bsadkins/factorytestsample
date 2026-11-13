@@ -49,12 +49,11 @@ class ToolRegistry:
         return [definition.descriptor() for definition in self._tools.values()]
 
     def call(self, name: str, arguments: object, ctx: ToolContext) -> dict[str, Any]:
-        """Validate `arguments` (None means `{}`) and run tool `name`."""
+        """Validate `arguments` (an object; callers pass `{}` when none were sent) and run tool
+        `name`. `None` is rejected like any other non-object, never treated as omitted."""
         definition = self._tools.get(name)
         if definition is None:
             raise UnknownToolError
-        if arguments is None:
-            arguments = {}
         if not isinstance(arguments, dict):
             raise ToolInputError([{"path": "<arguments>", "message": "must be an object"}])
         issues = validate_arguments(definition.input_schema, arguments)

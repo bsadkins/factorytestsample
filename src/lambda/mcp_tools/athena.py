@@ -2,25 +2,28 @@
 
 Every query is started with the server-side workgroup and `AwsDataCatalog`/database context and
 no result configuration (the workgroup enforces its SSE-S3 results location and bytes-scanned
-cutoff). Polling backs off between `GetQueryExecution` calls and stops at the call's budget.
-Results are read page by page up to an explicit row cap and response-size cap. SQL text, result
-rows and Athena failure reasons are never logged.
+cutoff). Each call is made through a client whose timeout ends it within the call's time budget
+(see `ToolContext.athena`). Polling backs off between `GetQueryExecution` calls and stops while
+time remains for the call that follows. Results are read page by page up to an explicit row cap,
+response-size cap and the time budget. SQL text, result rows and Athena failure reasons are never
+logged.
 """
 
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from aws_lambda_powertools import Logger
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import BotoCoreError, ClientError, ConnectTimeoutError, ReadTimeoutError
 from common.retry import RetryPolicy, is_retryable_error, is_throttling_error, retry_with_backoff
 from common.safe_logging import aws_error_code, error_fields
 
 from mcp_tools.context import DATA_CATALOG, ToolContext
-from mcp_tools.errors import ToolError
+from mcp_tools.errors import TimeBudgetExceededError, ToolError
 
 if TYPE_CHECKING:
     from types_boto3_athena.type_defs import GetQueryResultsOutputTypeDef
@@ -55,6 +58,10 @@ class ResultPage:
     next_token: str | None = None
 
 
+class _CallTimeoutError(ToolError):
+    """An Athena call reached its read or connect timeout."""
+
+
 def _athena_failure(exc: Exception, operation: str) -> ToolError:
     logger.warning("Athena request failed", extra={"operation": operation, **error_fields(exc)})
     if isinstance(exc, ClientError) and is_throttling_error(exc):
@@ -65,6 +72,10 @@ def _athena_failure(exc: Exception, operation: str) -> ToolError:
             details={"awsErrorCode": aws_error_code(exc)},
         )
     details = {"awsErrorCode": aws_error_code(exc)} if aws_error_code(exc) else {}
+    if isinstance(exc, ReadTimeoutError | ConnectTimeoutError):
+        return _CallTimeoutError(
+            f"Athena {operation} timed out", code="ATHENA_ERROR", retryable=True, details=details
+        )
     return ToolError(
         f"Athena {operation} failed",
         code="ATHENA_ERROR",
@@ -77,7 +88,9 @@ def start_query(ctx: ToolContext, sql: str, parameters: Sequence[str] = ()) -> s
     """Start `sql` in the configured workgroup/database; return the query execution ID.
 
     `parameters` are SQL literals bound in order to `?` placeholders (fixed tool queries only).
-    Throttling is retried a bounded number of times within the call's deadline.
+    Throttling is retried a bounded number of times within the call's deadline. Every attempt
+    leaves time for one more Athena call afterwards (to poll or cancel the query); when that is
+    not possible nothing is started and TIME_BUDGET_EXCEEDED is raised.
     """
     request: dict[str, Any] = {
         "QueryString": sql,
@@ -91,14 +104,15 @@ def start_query(ctx: ToolContext, sql: str, parameters: Sequence[str] = ()) -> s
         base_delay_seconds=0.25,
         max_delay_seconds=1.0,
     )
+    keep = ctx.limits.athena_followup_seconds
     try:
         response = retry_with_backoff(
-            lambda: ctx.clients.athena.start_query_execution(**request),
+            lambda: ctx.athena(keep=keep).start_query_execution(**request),
             policy=policy,
             is_retryable=is_throttling_error,
             sleep=ctx.sleep,
             clock=ctx.clock,
-            deadline=ctx.deadline,
+            deadline=ctx.deadline - keep - ctx.limits.athena_min_call_seconds,
             operation_name="athena:StartQueryExecution",
         )
     except (ClientError, BotoCoreError) as exc:
@@ -109,9 +123,13 @@ def start_query(ctx: ToolContext, sql: str, parameters: Sequence[str] = ()) -> s
 
 
 def describe_query(ctx: ToolContext, query_id: str) -> dict[str, Any]:
-    """Return the `QueryExecution` description, or raise QUERY_NOT_FOUND / ATHENA_ERROR."""
+    """Return the `QueryExecution` description, or raise QUERY_NOT_FOUND / ATHENA_ERROR.
+
+    The call leaves time for one more Athena call afterwards (to read results or cancel).
+    """
+    client = ctx.athena(keep=ctx.limits.athena_followup_seconds)
     try:
-        response = ctx.clients.athena.get_query_execution(QueryExecutionId=query_id)
+        response = client.get_query_execution(QueryExecutionId=query_id)
     except ClientError as exc:
         if aws_error_code(exc) == "InvalidRequestException":
             raise query_not_found() from None
@@ -144,33 +162,48 @@ def _terminal_failure(execution: dict[str, Any]) -> ToolError:
     return ToolError("The Athena query failed", code="QUERY_FAILED", details=details)
 
 
-def wait_for_query(ctx: ToolContext, query_id: str, budget_seconds: float) -> QueryStatus:
-    """Poll until the query finishes or `budget_seconds` (capped at the call deadline) pass.
+def wait_for_query(
+    ctx: ToolContext, query_id: str, *, first: dict[str, Any] | None = None
+) -> QueryStatus:
+    """Poll until the query finishes or too little of the call's time is left for another poll
+    plus the call that follows it (reading results or cancelling).
 
-    Returns SUCCEEDED or PENDING; FAILED and CANCELLED raise. The number of polls is bounded by
-    `max_polls` and every poll after the first follows a back-off sleep, so this never spins.
+    `first` is a description already fetched in this call, used as the first poll. Returns
+    SUCCEEDED or PENDING; FAILED and CANCELLED raise. A poll that fails with a retryable error
+    (throttling, a timeout) leaves the state unknown, so polling continues. The number of polls is
+    bounded by `max_polls` and every poll after the first follows a back-off sleep, so this
+    never spins.
     """
-    stop_at = min(ctx.deadline, ctx.clock() + max(budget_seconds, 0.0))
-    delay = ctx.limits.poll_initial_seconds
-    for poll in range(ctx.limits.max_polls):
-        execution = describe_query(ctx, query_id)
-        state = execution.get("Status", {}).get("State")
-        if state == "SUCCEEDED":
-            statistics = execution.get("Statistics", {})
-            return QueryStatus(
-                query_execution_id=query_id,
-                state="SUCCEEDED",
-                statement_type=execution.get("StatementType"),
-                data_scanned_bytes=statistics.get("DataScannedInBytes"),
-                execution_time_ms=statistics.get("EngineExecutionTimeInMillis"),
-            )
-        if state in {"FAILED", "CANCELLED"}:
-            raise _terminal_failure(execution)
-        remaining = stop_at - ctx.clock()
-        if remaining <= 0 or poll == ctx.limits.max_polls - 1:
+    limits = ctx.limits
+    needed = limits.athena_min_call_seconds + limits.athena_followup_seconds
+    delay = limits.poll_initial_seconds
+    execution = first
+    for poll in range(limits.max_polls):
+        if execution is None and ctx.remaining() >= needed:
+            try:
+                execution = describe_query(ctx, query_id)
+            except ToolError as error:
+                if not error.retryable:
+                    raise
+        if execution is not None:
+            state = execution.get("Status", {}).get("State")
+            if state == "SUCCEEDED":
+                statistics = execution.get("Statistics", {})
+                return QueryStatus(
+                    query_execution_id=query_id,
+                    state="SUCCEEDED",
+                    statement_type=execution.get("StatementType"),
+                    data_scanned_bytes=statistics.get("DataScannedInBytes"),
+                    execution_time_ms=statistics.get("EngineExecutionTimeInMillis"),
+                )
+            if state in {"FAILED", "CANCELLED"}:
+                raise _terminal_failure(execution)
+            execution = None
+        pause = min(delay, ctx.remaining() - needed)
+        if pause <= 0 or poll == limits.max_polls - 1:
             break
-        ctx.sleep(min(delay, remaining))
-        delay = min(delay * 2, ctx.limits.poll_max_seconds)
+        ctx.sleep(pause)
+        delay = min(delay * 2, limits.poll_max_seconds)
     logger.info(
         "Athena query still running at the time budget", extra={"query_execution_id": query_id}
     )
@@ -178,9 +211,15 @@ def wait_for_query(ctx: ToolContext, query_id: str, budget_seconds: float) -> Qu
 
 
 def stop_query(ctx: ToolContext, query_id: str) -> None:
-    """Best-effort cancellation of a query that ran past a fixed tool's budget."""
+    """Best-effort cancellation of a query that ran past a fixed tool's budget; skipped when
+    too little time is left to make the call."""
     try:
-        ctx.clients.athena.stop_query_execution(QueryExecutionId=query_id)
+        client = ctx.athena(keep=ctx.limits.response_reserve_seconds)
+    except TimeBudgetExceededError:
+        logger.warning("No time left to stop Athena query", extra={"query_execution_id": query_id})
+        return
+    try:
+        client.stop_query_execution(QueryExecutionId=query_id)
     except (ClientError, BotoCoreError) as exc:
         logger.warning(
             "Could not stop Athena query",
@@ -189,6 +228,11 @@ def stop_query(ctx: ToolContext, query_id: str) -> None:
 
 
 def _convert(value: str | None, column_type: str) -> Any:  # noqa: ANN401
+    """Typed JSON value of an Athena result cell.
+
+    JSON has no NaN or Infinity, so non-finite doubles keep Athena's text (`NaN`, `Infinity`,
+    `-Infinity`) as strings rather than becoming bare tokens that strict parsers reject.
+    """
     if value is None:
         return None
     kind = column_type.lower()
@@ -196,7 +240,8 @@ def _convert(value: str | None, column_type: str) -> Any:  # noqa: ANN401
         if kind in _INTEGER_TYPES:
             return int(value)
         if kind in _FLOAT_TYPES:
-            return float(value)
+            number = float(value)
+            return number if math.isfinite(number) else value
     except ValueError:
         return value
     if kind == "boolean":
@@ -210,8 +255,9 @@ def _page(
     request: dict[str, Any] = {"QueryExecutionId": query_id, "MaxResults": max_results}
     if token is not None:
         request["NextToken"] = token
+    client = ctx.athena(keep=ctx.limits.response_reserve_seconds)
     try:
-        return ctx.clients.athena.get_query_results(**request)
+        return client.get_query_results(**request)
     except ClientError as exc:
         if aws_error_code(exc) == "InvalidRequestException" and token is not None:
             raise ToolError(
@@ -233,8 +279,10 @@ def read_results(
     """Read up to `max_rows` rows (and at most `max_bytes` of JSON) from a finished query.
 
     For DML the first row of the first page is Athena's header row and is skipped. When more rows
-    exist the result is marked truncated; a row-cap truncation carries Athena's `next_token` for
-    resumption, a size-cap truncation does not (the page boundary no longer matches).
+    exist the result is marked truncated; a row-cap, page-cap or time-limit truncation carries
+    Athena's `next_token` for resumption, a size-cap truncation does not (the page boundary no
+    longer matches). A time-limit truncation happens when a later page cannot be read within the
+    call's time budget; when not even the first page can be read the error is raised.
     """
     skip_header = status.statement_type == "DML" and next_token is None
     token = next_token
@@ -242,11 +290,21 @@ def read_results(
     size = 0
     # Athena may return short or empty pages; this bounds the loop regardless.
     max_pages = max_rows // ctx.limits.results_page_size + 3
-    for _ in range(max_pages):
+    for page_number in range(max_pages):
         wanted = max_rows - len(result.rows) + (1 if skip_header else 0)
-        response = _page(
-            ctx, status.query_execution_id, min(ctx.limits.results_page_size, wanted), token
-        )
+        try:
+            response = _page(
+                ctx, status.query_execution_id, min(ctx.limits.results_page_size, wanted), token
+            )
+        except TimeBudgetExceededError as exc:
+            if page_number == 0:
+                exc.details["queryExecutionId"] = status.query_execution_id
+                raise
+            return _time_limited(result, token)
+        except _CallTimeoutError:
+            if page_number == 0:
+                raise
+            return _time_limited(result, token)
         result_set = response["ResultSet"]
         columns = [
             {
@@ -279,9 +337,17 @@ def read_results(
         token = response.get("NextToken")
         if token is None:
             return result
-        if len(result.rows) >= max_rows or ctx.remaining() <= 0:
+        if len(result.rows) >= max_rows:
             break
     result.truncated = True
     result.truncation_reason = "rowLimit" if len(result.rows) >= max_rows else "pageLimit"
+    result.next_token = token
+    return result
+
+
+def _time_limited(result: ResultPage, token: str | None) -> ResultPage:
+    logger.info("Athena results cut short at the time budget")
+    result.truncated = True
+    result.truncation_reason = "timeLimit"
     result.next_token = token
     return result

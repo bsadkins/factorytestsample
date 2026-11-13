@@ -182,21 +182,32 @@ def _parse_response(raw: bytes, model_id: str) -> tuple[str, int, int, str | Non
     content = payload.get("content") if isinstance(payload, dict) else None
     if not isinstance(content, list):
         raise BedrockResponseError("MalformedResponse", model_id)
-    text = "".join(
-        block.get("text", "")
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "text"
-    ).strip()
+    parts: list[str] = []
+    for block in content:
+        if not (isinstance(block, dict) and block.get("type") == "text"):
+            continue
+        part = block.get("text")
+        if not isinstance(part, str):
+            raise BedrockResponseError("MalformedResponse", model_id)
+        parts.append(part)
+    text = "".join(parts).strip()
     if not text:
         raise BedrockResponseError("EmptyResponse", model_id)
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     stop_reason = payload.get("stop_reason")
     return (
         text,
-        int(usage.get("input_tokens", 0)),
-        int(usage.get("output_tokens", 0)),
+        _token_count(usage, "input_tokens", model_id),
+        _token_count(usage, "output_tokens", model_id),
         stop_reason if isinstance(stop_reason, str) else None,
     )
+
+
+def _token_count(usage: dict[str, Any], key: str, model_id: str) -> int:
+    value = usage.get(key, 0)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise BedrockResponseError("MalformedResponse", model_id)
+    return value
 
 
 def _guarded_sleep(

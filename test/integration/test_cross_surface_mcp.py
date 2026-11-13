@@ -517,6 +517,12 @@ def test_analyze_with_bedrock_over_another_tools_output(endpoint: Endpoint) -> N
             id="recursive-cte",
         ),
         pytest.param(
+            "SELECT * FROM secrets WHERE EXISTS "
+            "(WITH secrets AS (SELECT 1 AS x) SELECT x FROM secrets)",
+            "table_not_allowed",
+            id="nested-cte-scope",
+        ),
+        pytest.param(
             "SELECT * FROM case_summary WHERE servicecode = ?",
             "parameter_placeholder",
             id="placeholder",

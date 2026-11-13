@@ -14,7 +14,7 @@ from typing import Any, Final
 from mcp_tools.bedrock_analysis import SYSTEM_PROMPT, analyse
 from mcp_tools.context import CASE_SUMMARY_TABLE, ToolContext
 from mcp_tools.definitions import ToolDefinition, integer_property, object_schema
-from mcp_tools.errors import ToolError
+from mcp_tools.errors import TimeBudgetExceededError, ToolError
 from mcp_tools.filters import TIMESTAMP, build_selection, filter_properties
 from mcp_tools.limits import McpLimits
 from mcp_tools.queries import run_fixed_query
@@ -109,20 +109,19 @@ def _fit_cases(rows: list[dict[str, Any]], budget: int) -> list[str]:
 
 
 def _time_budget_exceeded() -> ToolError:
-    return ToolError(
+    return TimeBudgetExceededError(
         "Not enough time remains in this request to analyse the cases; retry, or narrow the "
-        "date range",
-        code="TIME_BUDGET_EXCEEDED",
-        retryable=True,
+        "date range"
     )
 
 
 def analyze_case_summaries(arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     limits = ctx.limits
     selection = build_selection(arguments, CASE_FILTERS, limits)
-    if ctx.remaining() < limits.min_bedrock_seconds:
+    bedrock_seconds = limits.min_bedrock_seconds + limits.response_reserve_seconds
+    if ctx.remaining() < bedrock_seconds:
         raise _time_budget_exceeded()
-    budget = min(limits.analysis_query_budget_seconds, ctx.remaining() - limits.min_bedrock_seconds)
+    budget = min(limits.analysis_query_budget_seconds, ctx.remaining() - bedrock_seconds)
     page = run_fixed_query(
         ctx,
         _selection_sql(selection.where, int(arguments["maxCases"])),
@@ -150,7 +149,7 @@ def analyze_case_summaries(arguments: dict[str, Any], ctx: ToolContext) -> dict[
             "The selected case records are too large to analyse; narrow the selection",
             code="ANALYSIS_INPUT_TOO_LARGE",
         )
-    if ctx.remaining() < limits.min_bedrock_seconds:
+    if ctx.remaining() < bedrock_seconds:
         raise _time_budget_exceeded()
     analysis = analyse(ctx, _prompt(cases, matching, arguments, selection.filters))
     return {

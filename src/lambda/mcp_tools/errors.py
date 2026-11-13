@@ -44,6 +44,20 @@ class ToolError(Exception):
         return payload
 
 
+class TimeBudgetExceededError(ToolError):
+    """Too little of the request's time budget remains to start the next AWS call safely."""
+
+    code = "TIME_BUDGET_EXCEEDED"
+
+    def __init__(
+        self,
+        message: str = "Not enough time remains in this request to complete the call; retry",
+        *,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message, retryable=True, details=details)
+
+
 class UnknownToolError(ToolError):
     """The requested tool name is not one of the registered tools."""
 

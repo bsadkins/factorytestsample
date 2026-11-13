@@ -27,6 +27,7 @@ from mcp_server.jsonrpc import (
 from mcp_server.server import LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
 from mcp_server.transport import MAX_BODY_BYTES
 from mcp_tools.context import ToolContext
+from mcp_tools.limits import McpLimits
 
 EXPECTED_TOOLS = [
     "query_athena",
@@ -477,6 +478,105 @@ def test_rejected_sql_is_a_tool_error_without_athena_calls(harness: Harness) -> 
     assert harness.kit.external_calls() == 0
 
 
+def test_out_of_scope_table_behind_nested_cte_is_rejected_before_athena(harness: Harness) -> None:
+    harness.kit.athena.db.execute("CREATE TABLE secrets (x TEXT)")
+    harness.kit.athena.db.execute("INSERT INTO secrets VALUES ('SENTINEL-OUTSIDE-SCOPE')")
+    sql = (
+        "SELECT * FROM secrets WHERE EXISTS (WITH secrets AS (SELECT 1 AS x) SELECT x FROM secrets)"
+    )
+    reply = harness.call("query_athena", {"sql": sql}, request_id=31)
+    result = tool_result(reply, 31)
+    assert result["isError"] is True
+    error = result["structuredContent"]["error"]
+    assert error["code"] == "INVALID_ARGUMENTS"
+    assert [issue["reason"] for issue in error["errors"]] == ["table_not_allowed"]
+    assert "SENTINEL-OUTSIDE-SCOPE" not in reply.body
+    assert harness.kit.external_calls() == 0
+
+
+def _no_constants(token: str) -> object:
+    raise ValueError(f"non-standard JSON constant {token}")
+
+
+def strict_json(text: str) -> Any:  # noqa: ANN401
+    return json.loads(text, parse_constant=_no_constants)
+
+
+def test_non_finite_athena_doubles_produce_strict_json(harness: Harness) -> None:
+    harness.kit.athena.next_result = (
+        [("n", "double"), ("p", "double"), ("m", "double")],
+        [["NaN", "Infinity", "-Infinity"]],
+    )
+    reply = harness.call(
+        "query_athena", {"sql": "SELECT CAST('NaN' AS DOUBLE) AS n FROM case_summary"}, 32
+    )
+    assert reply.status == 200
+    document = strict_json(reply.body)
+    structured = document["result"]["structuredContent"]
+    assert document["result"]["isError"] is False
+    assert structured["rows"] == [{"n": "NaN", "p": "Infinity", "m": "-Infinity"}]
+    assert strict_json(document["result"]["content"][0]["text"]) == structured
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"content": [{"type": "text", "text": 123}]},
+        {"content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": "bad"}},
+        {"content": [{"type": "image", "source": {}}]},
+        {"usage": {"input_tokens": 1, "output_tokens": 1}},
+    ],
+)
+def test_malformed_bedrock_reply_is_a_controlled_tool_error(
+    harness: Harness, payload: dict[str, Any]
+) -> None:
+    harness.kit.bedrock.raw(json.dumps(payload).encode())
+    reply = harness.call("analyze_with_bedrock", {"question": "q"}, request_id=33)
+    result = tool_result(reply, 33)
+    assert result["isError"] is True
+    assert result["structuredContent"]["error"]["code"] == "BEDROCK_RESPONSE_INVALID"
+    for leaked in ("TypeError", "ValueError", "Traceback", "int()"):
+        assert leaked not in reply.body
+        assert leaked not in harness.logs()
+
+
+def test_explicit_null_arguments_are_rejected_before_any_external_work(harness: Harness) -> None:
+    body = (
+        '{"jsonrpc":"2.0","id":1,"method":"tools/call",'
+        '"params":{"name":"get_case_summary","arguments":null}}'
+    )
+    error = assert_error(harness.post(body, encode=False), 200, INVALID_PARAMS, 1)
+    assert error["message"] == "arguments must be an object"
+    assert harness.kit.external_calls() == 0
+    assert harness.remaining == []
+
+
+def test_slow_athena_status_calls_stay_within_the_request_budget(harness: Harness) -> None:
+    harness.kit.athena.polls_before_success = None
+    harness.kit.athena.latency["GetQueryExecution"] = 7.0
+    harness.kit.athena.honour_timeouts = False
+    start = harness.kit.clock.now
+    reply = harness.call("query_athena", {"sql": "SELECT count(*) AS n FROM case_summary"}, 34)
+    result = tool_result(reply, 34)
+    assert result["isError"] is False
+    assert result["structuredContent"]["status"] == "PENDING"
+    assert harness.kit.clock.now - start <= McpLimits().request_budget_seconds
+
+
+def test_hanging_bedrock_call_through_the_handler_stays_within_the_request_budget(
+    harness: Harness,
+) -> None:
+    harness.kit.bedrock.latency = 120.0
+    harness.kit.bedrock.reply("unused")
+    harness.kit.bedrock.reply("unused")
+    start = harness.kit.clock.now
+    reply = harness.call("analyze_with_bedrock", {"question": "q"}, request_id=35)
+    result = tool_result(reply, 35)
+    assert result["isError"] is True
+    assert result["structuredContent"]["error"]["retryable"] is True
+    assert harness.kit.clock.now - start <= McpLimits().request_budget_seconds
+
+
 def test_missing_arguments_default_to_empty_object(harness: Harness) -> None:
     reply = harness.rpc("tools/call", {"name": "get_case_summary"}, request_id=12)
     assert tool_result(reply, 12)["structuredContent"]["totalCases"] == 12
@@ -498,6 +598,7 @@ def test_unknown_tool_is_a_protocol_error_without_external_calls(harness: Harnes
         {},
         {"name": 5},
         {"name": ""},
+        {"name": "get_case_summary", "arguments": None},
         {"name": "get_case_summary", "arguments": []},
         {"name": "get_case_summary", "arguments": "x"},
         {"name": "get_case_summary", "arguments": {}, "extra": 1},

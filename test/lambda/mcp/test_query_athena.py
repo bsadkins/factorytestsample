@@ -4,6 +4,7 @@ polling with a pending/resume outcome, bounded rows/pages/response size and cont
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -71,6 +72,21 @@ def test_null_values_are_returned_as_null() -> None:
     kit = make_kit(dataset())
     result = call(kit, {"sql": "SELECT servicecode FROM case_summary WHERE case_number = '2003'"})
     assert result["rows"] == [{"servicecode": None}]
+
+
+def test_non_finite_doubles_are_returned_as_json_safe_strings() -> None:
+    kit = make_kit(dataset())
+    kit.athena.next_result = (
+        [("n", "double"), ("p", "double"), ("m", "double"), ("r", "real"), ("f", "float"),
+         ("ok", "double"), ("i", "bigint")],
+        [["NaN", "Infinity", "-Infinity", "NaN", "Infinity", "1.5", "7"]],
+    )  # fmt: skip
+    result = call(kit, {"sql": "SELECT 1 FROM case_summary"})
+    assert result["rows"] == [
+        {"n": "NaN", "p": "Infinity", "m": "-Infinity", "r": "NaN", "f": "Infinity", "ok": 1.5,
+         "i": 7},
+    ]  # fmt: skip
+    json.dumps(result, allow_nan=False)
 
 
 def test_empty_result() -> None:

@@ -23,7 +23,7 @@ from typing import Any, Final
 
 import boto3
 import botocore.session
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ReadTimeoutError
 from botocore.response import StreamingBody
 from botocore.stub import Stubber
 from botocore.validate import validate_parameters
@@ -186,6 +186,11 @@ class SqliteAthena:
     `polls_before_success` makes each new query report RUNNING for that many
     GetQueryExecution calls (`None` = never completes). `fail_next` makes the next query end in
     the given terminal state and reason. Calls are recorded as `(operation, params)`.
+
+    `latency` makes the named operations take that many seconds on the kit's fake clock. A call
+    slower than the read timeout of the client it was made through (see `with_timeout`) behaves
+    like botocore: it fails with `ReadTimeoutError` after the connect plus read timeout, unless
+    `honour_timeouts` is False. `timed_calls` records `(operation, started_at, read_timeout)`.
     """
 
     def __init__(self, rows: Iterable[dict[str, str | None]] = ()) -> None:
@@ -204,6 +209,15 @@ class SqliteAthena:
         self.start_errors: list[ClientError] = []
         self.results_errors: list[ClientError] = []
         self.canned: dict[str, list[list[str | None]]] = {}
+        self.clock: FakeClock | None = None
+        self.latency: dict[str, float] = {}
+        self.honour_timeouts = True
+        self.connect_timeout = 1.0
+        self.read_timeout: float | None = None
+        self.timed_calls: list[tuple[str, float, float | None]] = []
+        # Typed (columns, rows) returned by the next DML query instead of evaluating it, for
+        # Athena values SQLite cannot produce (for example double NaN).
+        self.next_result: tuple[list[tuple[str, str]], list[list[str | None]]] | None = None
 
     def insert(self, rows: Iterable[dict[str, str | None]]) -> None:
         placeholders = ", ".join("?" for _ in COLUMNS)
@@ -212,11 +226,28 @@ class SqliteAthena:
             [tuple(row[c] for c in COLUMNS) for row in rows],
         )
 
+    def with_timeout(self, read_timeout: float) -> SqliteAthena:
+        """This stand-in as a client configured with `read_timeout` seconds."""
+        self.read_timeout = read_timeout
+        return self
+
     def _record(self, operation: str, params: dict[str, Any]) -> None:
         shape = _ATHENA_MODEL.operation_model(operation).input_shape
         assert shape is not None
         validate_parameters(params, shape)
         self.calls.append((operation, params))
+        self._spend(operation)
+
+    def _spend(self, operation: str) -> None:
+        latency = self.latency.get(operation, 0.0)
+        if self.clock is None:
+            return
+        self.timed_calls.append((operation, self.clock.now, self.read_timeout))
+        timeout = self.read_timeout
+        if self.honour_timeouts and timeout is not None and latency > timeout:
+            self.clock.now += self.connect_timeout + timeout
+            raise ReadTimeoutError(endpoint_url="https://athena.us-east-1.amazonaws.com/")
+        self.clock.now += latency
 
     def operations(self) -> list[str]:
         return [operation for operation, _ in self.calls]
@@ -255,6 +286,11 @@ class SqliteAthena:
             execution.columns = [("result", "varchar")]
             key = execution.query.split(None, 1)[0].upper()
             execution.rows = self.canned.get(key, [["case_summary"]])
+            return
+        if self.next_result is not None:
+            columns, rows = self.next_result
+            self.next_result = None
+            execution.columns, execution.rows = list(columns), [list(row) for row in rows]
             return
         try:
             cursor = self.db.execute(execution.query, tuple(parameters))
@@ -345,7 +381,12 @@ class SqliteAthena:
 
 
 class BedrockStub:
-    """A real bedrock-runtime client behind Stubber; request bodies are recorded."""
+    """A real bedrock-runtime client behind Stubber; request bodies are recorded.
+
+    `latency` makes every InvokeModel take that many seconds on the kit's fake clock; with a read
+    timeout set through `with_timeout` a slower call fails with `ReadTimeoutError` after the
+    connect plus read timeout, like botocore. `timed_calls` records `(started_at, read_timeout)`.
+    """
 
     def __init__(self) -> None:
         self.client = boto3.client(
@@ -359,7 +400,31 @@ class BedrockStub:
         self.client.meta.events.register(
             "provide-client-params.bedrock-runtime.InvokeModel", self._record
         )
+        self.clock: FakeClock | None = None
+        self.latency = 0.0
+        self.connect_timeout = 2.0
+        self.read_timeout: float | None = None
+        self.timed_calls: list[tuple[float, float | None]] = []
+        # The Stubber answers in a wildcard before-call handler that runs ahead of specific ones,
+        # so time is spent one event earlier.
+        self.client.meta.events.register(
+            "before-parameter-build.bedrock-runtime.InvokeModel", self._spend
+        )
         self.stubber.activate()
+
+    def with_timeout(self, read_timeout: float) -> Any:  # noqa: ANN401
+        """The stubbed client, as if configured with `read_timeout` seconds."""
+        self.read_timeout = read_timeout
+        return self.client
+
+    def _spend(self, **_: Any) -> None:  # noqa: ANN401
+        if self.clock is None:
+            return
+        self.timed_calls.append((self.clock.now, self.read_timeout))
+        if self.read_timeout is not None and self.latency > self.read_timeout:
+            self.clock.now += self.connect_timeout + self.read_timeout
+            raise ReadTimeoutError(endpoint_url="https://bedrock-runtime.us-east-1.amazonaws.com/")
+        self.clock.now += self.latency
 
     def _record(self, params: dict[str, Any], **_: Any) -> None:  # noqa: ANN401
         body = params["body"]
@@ -438,7 +503,7 @@ class McpKit:
     def context(self, remaining_millis: int | None = None) -> ToolContext:
         return ToolContext.start(
             self.settings(),
-            McpClients(athena=self.athena, bedrock=self.bedrock.client),  # type: ignore[arg-type]
+            McpClients(athena=self.athena, bedrock=self.bedrock),  # type: ignore[arg-type]
             limits=self.limits,
             clock=self.clock,
             sleep=self.clock.sleep,
@@ -450,7 +515,11 @@ class McpKit:
 
 
 def make_kit(rows: Iterable[dict[str, str | None]] = (), **overrides: Any) -> McpKit:  # noqa: ANN401
-    return McpKit(athena=SqliteAthena(rows), bedrock=BedrockStub(), clock=FakeClock(), **overrides)
+    kit = McpKit(athena=SqliteAthena(rows), bedrock=BedrockStub(), clock=FakeClock(), **overrides)
+    kit.athena.clock = kit.bedrock.clock = kit.clock
+    kit.athena.connect_timeout = kit.limits.athena_connect_timeout_seconds
+    kit.bedrock.connect_timeout = kit.limits.bedrock_connect_timeout_seconds
+    return kit
 
 
 def dataset() -> list[dict[str, str | None]]:

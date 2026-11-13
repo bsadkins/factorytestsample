@@ -45,6 +45,36 @@ ACCEPTED: dict[str, tuple[str, str]] = {
         "SELECT count(*) FROM outer_q",
         "select",
     ),
+    "cte_visible_in_nested_subqueries": (
+        "WITH a AS (SELECT * FROM case_summary) SELECT * FROM case_summary WHERE case_number IN "
+        "(SELECT case_number FROM (SELECT case_number FROM a) x)",
+        "select",
+    ),
+    "cte_shadowed_by_inner_cte": (
+        "WITH a AS (SELECT * FROM case_summary) SELECT * FROM (WITH a AS (SELECT servicecode "
+        "FROM a) SELECT * FROM a) x",
+        "select",
+    ),
+    "cte_in_exists_subquery": (
+        "SELECT * FROM case_summary WHERE EXISTS (WITH s AS (SELECT 1 AS x FROM case_summary) "
+        "SELECT x FROM s)",
+        "select",
+    ),
+    "cte_with_set_operation_body": (
+        "WITH a AS (SELECT servicecode FROM case_summary) SELECT * FROM a UNION ALL "
+        "SELECT * FROM a",
+        "select",
+    ),
+    "temporal_inline_cte": (
+        "WITH cases AS (SELECT from_iso8601_timestamp(timecreated) AS created FROM case_summary) "
+        "SELECT day_of_week(created) AS d, count(*) FROM cases GROUP BY 1 UNION ALL "
+        "SELECT 0, count(*) FROM cases",
+        "select",
+    ),
+    "unnest_with_ordinality": (
+        "SELECT x, n FROM case_summary CROSS JOIN UNNEST(ARRAY[1, 2]) WITH ORDINALITY AS t (x, n)",
+        "select",
+    ),
     "cte_column_list": (
         "WITH t (svc, n) AS (SELECT servicecode, count(*) FROM case_summary GROUP BY 1) "
         "SELECT svc FROM t",
@@ -194,6 +224,47 @@ REJECTED: dict[str, tuple[str, str]] = {
     ),
     "cte_shadowing_with_escape": (
         "WITH case_summary AS (SELECT * FROM other_db.t) SELECT * FROM case_summary",
+        "table_not_allowed",
+    ),
+    "cte_scope_exists_subquery": (
+        "SELECT * FROM secrets WHERE EXISTS (WITH secrets AS (SELECT 1 AS x) SELECT x FROM secrets)",  # noqa: E501
+        "table_not_allowed",
+    ),
+    "cte_scope_in_subquery_in_from": (
+        "SELECT * FROM (WITH secrets AS (SELECT * FROM case_summary) SELECT * FROM secrets) s, "
+        "secrets",
+        "table_not_allowed",
+    ),
+    "cte_scope_inside_cte_body": (
+        "WITH a AS (WITH secrets AS (SELECT 1 AS x) SELECT * FROM secrets) SELECT * FROM secrets",
+        "table_not_allowed",
+    ),
+    "cte_scope_deeply_nested": (
+        "SELECT * FROM secrets WHERE x IN (SELECT x FROM (SELECT x FROM (WITH secrets AS "
+        "(SELECT 1 AS x) SELECT x FROM secrets) a) b)",
+        "table_not_allowed",
+    ),
+    "cte_scope_sibling_subqueries": (
+        "SELECT * FROM case_summary WHERE EXISTS (WITH s AS (SELECT 1 AS x) SELECT x FROM s) "
+        "AND EXISTS (SELECT 1 FROM s)",
+        "table_not_allowed",
+    ),
+    "cte_scope_parenthesised_union_branch": (
+        "(WITH secrets AS (SELECT 1 AS x) SELECT x FROM secrets) UNION ALL SELECT x FROM secrets",
+        "table_not_allowed",
+    ),
+    "cte_forward_reference": (
+        "WITH a AS (SELECT * FROM secrets), secrets AS (SELECT * FROM case_summary) "
+        "SELECT * FROM a",
+        "table_not_allowed",
+    ),
+    "cte_self_reference": (
+        "WITH secrets AS (SELECT * FROM secrets) SELECT * FROM secrets",
+        "table_not_allowed",
+    ),
+    "cte_scope_join_after_subquery": (
+        "SELECT * FROM case_summary c JOIN (WITH secrets AS (SELECT 1 AS x) SELECT x FROM "
+        "secrets) t ON true JOIN secrets z ON true",
         "table_not_allowed",
     ),
     "table_function": ("SELECT * FROM TABLE(system.query(query => 'x'))", "forbidden_keyword"),

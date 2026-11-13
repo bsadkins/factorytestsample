@@ -70,7 +70,8 @@ def _schema(limits: McpLimits) -> dict[str, Any]:
     )
 
 
-def _check_resumable(ctx: ToolContext, query_id: str) -> None:
+def _check_resumable(ctx: ToolContext, query_id: str) -> dict[str, Any]:
+    """The stored query's description, once it is known to be one this tool could have run."""
     execution = describe_query(ctx, query_id)
     context = execution.get("QueryExecutionContext", {})
     if (
@@ -83,6 +84,7 @@ def _check_resumable(ctx: ToolContext, query_id: str) -> None:
         validate_read_only_sql(str(execution.get("Query", "")), sql_policy(ctx))
     except SqlRejectedError:
         raise query_not_found() from None
+    return execution
 
 
 def _succeeded(
@@ -112,13 +114,14 @@ def _succeeded(
 
 def query_athena(arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     max_rows = int(arguments["maxRows"])
+    first: dict[str, Any] | None = None
     if "sql" in arguments:
         validated = validate_read_only_sql(arguments["sql"], sql_policy(ctx))
         query_id = start_query(ctx, validated.text)
     else:
         query_id = arguments["queryExecutionId"]
-        _check_resumable(ctx, query_id)
-    status = wait_for_query(ctx, query_id, ctx.remaining())
+        first = _check_resumable(ctx, query_id)
+    status = wait_for_query(ctx, query_id, first=first)
     if status.state == "PENDING":
         return {
             "status": "PENDING",

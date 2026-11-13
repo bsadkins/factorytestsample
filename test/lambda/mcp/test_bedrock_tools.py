@@ -127,9 +127,27 @@ def test_bedrock_service_errors_are_bounded_and_controlled(
     kit.bedrock.assert_consumed()
 
 
+MALFORMED_REPLIES: list[Any] = [
+    {"content": []},
+    {"content": "x"},
+    {"content": [{"type": "text", "text": 123}]},
+    {"content": [{"type": "text"}]},
+    {"content": [{"type": "image", "source": {}}]},
+    {"stop_reason": "end_turn"},
+    [{"type": "text", "text": "ok"}],
+    {
+        "content": [{"type": "text", "text": "ok"}],
+        "usage": {"input_tokens": "bad", "output_tokens": 2},
+    },
+    {
+        "content": [{"type": "text", "text": "ok"}],
+        "usage": {"input_tokens": 1, "output_tokens": None},
+    },
+]
+
+
 @pytest.mark.parametrize(
-    "payload",
-    [b"not json", json.dumps({"content": []}).encode(), json.dumps({"content": "x"}).encode()],
+    "payload", [b"not json", *(json.dumps(reply).encode() for reply in MALFORMED_REPLIES)]
 )
 def test_malformed_bedrock_response_is_not_fabricated(payload: bytes) -> None:
     kit = make_kit()
@@ -137,6 +155,13 @@ def test_malformed_bedrock_response_is_not_fabricated(payload: bytes) -> None:
     with pytest.raises(ToolError) as raised:
         call(kit, "analyze_with_bedrock", {"question": "q"})
     assert raised.value.code == "BEDROCK_RESPONSE_INVALID"
+    assert raised.value.to_payload() == {
+        "code": "BEDROCK_RESPONSE_INVALID",
+        "message": "Bedrock returned an unusable response; no analysis was produced",
+        "retryable": False,
+        "details": {"modelId": HAIKU, "awsErrorCode": raised.value.details["awsErrorCode"]},
+    }
+    assert raised.value.details["awsErrorCode"] in {"MalformedResponse", "EmptyResponse"}
 
 
 def test_prompts_and_replies_never_logged(caplog: pytest.LogCaptureFixture) -> None:

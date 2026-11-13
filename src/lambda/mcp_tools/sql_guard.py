@@ -12,8 +12,12 @@ structurally, not by substring or first-keyword matching:
   anywhere (including after a CTE), recursive CTEs are refused, and qualified function calls are
   refused;
 - every relation in a FROM or JOIN clause (including comma joins, parenthesised joins, subqueries
-  and CTE bodies) is either a CTE name or the configured `case_summary` table, optionally qualified
-  by the configured database and `AwsDataCatalog`.
+  and CTE bodies) is either the configured `case_summary` table, optionally qualified by the
+  configured database and `AwsDataCatalog`, or the name of a CTE that is in lexical scope at that
+  point. A CTE is visible only after its own definition: in the later CTEs of the same WITH clause
+  and in the query body, including subqueries nested in them, up to the end of the parenthesised
+  query that owns the WITH. A CTE name used anywhere else names a physical table and is checked
+  as one.
 
 Error messages describe the violated rule and never repeat the SQL text.
 """
@@ -244,15 +248,30 @@ def _structure(tokens: list[Token], policy: SqlPolicy) -> _Structure:
     return result
 
 
-def _cte_names(structure: _Structure) -> set[str]:
+@dataclass(frozen=True, slots=True)
+class _CteScope:
+    """CTE `name` is visible to relations at token indexes `start` <= index < `end`."""
+
+    name: str
+    start: int
+    end: int
+
+
+def _cte_scopes(structure: _Structure) -> list[_CteScope]:
     tokens = structure.tokens
-    names: set[str] = set()
+    scopes: list[_CteScope] = []
     for index, token in enumerate(tokens):
         if not _is(token, "WITH"):
             continue
         cursor = index + 1
         if _is(tokens[cursor] if cursor < len(tokens) else None, "RECURSIVE"):
             raise _reject("recursive_cte", "recursive common table expressions are not allowed")
+        # Only a WITH that opens a query (statement start or just inside "(") defines CTEs;
+        # WITH TIME ZONE and WITH ORDINALITY define nothing, so their names stay physical.
+        if index > 0 and not _punct(tokens[index - 1], "("):
+            continue
+        owner = structure.parent[index]
+        end = structure.match[owner] if owner >= 0 else len(tokens)
         while cursor < len(tokens) and _is_name(tokens[cursor]):
             name_index = cursor
             cursor += 1
@@ -264,12 +283,16 @@ def _cte_names(structure: _Structure) -> set[str]:
                 and _punct(tokens[cursor + 1], "(")
             ):
                 break
-            names.add(tokens[name_index].name)
             cursor = structure.match[cursor + 1] + 1
+            scopes.append(_CteScope(tokens[name_index].name, cursor, end))
             if not (cursor < len(tokens) and _punct(tokens[cursor], ",")):
                 break
             cursor += 1
-    return names
+    return scopes
+
+
+def _visible_ctes(scopes: Sequence[_CteScope], index: int) -> set[str]:
+    return {scope.name for scope in scopes if scope.start <= index < scope.end}
 
 
 def _qualified_name(tokens: Sequence[Token], start: int) -> tuple[list[str], int]:
@@ -298,7 +321,7 @@ def _check_table(parts: list[str], policy: SqlPolicy, ctes: set[str]) -> None:
 class _RelationChecker:
     """Validates every relation of every FROM clause and parenthesised join."""
 
-    def __init__(self, structure: _Structure, policy: SqlPolicy, ctes: set[str]) -> None:
+    def __init__(self, structure: _Structure, policy: SqlPolicy, ctes: Sequence[_CteScope]) -> None:
         self.s = structure
         self.tokens = structure.tokens
         self.policy = policy
@@ -370,7 +393,7 @@ class _RelationChecker:
             return close + 1
         if _is_name(token):
             parts, after = _qualified_name(self.tokens, cursor)
-            _check_table(parts, self.policy, self.ctes)
+            _check_table(parts, self.policy, _visible_ctes(self.ctes, cursor))
             return after
         raise _reject("unsupported_construct", "unsupported relation in a FROM or JOIN clause")
 
@@ -380,7 +403,7 @@ def _check_query(tokens: list[Token], policy: SqlPolicy) -> None:
         if token.kind == "word" and token.upper in FORBIDDEN_KEYWORDS:
             raise _reject("forbidden_keyword", f"{token.upper} is not allowed in read-only queries")
     structure = _structure(tokens, policy)
-    ctes = _cte_names(structure)
+    ctes = _cte_scopes(structure)
     for index, token in enumerate(tokens):
         if _is(token, "WITH") and _is(
             tokens[index + 1] if index + 1 < len(tokens) else None, "TIME"

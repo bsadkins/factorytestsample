@@ -207,6 +207,17 @@ def test_validation_errors_are_not_retried() -> None:
         b'{"content": []}',
         b'{"content": [{"type": "text", "text": "   "}]}',
         b'{"content": "x"}',
+        b'{"content": [{"type": "text", "text": 123}]}',
+        b'{"content": [{"type": "text"}]}',
+        b'{"content": [{"type": "text", "text": ["a"]}]}',
+        b'{"content": [{"type": "tool_use", "id": "t", "name": "n", "input": {}}]}',
+        b'{"stop_reason": "end_turn"}',
+        b'[{"type": "text", "text": "ok"}]',
+        b'{"content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": "bad"}}',
+        b'{"content": [{"type": "text", "text": "ok"}], "usage": {"output_tokens": null}}',
+        b'{"content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 1.5}}',
+        b'{"content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": true}}',
+        b'{"content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": -1}}',
     ],
 )
 def test_malformed_responses_raise(payload: bytes) -> None:

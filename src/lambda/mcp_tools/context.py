@@ -6,17 +6,20 @@ environment; no tool argument can replace them.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final
+from dataclasses import dataclass, field, replace
+from functools import lru_cache
+from typing import TYPE_CHECKING, Final, Protocol
 
 import boto3
 from common.aws import client_config
 from common.bedrock import MAX_MAX_TOKENS, MIN_MAX_TOKENS, validate_model_id
 
+from mcp_tools.errors import TimeBudgetExceededError
 from mcp_tools.limits import McpLimits
 
 if TYPE_CHECKING:
@@ -27,6 +30,8 @@ CASE_SUMMARY_TABLE: Final = "case_summary"
 DATA_CATALOG: Final = "AwsDataCatalog"
 _WORKGROUP = re.compile(r"[A-Za-z0-9._-]{1,128}")
 _DATABASE = re.compile(r"[a-z0-9_]{1,255}")
+# Read timeouts are whole seconds, so each service needs at most one client per possible value.
+_CLIENT_CACHE_SIZE: Final = 32
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,30 +63,64 @@ class McpSettings:
         )
 
 
+class TimeoutClients[T](Protocol):
+    """Clients of one AWS service, each configured with a given read timeout."""
+
+    def with_timeout(self, read_timeout: float) -> T:
+        """A client whose calls fail after the connect timeout plus `read_timeout` seconds."""
+        ...
+
+
+class CachedClients[T]:
+    """Clients created on first use for each read timeout and reused afterwards."""
+
+    def __init__(self, factory: Callable[[float], T]) -> None:
+        self._factory = lru_cache(maxsize=_CLIENT_CACHE_SIZE)(factory)
+
+    def with_timeout(self, read_timeout: float) -> T:
+        return self._factory(read_timeout)
+
+
 @dataclass(frozen=True, slots=True)
 class McpClients:
-    """AWS clients used by the tools."""
+    """AWS clients used by the tools, obtained per call with a read timeout that fits the
+    remaining time budget."""
 
-    athena: AthenaClient
-    bedrock: BedrockRuntimeClient
+    athena: TimeoutClients[AthenaClient]
+    bedrock: TimeoutClients[BedrockRuntimeClient]
 
     @classmethod
-    def create(cls, *, region_name: str | None = None) -> McpClients:
-        """Clients with timeouts that fit the request budget; Bedrock retries are owned by
-        `common.bedrock.invoke_bedrock`."""
+    def create(
+        cls, *, region_name: str | None = None, limits: McpLimits | None = None
+    ) -> McpClients:
+        """Clients without SDK retries (the engine retries within the budget itself) and with
+        the connect timeouts from `limits`."""
+        bounds = limits or McpLimits()
         session = boto3.Session()
-        return cls(
-            athena=session.client(
+
+        def athena(read_timeout: float) -> AthenaClient:
+            return session.client(
                 "athena",
                 region_name=region_name,
-                config=client_config(max_attempts=3, connect_timeout=3, read_timeout=10),
-            ),
-            bedrock=session.client(
+                config=client_config(
+                    max_attempts=1,
+                    connect_timeout=bounds.athena_connect_timeout_seconds,
+                    read_timeout=read_timeout,
+                ),
+            )
+
+        def bedrock(read_timeout: float) -> BedrockRuntimeClient:
+            return session.client(
                 "bedrock-runtime",
                 region_name=region_name,
-                config=client_config(max_attempts=1, connect_timeout=3, read_timeout=20),
-            ),
-        )
+                config=client_config(
+                    max_attempts=1,
+                    connect_timeout=bounds.bedrock_connect_timeout_seconds,
+                    read_timeout=read_timeout,
+                ),
+            )
+
+        return cls(athena=CachedClients(athena), bedrock=CachedClients(bedrock))
 
 
 @dataclass(slots=True)
@@ -124,3 +163,40 @@ class ToolContext:
     def remaining(self) -> float:
         """Seconds left before the call's deadline (never negative)."""
         return max(self.deadline - self.clock(), 0.0)
+
+    def bounded(self, seconds: float) -> ToolContext:
+        """This context with its deadline brought forward to at most `seconds` from now."""
+        return replace(self, deadline=min(self.deadline, self.clock() + max(seconds, 0.0)))
+
+    def read_timeout(self, *, connect: float, minimum: float, maximum: float, keep: float) -> float:
+        """Whole-second read timeout for a call that must end, even when it times out, at least
+        `keep` seconds before the deadline. Raises TIME_BUDGET_EXCEEDED when that leaves less
+        than `minimum`, so the call is not started."""
+        timeout = float(min(math.floor(maximum), math.floor(self.remaining() - connect - keep)))
+        if timeout < max(minimum, 1.0):
+            raise TimeBudgetExceededError
+        return timeout
+
+    def athena(self, *, keep: float) -> AthenaClient:
+        """An Athena client for one call that ends at least `keep` seconds before the deadline."""
+        limits = self.limits
+        return self.clients.athena.with_timeout(
+            self.read_timeout(
+                connect=limits.athena_connect_timeout_seconds,
+                minimum=limits.athena_min_read_timeout_seconds,
+                maximum=limits.athena_read_timeout_seconds,
+                keep=keep,
+            )
+        )
+
+    def bedrock(self, *, keep: float) -> BedrockRuntimeClient:
+        """A Bedrock client for one call that ends at least `keep` seconds before the deadline."""
+        limits = self.limits
+        return self.clients.bedrock.with_timeout(
+            self.read_timeout(
+                connect=limits.bedrock_connect_timeout_seconds,
+                minimum=limits.min_bedrock_bounded_read,
+                maximum=limits.bedrock_read_timeout_seconds,
+                keep=keep,
+            )
+        )

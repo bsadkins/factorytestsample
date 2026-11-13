@@ -128,14 +128,13 @@ def test_unknown_tool_is_rejected_without_external_calls() -> None:
     assert kit.external_calls() == 0
 
 
-@pytest.mark.parametrize("arguments", [None, {}])
-def test_missing_arguments_default_to_empty_object(arguments: dict[str, Any] | None) -> None:
+def test_empty_arguments_object_applies_defaults() -> None:
     kit = make_kit(dataset())
-    result = build_registry().call("get_case_summary", arguments, kit.context())
+    result = build_registry().call("get_case_summary", {}, kit.context())
     assert result["totalCases"] == 12
 
 
-@pytest.mark.parametrize("arguments", [[], "x", 3])
+@pytest.mark.parametrize("arguments", [None, [], "x", 3, True])
 def test_non_object_arguments_are_rejected(arguments: Any) -> None:  # noqa: ANN401
     kit = make_kit(dataset())
     with pytest.raises(ToolInputError):

@@ -118,15 +118,15 @@ def _object_params(message: Message, allowed: frozenset[str] | None) -> dict[str
 
 
 def tool_result(payload: Mapping[str, Any], *, is_error: bool) -> dict[str, Any]:
-    """A CallToolResult carrying `payload` as structured content and serialised JSON text."""
+    """A CallToolResult carrying `payload` as structured content and serialised JSON text.
+
+    Serialisation is strict JSON: a NaN or Infinity in `payload` raises instead of producing a
+    body that standards-compliant clients cannot parse.
+    """
     structured = dict(payload)
+    text = json.dumps(structured, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     return {
-        "content": [
-            {
-                "type": "text",
-                "text": json.dumps(structured, ensure_ascii=False, separators=(",", ":")),
-            }
-        ],
+        "content": [{"type": "text", "text": text}],
         "structuredContent": structured,
         "isError": is_error,
     }
@@ -242,8 +242,9 @@ class McpServer:
         name = params.get("name")
         if not isinstance(name, str) or not name:
             raise ParamsError("name must be a non-empty string")
-        arguments = params.get("arguments")
-        if arguments is not None and not isinstance(arguments, dict):
+        # CallToolRequest arguments are optional but not nullable: only omission means {}.
+        arguments = params.get("arguments", {})
+        if not isinstance(arguments, dict):
             raise ParamsError("arguments must be an object")
         if name not in self.registry.names():
             return protocol_error(

@@ -1,13 +1,14 @@
 """Bedrock analysis for the MCP tools.
 
 Uses `common.bedrock.invoke_bedrock` with the server's configured approved global profile and max
-tokens (no client override), the Anthropic messages format, a bounded retry policy and the call's
-deadline. Prompts and model replies are never logged.
+tokens (no client override) and the Anthropic messages format. Attempts are made here, one
+`invoke_bedrock` call each, so every attempt gets a client whose timeout ends it within the call's
+time budget; a retry is made only while a full minimum attempt still fits. Prompts and model
+replies are never logged.
 """
 
 from __future__ import annotations
 
-import time
 from typing import Any, Final
 
 from aws_lambda_powertools import Logger
@@ -22,13 +23,15 @@ from common.bedrock import (
     PromptTooLargeError,
     invoke_bedrock,
 )
-from common.retry import RetryPolicy
+from common.retry import RetryPolicy, is_retryable_error
 from common.safe_logging import error_fields
 
 from mcp_tools.context import ToolContext
 from mcp_tools.errors import ToolError, ToolInputError
 
 logger = Logger(child=True)
+
+_SINGLE_ATTEMPT: Final = RetryPolicy(max_attempts=1)
 
 SYSTEM_PROMPT: Final = (
     "You are an analyst helping an AWS customer understand their AWS Support case history and "
@@ -66,6 +69,12 @@ def _failure(exc: Exception, model_id: str) -> ToolError:
     return ToolError("The Bedrock invocation failed", code="BEDROCK_ERROR", details=details)
 
 
+def _retryable(exc: Exception) -> bool:
+    if isinstance(exc, BotoCoreError):
+        return is_retryable_error(exc)
+    return isinstance(exc, BedrockThrottlingError | BedrockTransientError)
+
+
 def analyse(ctx: ToolContext, prompt: str) -> dict[str, Any]:
     """Send `prompt` (one user turn) to the configured model and return the analysis fields."""
     model_id = ctx.settings.model_id
@@ -74,32 +83,42 @@ def analyse(ctx: ToolContext, prompt: str) -> dict[str, Any]:
         raise ToolInputError(
             [{"path": "<arguments>", "message": "the analysis input is too large; narrow it"}]
         )
+    limits = ctx.limits
     policy = RetryPolicy(
-        max_attempts=ctx.limits.bedrock_max_attempts, base_delay_seconds=0.5, max_delay_seconds=2.0
+        max_attempts=limits.bedrock_max_attempts, base_delay_seconds=0.5, max_delay_seconds=2.0
     )
-    try:
-        result = invoke_bedrock(
-            ctx.clients.bedrock,
-            model_id,
-            [Message("user", prompt)],
-            max_tokens=ctx.settings.max_tokens,
-            system=SYSTEM_PROMPT,
-            max_prompt_chars=ctx.limits.max_prompt_chars,
-            policy=policy,
-            sleep=ctx.sleep,
-            # invoke_bedrock compares deadlines with time.monotonic.
-            deadline=time.monotonic() + ctx.remaining(),
-        )
-    except PromptTooLargeError:
-        raise ToolInputError(
-            [{"path": "<arguments>", "message": "the analysis input is too large; narrow it"}]
-        ) from None
-    except (BedrockError, BotoCoreError) as exc:
-        if not isinstance(exc, BedrockInvocationError | BedrockResponseError):
-            logger.warning(
-                "Bedrock analysis failed", extra={"model_id": model_id, **error_fields(exc)}
+    reserve = limits.response_reserve_seconds
+    attempt = 1
+    while True:
+        try:
+            result = invoke_bedrock(
+                ctx.bedrock(keep=reserve),
+                model_id,
+                [Message("user", prompt)],
+                max_tokens=ctx.settings.max_tokens,
+                system=SYSTEM_PROMPT,
+                max_prompt_chars=limits.max_prompt_chars,
+                policy=_SINGLE_ATTEMPT,
             )
-        raise _failure(exc, model_id) from None
+            break
+        except PromptTooLargeError:
+            raise ToolInputError(
+                [{"path": "<arguments>", "message": "the analysis input is too large; narrow it"}]
+            ) from None
+        except (BedrockError, BotoCoreError) as exc:
+            if _retryable(exc) and attempt < policy.max_attempts:
+                delay = policy.delay(attempt)
+                if ctx.remaining() - delay >= limits.min_bedrock_seconds + reserve:
+                    if delay > 0:
+                        ctx.sleep(delay)
+                    attempt += 1
+                    continue
+            if not isinstance(exc, BedrockInvocationError | BedrockResponseError):
+                logger.warning(
+                    "Bedrock analysis failed",
+                    extra={"model_id": model_id, "attempts": attempt, **error_fields(exc)},
+                )
+            raise _failure(exc, model_id) from None
     return {
         "analysis": result.text,
         "modelId": result.model_id,
