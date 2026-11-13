@@ -1,0 +1,9 @@
+{
+  "$schema": "./pipeline.schema.json",
+  "pipelineName": "CaseInsights-Pipeline",
+  "account": "111111111111",
+  "region": "us-east-1",
+  "connectionArn": "arn:aws:codeconnections:us-east-1:111111111111:connection/00000000-0000-4000-8000-000000000000",
+  "repository": "bsadkins/factorytestsample",
+  "branch": "main"
+}
