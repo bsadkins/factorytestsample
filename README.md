@@ -99,6 +99,8 @@ The `env` context is required and must be `dev` or `prod`; the app reads `config
 
 `enableAnalytics` adds the Analytics stack; `enableMcp` (also `true` in `config/dev.json`, and only valid with Analytics) adds the MCP stack, whose alarms and dashboard widgets are added to Core, and, in the default managed `apiGatewayLogging` mode, the shared `CaseInsightsApiLoggingStack-<sharedId>` that owns the account/Region API Gateway CloudWatch role setting REST access logs need (see [Shared API Gateway logging prerequisite](docs/mcp-server-deployment.md#shared-api-gateway-logging-prerequisite)). `test/stacks/api-logging-stack.test.ts` checks managed and existing mode, MCP disabled, identical dev and prod shared stacks, a pipeline-style root stack shared by two stages with exactly one `AWS::ApiGateway::Account`, and rejection of inconsistent settings. `test/stacks/analytics-stack.test.ts` synthesises Analytics on and MCP off, and Analytics off; `test/stacks/mcp-stack.test.ts` synthesises the dev MCP stack, prod with MCP enabled and both environments with MCP off, and runs the packaged MCP function with the Core layer for `initialize` and `tools/list`.
 
+The cross-surface tests run one set of synthetic processed records (`test/fixtures/cross_surface/`) through every consumer. `test/integration/test_cross_surface_records.py` checks the records against the Glue table contract and the OpenX column mapping, and runs `scripts/generate_csv_insights.py` against moto S3 with several listing pages, field preservation, spreadsheet formula escaping and each filter. `test/integration/test_cross_surface_mcp.py` calls the MCP handler for all eight tools and compares the results with counts worked out by hand from the fixture (including Monday, week-of-month and monthly buckets, service trends and filtered distributions), and checks unsafe SQL, out-of-scope arguments, the 32 KiB body cap, Athena timeouts, failures and throttling, and unknown tools. `test/integration/test_cross_surface_bridge.py` sends every tool call through the real stdio bridge to a loopback HTTPS endpoint that verifies the SigV4 signature, and expects the same results as direct calls. `test/cross-surface.test.ts` checks that the synthesised dev Glue table matches the same contract and that the MCP function's environment and permissions are scoped to that database and workgroup. Athena is replaced by a SQLite stand-in and API Gateway by the loopback endpoint, so these tests prove local behaviour and template properties only, not real Athena SQL, IAM authorisation or WAF.
+
 ### Deferred live verification
 
 None of the following has been run. Local tests, snapshots, synth and cdk-nag results are not evidence for them; each needs a real AWS deployment:
@@ -188,7 +190,7 @@ src/templates/       Prompt templates (templates layer, /opt/templates)
 scripts/             CSV exporter (generate_csv_insights.py) and taxonomy documentation renderer
 scripts/build/       Wheel-only layer bundler
 scripts/security/    Dependency advisory scanner
-test/                Jest and pytest suites; prompt fixtures in test/fixtures/prompts
+test/                Jest and pytest suites; prompt fixtures in test/fixtures/prompts, cross-surface fixtures in test/fixtures/cross_surface
 ```
 
 ## Licence
