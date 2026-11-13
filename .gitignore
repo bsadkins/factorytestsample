@@ -32,3 +32,4 @@ reports/
 # Local secrets and machine-specific settings
 .env
 .env.*
+.kiro/settings/mcp.json

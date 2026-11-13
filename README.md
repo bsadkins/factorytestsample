@@ -20,7 +20,7 @@ This branch currently contains the project foundation and the shared Python runt
 - strict TypeScript and Python tooling, exact dependency pins, an npm lockfile and hash-locked Python requirements;
 - local lint, type-check, test, synth and security commands.
 
-The MCP server, CDK pipeline and full documentation are **not implemented yet**. Available guides: [docs/athena.md](docs/athena.md) (Athena analytics and optional QuickSight setup), [docs/csv_export.md](docs/csv_export.md) (CSV export for Power BI and Excel) and [docs/runbook.md](docs/runbook.md), a provisional alarm runbook. Nothing has been deployed to AWS; StackSet instance creation is untested until a real deployment.
+The MCP server's CDK stack, CDK pipeline and full documentation are **not implemented yet**. Available guides: [docs/athena.md](docs/athena.md) (Athena analytics and optional QuickSight setup), [docs/csv_export.md](docs/csv_export.md) (CSV export for Power BI and Excel), [docs/mcp-server-deployment.md](docs/mcp-server-deployment.md) (the SigV4 stdio bridge `scripts/mcp_aws_client.py` with Kiro and Claude Desktop setup) and [docs/runbook.md](docs/runbook.md), a provisional alarm runbook. Nothing has been deployed to AWS; StackSet instance creation is untested until a real deployment.
 
 ## Security foundation
 
