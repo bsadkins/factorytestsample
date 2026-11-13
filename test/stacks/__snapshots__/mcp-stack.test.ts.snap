@@ -1,0 +1,1845 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`dev MCP stack template snapshot 1`] = `
+{
+  "Description": "Support Case Insights MCP endpoint, WAF and read-only tool function (scidev)",
+  "Outputs": {
+    "McpAccessLogGroupName": {
+      "Description": "MCP API access log group",
+      "Value": {
+        "Ref": "McpServerAccessLogs1AA4997C",
+      },
+    },
+    "McpEndpointUrl": {
+      "Description": "MCP_SERVER_URL for scripts/mcp_aws_client.py (SigV4, execute-api)",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Ref": "McpServerApi22C3CCFE",
+            },
+            ".execute-api.us-east-1.",
+            {
+              "Ref": "AWS::URLSuffix",
+            },
+            "/",
+            {
+              "Ref": "McpServerApiDeploymentStagev1394D9FD2",
+            },
+            "/mcp",
+          ],
+        ],
+      },
+    },
+    "McpFunctionName": {
+      "Description": "MCP Lambda function",
+      "Value": {
+        "Ref": "McpServerMcpFunctionCD3AA68D",
+      },
+    },
+    "McpRestApiId": {
+      "Description": "MCP REST API ID",
+      "Value": {
+        "Ref": "McpServerApi22C3CCFE",
+      },
+    },
+    "McpServerApiEndpointD7CFBB9E": {
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Ref": "McpServerApi22C3CCFE",
+            },
+            ".execute-api.us-east-1.",
+            {
+              "Ref": "AWS::URLSuffix",
+            },
+            "/",
+            {
+              "Ref": "McpServerApiDeploymentStagev1394D9FD2",
+            },
+            "/",
+          ],
+        ],
+      },
+    },
+    "McpWebAclArn": {
+      "Description": "AWS WAF web ACL protecting the MCP stage",
+      "Value": {
+        "Fn::GetAtt": [
+          "McpServerWebAclA12C2395",
+          "Arn",
+        ],
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "McpServerAccessLogs1AA4997C": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/apigateway/CaseInsights-Mcp-scidev/access",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "McpServerAccessLogsAuthFailuresE4E90561": {
+      "Properties": {
+        "FilterPattern": "{ ($.errorType = "ACCESS_DENIED") || ($.errorType = "EXPIRED_TOKEN") || ($.errorType = "INVALID_SIGNATURE") || ($.errorType = "MISSING_AUTHENTICATION_TOKEN") || ($.errorType = "UNAUTHORIZED") }",
+        "LogGroupName": {
+          "Ref": "McpServerAccessLogs1AA4997C",
+        },
+        "MetricTransformations": [
+          {
+            "Dimensions": [
+              {
+                "Key": "ApiName",
+                "Value": "$.apiName",
+              },
+            ],
+            "MetricName": "McpAuthFailures",
+            "MetricNamespace": "SupportCaseInsights",
+            "MetricValue": "1",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::MetricFilter",
+    },
+    "McpServerApi22C3CCFE": {
+      "Properties": {
+        "Description": "Support Case Insights MCP endpoint (scidev)",
+        "EndpointConfiguration": {
+          "Types": [
+            "REGIONAL",
+          ],
+        },
+        "Name": "CaseInsights-Mcp-scidev",
+        "Policy": {
+          "Statement": [
+            {
+              "Action": "execute-api:Invoke",
+              "Condition": {
+                "StringEquals": {
+                  "aws:PrincipalOrgID": "o-exampleorg1",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "arn:aws:iam::111111111111:role/CaseInsightsAnalyst",
+              },
+              "Resource": "execute-api:/v1/POST/mcp",
+              "Sid": "AllowConfiguredPrincipalsInOrganization",
+            },
+            {
+              "Action": "execute-api:Invoke",
+              "Condition": {
+                "StringNotEquals": {
+                  "aws:PrincipalOrgID": "o-exampleorg1",
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": "execute-api:/*",
+              "Sid": "DenyOutsideOrganization",
+            },
+            {
+              "Action": "execute-api:Invoke",
+              "Condition": {
+                "ArnNotEquals": {
+                  "aws:PrincipalArn": [
+                    "arn:aws:iam::111111111111:role/CaseInsightsAnalyst",
+                  ],
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": "execute-api:/*",
+              "Sid": "DenyUnlistedPrincipals",
+            },
+            {
+              "Action": "execute-api:Invoke",
+              "Effect": "Deny",
+              "NotResource": "execute-api:/v1/POST/mcp",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Sid": "DenyOtherRoutes",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::ApiGateway::RestApi",
+    },
+    "McpServerApiDeployment97B054E1ead1545b5db16d927e12012b49d9198a": {
+      "DependsOn": [
+        "McpServerApimcpPOST2519E72A",
+        "McpServerApimcp8EC328BC",
+      ],
+      "Metadata": {
+        "aws:cdk:do-not-refactor": true,
+      },
+      "Properties": {
+        "Description": "MCP stage v1",
+        "RestApiId": {
+          "Ref": "McpServerApi22C3CCFE",
+        },
+      },
+      "Type": "AWS::ApiGateway::Deployment",
+    },
+    "McpServerApiDeploymentStagev1394D9FD2": {
+      "Properties": {
+        "AccessLogSetting": {
+          "DestinationArn": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:aws:logs:us-east-1:111111111111:log-group:",
+                {
+                  "Ref": "McpServerAccessLogs1AA4997C",
+                },
+              ],
+            ],
+          },
+          "Format": "{"requestId":"$context.requestId","extendedRequestId":"$context.extendedRequestId","requestTime":"$context.requestTime","apiName":"CaseInsights-Mcp-scidev","stage":"$context.stage","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","protocol":"$context.protocol","status":"$context.status","responseLength":"$context.responseLength","responseLatency":"$context.responseLatency","errorType":"$context.error.responseType","integrationStatus":"$context.integration.status","integrationLatency":"$context.integration.latency","wafResponseCode":"$context.wafResponseCode","sourceIp":"$context.identity.sourceIp","callerAccountId":"$context.identity.accountId","xrayTraceId":"$context.xrayTraceId"}",
+        },
+        "DeploymentId": {
+          "Ref": "McpServerApiDeployment97B054E1ead1545b5db16d927e12012b49d9198a",
+        },
+        "Description": "MCP stage v1",
+        "MethodSettings": [
+          {
+            "DataTraceEnabled": false,
+            "HttpMethod": "*",
+            "LoggingLevel": "OFF",
+            "MetricsEnabled": false,
+            "ResourcePath": "/*",
+            "ThrottlingBurstLimit": 20,
+            "ThrottlingRateLimit": 10,
+          },
+        ],
+        "RestApiId": {
+          "Ref": "McpServerApi22C3CCFE",
+        },
+        "StageName": "v1",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "TracingEnabled": true,
+      },
+      "Type": "AWS::ApiGateway::Stage",
+    },
+    "McpServerApimcp8EC328BC": {
+      "Properties": {
+        "ParentId": {
+          "Fn::GetAtt": [
+            "McpServerApi22C3CCFE",
+            "RootResourceId",
+          ],
+        },
+        "PathPart": "mcp",
+        "RestApiId": {
+          "Ref": "McpServerApi22C3CCFE",
+        },
+      },
+      "Type": "AWS::ApiGateway::Resource",
+    },
+    "McpServerApimcpPOST2519E72A": {
+      "Properties": {
+        "AuthorizationType": "AWS_IAM",
+        "HttpMethod": "POST",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "McpServerMcpFunctionCD3AA68D",
+                    "Arn",
+                  ],
+                },
+                "/invocations",
+              ],
+            ],
+          },
+        },
+        "ResourceId": {
+          "Ref": "McpServerApimcp8EC328BC",
+        },
+        "RestApiId": {
+          "Ref": "McpServerApi22C3CCFE",
+        },
+      },
+      "Type": "AWS::ApiGateway::Method",
+    },
+    "McpServerApimcpPOSTApiPermissionCaseInsightsMcpStackscidevMcpServerApiFED4F2CAPOSTmcpB4C8E7EE": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "McpServerMcpFunctionCD3AA68D",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:execute-api:us-east-1:111111111111:",
+              {
+                "Ref": "McpServerApi22C3CCFE",
+              },
+              "/",
+              {
+                "Ref": "McpServerApiDeploymentStagev1394D9FD2",
+              },
+              "/POST/mcp",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "McpServerBedrockPolicyC17BD6B0": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "bedrock:InvokeModel",
+              "Condition": {
+                "StringEquals": {
+                  "aws:RequestedRegion": "us-east-1",
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+              "Sid": "InvokeGlobalInferenceProfile1",
+            },
+            {
+              "Action": "bedrock:InvokeModel",
+              "Condition": {
+                "StringEquals": {
+                  "aws:RequestedRegion": "us-east-1",
+                  "bedrock:InferenceProfileArn": "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+              "Sid": "InvokeRegionalModelThroughProfile1",
+            },
+            {
+              "Action": "bedrock:InvokeModel",
+              "Condition": {
+                "StringEquals": {
+                  "aws:RequestedRegion": "unspecified",
+                  "bedrock:InferenceProfileArn": "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+              "Sid": "InvokeGlobalModelThroughProfile1",
+            },
+            {
+              "Action": [
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream",
+              ],
+              "Effect": "Deny",
+              "NotResource": [
+                "arn:aws:bedrock:::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+                "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+              ],
+              "Sid": "DenyUnapprovedModels",
+            },
+            {
+              "Action": "aws-marketplace:Subscribe",
+              "Condition": {
+                "ForAnyValue:StringEquals": {
+                  "aws-marketplace:ProductId": [
+                    "prod-xdkflymybwmvi",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "SubscribeApprovedModelProducts",
+            },
+            {
+              "Action": "aws-marketplace:ViewSubscriptions",
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "ViewModelSubscriptions",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "McpServerBedrockPolicyC17BD6B0",
+        "Roles": [
+          {
+            "Ref": "McpServerMcpFunctionRole318A8F2D",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "McpServerMcpFunctionCD3AA68D": {
+      "DependsOn": [
+        "McpServerMcpFunctionRole318A8F2D",
+        "McpServerMcpFunctionTelemetryPolicyD2EB13AB",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Support Case Insights MCP JSON-RPC server with eight read-only tools (scidev)",
+        "Environment": {
+          "Variables": {
+            "ATHENA_DATABASE": "case_insights_scidev",
+            "ATHENA_WORKGROUP": "CaseInsights-scidev",
+            "BEDROCK_MAX_TOKENS": "1000",
+            "BEDROCK_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "CASE_INSIGHTS_UNIQUE_ID": "scidev",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "mcp-server",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+          },
+        },
+        "FunctionName": "Lambda-McpServer-scidev",
+        "Handler": "mcp_server.app.handler",
+        "Layers": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefSharedLayersCommonLayer7C4E03F5833910D2",
+              "Region": "us-east-1",
+              "StackName": "CaseInsightsCoreStack-scidev",
+            },
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "McpServerMcpFunctionLogGroup8C5FA6D2",
+          },
+        },
+        "MemorySize": 512,
+        "ReservedConcurrentExecutions": 20,
+        "Role": {
+          "Fn::GetAtt": [
+            "McpServerMcpFunctionRole318A8F2D",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Timeout": 28,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "McpServerMcpFunctionLogGroup8C5FA6D2": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-McpServer-scidev",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "McpServerMcpFunctionRole318A8F2D": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-McpServer-scidev",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "McpServerMcpFunctionTelemetryPolicyD2EB13AB": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "McpServerMcpFunctionLogGroup8C5FA6D2",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "McpServerMcpFunctionTelemetryPolicyD2EB13AB",
+        "Roles": [
+          {
+            "Ref": "McpServerMcpFunctionRole318A8F2D",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "McpServerMcpServerAccess6FE6CC82": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "athena:GetQueryExecution",
+                "athena:GetQueryResults",
+                "athena:StartQueryExecution",
+                "athena:StopQueryExecution",
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:athena:us-east-1:111111111111:workgroup/CaseInsights-scidev",
+              "Sid": "QueryCaseInsightsWorkgroup",
+            },
+            {
+              "Action": [
+                "glue:BatchGetPartition",
+                "glue:GetDatabase",
+                "glue:GetPartition",
+                "glue:GetPartitions",
+                "glue:GetTable",
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:glue:us-east-1:111111111111:catalog",
+                "arn:aws:glue:us-east-1:111111111111:database/case_insights_scidev",
+                "arn:aws:glue:us-east-1:111111111111:table/case_insights_scidev/case_summary",
+              ],
+              "Sid": "ReadCaseSummaryCatalog",
+            },
+            {
+              "Action": "glue:GetTables",
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:glue:us-east-1:111111111111:catalog",
+                "arn:aws:glue:us-east-1:111111111111:database/case_insights_scidev",
+                "arn:aws:glue:us-east-1:111111111111:table/case_insights_scidev/*",
+              ],
+              "Sid": "ListCaseSummaryTables",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetStackOutput": {
+                        "OutputName": "PublishOutputFnGetAttStorageProcessedBucket69BE6922ArnCAED39FC",
+                        "Region": "us-east-1",
+                        "StackName": "CaseInsightsCoreStack-scidev",
+                      },
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "ReadProcessedRecords",
+            },
+            {
+              "Action": [
+                "s3:GetBucketLocation",
+                "s3:ListBucket",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetStackOutput": {
+                  "OutputName": "PublishOutputFnGetAttStorageProcessedBucket69BE6922ArnCAED39FC",
+                  "Region": "us-east-1",
+                  "StackName": "CaseInsightsCoreStack-scidev",
+                },
+              },
+              "Sid": "ListProcessedRecords",
+            },
+            {
+              "Action": [
+                "s3:AbortMultipartUpload",
+                "s3:GetObject",
+                "s3:ListMultipartUploadParts",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetStackOutput": {
+                        "OutputName": "PublishOutputFnGetAttAnalyticsResultsBucket8D578079ArnD2EE10C2",
+                        "Region": "us-east-1",
+                        "StackName": "CaseInsightsAnalyticsStack-scidev",
+                      },
+                    },
+                    "/query-results/*",
+                  ],
+                ],
+              },
+              "Sid": "WriteQueryResults",
+            },
+            {
+              "Action": [
+                "s3:GetBucketLocation",
+                "s3:ListBucket",
+                "s3:ListBucketMultipartUploads",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetStackOutput": {
+                  "OutputName": "PublishOutputFnGetAttAnalyticsResultsBucket8D578079ArnD2EE10C2",
+                  "Region": "us-east-1",
+                  "StackName": "CaseInsightsAnalyticsStack-scidev",
+                },
+              },
+              "Sid": "ListQueryResults",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "McpServerMcpServerAccess6FE6CC82",
+        "Roles": [
+          {
+            "Ref": "McpServerMcpFunctionRole318A8F2D",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "McpServerWebAclA12C2395": {
+      "Properties": {
+        "AssociationConfig": {
+          "RequestBody": {
+            "API_GATEWAY": {
+              "DefaultSizeInspectionLimit": "KB_32",
+            },
+          },
+        },
+        "DefaultAction": {
+          "Allow": {},
+        },
+        "Description": "Support Case Insights MCP API protection for scidev",
+        "Name": "CaseInsights-Mcp-scidev",
+        "Rules": [
+          {
+            "Action": {
+              "Block": {
+                "CustomResponse": {
+                  "ResponseCode": 429,
+                },
+              },
+            },
+            "Name": "RateLimitPerIp",
+            "Priority": 0,
+            "Statement": {
+              "RateBasedStatement": {
+                "AggregateKeyType": "IP",
+                "EvaluationWindowSec": 300,
+                "Limit": 300,
+              },
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "RateLimitPerIp",
+              "SampledRequestsEnabled": false,
+            },
+          },
+          {
+            "Action": {
+              "Block": {
+                "CustomResponse": {
+                  "ResponseCode": 413,
+                },
+              },
+            },
+            "Name": "BlockBodyOver32KiB",
+            "Priority": 1,
+            "Statement": {
+              "SizeConstraintStatement": {
+                "ComparisonOperator": "GT",
+                "FieldToMatch": {
+                  "Body": {
+                    "OversizeHandling": "MATCH",
+                  },
+                },
+                "Size": 32768,
+                "TextTransformations": [
+                  {
+                    "Priority": 0,
+                    "Type": "NONE",
+                  },
+                ],
+              },
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "BlockBodyOver32KiB",
+              "SampledRequestsEnabled": false,
+            },
+          },
+          {
+            "Name": "AWSManagedRulesCommonRuleSet",
+            "OverrideAction": {
+              "None": {},
+            },
+            "Priority": 2,
+            "Statement": {
+              "ManagedRuleGroupStatement": {
+                "Name": "AWSManagedRulesCommonRuleSet",
+                "RuleActionOverrides": [
+                  {
+                    "ActionToUse": {
+                      "Count": {},
+                    },
+                    "Name": "SizeRestrictions_BODY",
+                  },
+                ],
+                "VendorName": "AWS",
+              },
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "AWSManagedRulesCommonRuleSet",
+              "SampledRequestsEnabled": false,
+            },
+          },
+        ],
+        "Scope": "REGIONAL",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "VisibilityConfig": {
+          "CloudWatchMetricsEnabled": true,
+          "MetricName": "CaseInsights-Mcp-scidev",
+          "SampledRequestsEnabled": false,
+        },
+      },
+      "Type": "AWS::WAFv2::WebACL",
+    },
+    "McpServerWebAclStageAssociation9A3E845E": {
+      "Properties": {
+        "ResourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:apigateway:us-east-1::/restapis/",
+              {
+                "Ref": "McpServerApi22C3CCFE",
+              },
+              "/stages/",
+              {
+                "Ref": "McpServerApiDeploymentStagev1394D9FD2",
+              },
+            ],
+          ],
+        },
+        "WebACLArn": {
+          "Fn::GetAtt": [
+            "McpServerWebAclA12C2395",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::WAFv2::WebACLAssociation",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
+
+exports[`prod MCP stack template snapshot 1`] = `
+{
+  "Description": "Support Case Insights MCP endpoint, WAF and read-only tool function (sciprod)",
+  "Outputs": {
+    "McpAccessLogGroupName": {
+      "Description": "MCP API access log group",
+      "Value": {
+        "Ref": "McpServerAccessLogs1AA4997C",
+      },
+    },
+    "McpEndpointUrl": {
+      "Description": "MCP_SERVER_URL for scripts/mcp_aws_client.py (SigV4, execute-api)",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Ref": "McpServerApi22C3CCFE",
+            },
+            ".execute-api.us-east-1.",
+            {
+              "Ref": "AWS::URLSuffix",
+            },
+            "/",
+            {
+              "Ref": "McpServerApiDeploymentStagev1394D9FD2",
+            },
+            "/mcp",
+          ],
+        ],
+      },
+    },
+    "McpFunctionName": {
+      "Description": "MCP Lambda function",
+      "Value": {
+        "Ref": "McpServerMcpFunctionCD3AA68D",
+      },
+    },
+    "McpRestApiId": {
+      "Description": "MCP REST API ID",
+      "Value": {
+        "Ref": "McpServerApi22C3CCFE",
+      },
+    },
+    "McpServerApiEndpointD7CFBB9E": {
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Ref": "McpServerApi22C3CCFE",
+            },
+            ".execute-api.us-east-1.",
+            {
+              "Ref": "AWS::URLSuffix",
+            },
+            "/",
+            {
+              "Ref": "McpServerApiDeploymentStagev1394D9FD2",
+            },
+            "/",
+          ],
+        ],
+      },
+    },
+    "McpWebAclArn": {
+      "Description": "AWS WAF web ACL protecting the MCP stage",
+      "Value": {
+        "Fn::GetAtt": [
+          "McpServerWebAclA12C2395",
+          "Arn",
+        ],
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "McpServerAccessLogs1AA4997C": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/aws/apigateway/CaseInsights-Mcp-sciprod/access",
+        "RetentionInDays": 90,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "McpServerAccessLogsAuthFailuresE4E90561": {
+      "Properties": {
+        "FilterPattern": "{ ($.errorType = "ACCESS_DENIED") || ($.errorType = "EXPIRED_TOKEN") || ($.errorType = "INVALID_SIGNATURE") || ($.errorType = "MISSING_AUTHENTICATION_TOKEN") || ($.errorType = "UNAUTHORIZED") }",
+        "LogGroupName": {
+          "Ref": "McpServerAccessLogs1AA4997C",
+        },
+        "MetricTransformations": [
+          {
+            "Dimensions": [
+              {
+                "Key": "ApiName",
+                "Value": "$.apiName",
+              },
+            ],
+            "MetricName": "McpAuthFailures",
+            "MetricNamespace": "SupportCaseInsights",
+            "MetricValue": "1",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::MetricFilter",
+    },
+    "McpServerApi22C3CCFE": {
+      "Properties": {
+        "Description": "Support Case Insights MCP endpoint (sciprod)",
+        "EndpointConfiguration": {
+          "Types": [
+            "REGIONAL",
+          ],
+        },
+        "Name": "CaseInsights-Mcp-sciprod",
+        "Policy": {
+          "Statement": [
+            {
+              "Action": "execute-api:Invoke",
+              "Condition": {
+                "StringEquals": {
+                  "aws:PrincipalOrgID": "o-exampleorg1",
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": [
+                  "arn:aws:iam::111111111111:role/CaseInsightsAnalyst",
+                  "arn:aws:iam::222222222222:role/analysts/CaseInsightsReader",
+                ],
+              },
+              "Resource": "execute-api:/v1/POST/mcp",
+              "Sid": "AllowConfiguredPrincipalsInOrganization",
+            },
+            {
+              "Action": "execute-api:Invoke",
+              "Condition": {
+                "StringNotEquals": {
+                  "aws:PrincipalOrgID": "o-exampleorg1",
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": "execute-api:/*",
+              "Sid": "DenyOutsideOrganization",
+            },
+            {
+              "Action": "execute-api:Invoke",
+              "Condition": {
+                "ArnNotEquals": {
+                  "aws:PrincipalArn": [
+                    "arn:aws:iam::111111111111:role/CaseInsightsAnalyst",
+                    "arn:aws:iam::222222222222:role/analysts/CaseInsightsReader",
+                  ],
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": "execute-api:/*",
+              "Sid": "DenyUnlistedPrincipals",
+            },
+            {
+              "Action": "execute-api:Invoke",
+              "Effect": "Deny",
+              "NotResource": "execute-api:/v1/POST/mcp",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Sid": "DenyOtherRoutes",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::ApiGateway::RestApi",
+    },
+    "McpServerApiDeployment97B054E1facde1a3439b42c1123708305a9ec06e": {
+      "DependsOn": [
+        "McpServerApimcpPOST2519E72A",
+        "McpServerApimcp8EC328BC",
+      ],
+      "Metadata": {
+        "aws:cdk:do-not-refactor": true,
+      },
+      "Properties": {
+        "Description": "MCP stage v1",
+        "RestApiId": {
+          "Ref": "McpServerApi22C3CCFE",
+        },
+      },
+      "Type": "AWS::ApiGateway::Deployment",
+    },
+    "McpServerApiDeploymentStagev1394D9FD2": {
+      "Properties": {
+        "AccessLogSetting": {
+          "DestinationArn": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:aws:logs:us-east-1:111111111111:log-group:",
+                {
+                  "Ref": "McpServerAccessLogs1AA4997C",
+                },
+              ],
+            ],
+          },
+          "Format": "{"requestId":"$context.requestId","extendedRequestId":"$context.extendedRequestId","requestTime":"$context.requestTime","apiName":"CaseInsights-Mcp-sciprod","stage":"$context.stage","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","protocol":"$context.protocol","status":"$context.status","responseLength":"$context.responseLength","responseLatency":"$context.responseLatency","errorType":"$context.error.responseType","integrationStatus":"$context.integration.status","integrationLatency":"$context.integration.latency","wafResponseCode":"$context.wafResponseCode","sourceIp":"$context.identity.sourceIp","callerAccountId":"$context.identity.accountId","xrayTraceId":"$context.xrayTraceId"}",
+        },
+        "DeploymentId": {
+          "Ref": "McpServerApiDeployment97B054E1facde1a3439b42c1123708305a9ec06e",
+        },
+        "Description": "MCP stage v1",
+        "MethodSettings": [
+          {
+            "DataTraceEnabled": false,
+            "HttpMethod": "*",
+            "LoggingLevel": "OFF",
+            "MetricsEnabled": false,
+            "ResourcePath": "/*",
+            "ThrottlingBurstLimit": 20,
+            "ThrottlingRateLimit": 10,
+          },
+        ],
+        "RestApiId": {
+          "Ref": "McpServerApi22C3CCFE",
+        },
+        "StageName": "v1",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "TracingEnabled": true,
+      },
+      "Type": "AWS::ApiGateway::Stage",
+    },
+    "McpServerApimcp8EC328BC": {
+      "Properties": {
+        "ParentId": {
+          "Fn::GetAtt": [
+            "McpServerApi22C3CCFE",
+            "RootResourceId",
+          ],
+        },
+        "PathPart": "mcp",
+        "RestApiId": {
+          "Ref": "McpServerApi22C3CCFE",
+        },
+      },
+      "Type": "AWS::ApiGateway::Resource",
+    },
+    "McpServerApimcpPOST2519E72A": {
+      "Properties": {
+        "AuthorizationType": "AWS_IAM",
+        "HttpMethod": "POST",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "McpServerMcpFunctionCD3AA68D",
+                    "Arn",
+                  ],
+                },
+                "/invocations",
+              ],
+            ],
+          },
+        },
+        "ResourceId": {
+          "Ref": "McpServerApimcp8EC328BC",
+        },
+        "RestApiId": {
+          "Ref": "McpServerApi22C3CCFE",
+        },
+      },
+      "Type": "AWS::ApiGateway::Method",
+    },
+    "McpServerApimcpPOSTApiPermissionCaseInsightsMcpStacksciprodMcpServerApi74858427POSTmcp077BBCC4": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "McpServerMcpFunctionCD3AA68D",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:execute-api:us-east-1:111111111111:",
+              {
+                "Ref": "McpServerApi22C3CCFE",
+              },
+              "/",
+              {
+                "Ref": "McpServerApiDeploymentStagev1394D9FD2",
+              },
+              "/POST/mcp",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "McpServerBedrockPolicyC17BD6B0": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "bedrock:InvokeModel",
+              "Condition": {
+                "StringEquals": {
+                  "aws:RequestedRegion": "us-east-1",
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+              "Sid": "InvokeGlobalInferenceProfile1",
+            },
+            {
+              "Action": "bedrock:InvokeModel",
+              "Condition": {
+                "StringEquals": {
+                  "aws:RequestedRegion": "us-east-1",
+                  "bedrock:InferenceProfileArn": "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+              "Sid": "InvokeRegionalModelThroughProfile1",
+            },
+            {
+              "Action": "bedrock:InvokeModel",
+              "Condition": {
+                "StringEquals": {
+                  "aws:RequestedRegion": "unspecified",
+                  "bedrock:InferenceProfileArn": "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+              "Sid": "InvokeGlobalModelThroughProfile1",
+            },
+            {
+              "Action": [
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream",
+              ],
+              "Effect": "Deny",
+              "NotResource": [
+                "arn:aws:bedrock:::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+                "arn:aws:bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+              ],
+              "Sid": "DenyUnapprovedModels",
+            },
+            {
+              "Action": "aws-marketplace:Subscribe",
+              "Condition": {
+                "ForAnyValue:StringEquals": {
+                  "aws-marketplace:ProductId": [
+                    "prod-xdkflymybwmvi",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "SubscribeApprovedModelProducts",
+            },
+            {
+              "Action": "aws-marketplace:ViewSubscriptions",
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "ViewModelSubscriptions",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "McpServerBedrockPolicyC17BD6B0",
+        "Roles": [
+          {
+            "Ref": "McpServerMcpFunctionRole318A8F2D",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "McpServerMcpFunctionCD3AA68D": {
+      "DependsOn": [
+        "McpServerMcpFunctionRole318A8F2D",
+        "McpServerMcpFunctionTelemetryPolicyD2EB13AB",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Support Case Insights MCP JSON-RPC server with eight read-only tools (sciprod)",
+        "Environment": {
+          "Variables": {
+            "ATHENA_DATABASE": "case_insights_sciprod",
+            "ATHENA_WORKGROUP": "CaseInsights-sciprod",
+            "BEDROCK_MAX_TOKENS": "1000",
+            "BEDROCK_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "CASE_INSIGHTS_UNIQUE_ID": "sciprod",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "mcp-server",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+          },
+        },
+        "FunctionName": "Lambda-McpServer-sciprod",
+        "Handler": "mcp_server.app.handler",
+        "Layers": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefSharedLayersCommonLayer7C4E03F5833910D2",
+              "Region": "us-east-1",
+              "StackName": "CaseInsightsCoreStack-sciprod",
+            },
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "McpServerMcpFunctionLogGroup8C5FA6D2",
+          },
+        },
+        "MemorySize": 512,
+        "ReservedConcurrentExecutions": 20,
+        "Role": {
+          "Fn::GetAtt": [
+            "McpServerMcpFunctionRole318A8F2D",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Timeout": 28,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "McpServerMcpFunctionLogGroup8C5FA6D2": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-McpServer-sciprod",
+        "RetentionInDays": 90,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "McpServerMcpFunctionRole318A8F2D": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for Lambda-McpServer-sciprod",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "McpServerMcpFunctionTelemetryPolicyD2EB13AB": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "McpServerMcpFunctionLogGroup8C5FA6D2",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "McpServerMcpFunctionTelemetryPolicyD2EB13AB",
+        "Roles": [
+          {
+            "Ref": "McpServerMcpFunctionRole318A8F2D",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "McpServerMcpServerAccess6FE6CC82": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "athena:GetQueryExecution",
+                "athena:GetQueryResults",
+                "athena:StartQueryExecution",
+                "athena:StopQueryExecution",
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:athena:us-east-1:111111111111:workgroup/CaseInsights-sciprod",
+              "Sid": "QueryCaseInsightsWorkgroup",
+            },
+            {
+              "Action": [
+                "glue:BatchGetPartition",
+                "glue:GetDatabase",
+                "glue:GetPartition",
+                "glue:GetPartitions",
+                "glue:GetTable",
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:glue:us-east-1:111111111111:catalog",
+                "arn:aws:glue:us-east-1:111111111111:database/case_insights_sciprod",
+                "arn:aws:glue:us-east-1:111111111111:table/case_insights_sciprod/case_summary",
+              ],
+              "Sid": "ReadCaseSummaryCatalog",
+            },
+            {
+              "Action": "glue:GetTables",
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:glue:us-east-1:111111111111:catalog",
+                "arn:aws:glue:us-east-1:111111111111:database/case_insights_sciprod",
+                "arn:aws:glue:us-east-1:111111111111:table/case_insights_sciprod/*",
+              ],
+              "Sid": "ListCaseSummaryTables",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetStackOutput": {
+                        "OutputName": "PublishOutputFnGetAttStorageProcessedBucket69BE6922ArnCAED39FC",
+                        "Region": "us-east-1",
+                        "StackName": "CaseInsightsCoreStack-sciprod",
+                      },
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "ReadProcessedRecords",
+            },
+            {
+              "Action": [
+                "s3:GetBucketLocation",
+                "s3:ListBucket",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetStackOutput": {
+                  "OutputName": "PublishOutputFnGetAttStorageProcessedBucket69BE6922ArnCAED39FC",
+                  "Region": "us-east-1",
+                  "StackName": "CaseInsightsCoreStack-sciprod",
+                },
+              },
+              "Sid": "ListProcessedRecords",
+            },
+            {
+              "Action": [
+                "s3:AbortMultipartUpload",
+                "s3:GetObject",
+                "s3:ListMultipartUploadParts",
+                "s3:PutObject",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetStackOutput": {
+                        "OutputName": "PublishOutputFnGetAttAnalyticsResultsBucket8D578079ArnD2EE10C2",
+                        "Region": "us-east-1",
+                        "StackName": "CaseInsightsAnalyticsStack-sciprod",
+                      },
+                    },
+                    "/query-results/*",
+                  ],
+                ],
+              },
+              "Sid": "WriteQueryResults",
+            },
+            {
+              "Action": [
+                "s3:GetBucketLocation",
+                "s3:ListBucket",
+                "s3:ListBucketMultipartUploads",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetStackOutput": {
+                  "OutputName": "PublishOutputFnGetAttAnalyticsResultsBucket8D578079ArnD2EE10C2",
+                  "Region": "us-east-1",
+                  "StackName": "CaseInsightsAnalyticsStack-sciprod",
+                },
+              },
+              "Sid": "ListQueryResults",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "McpServerMcpServerAccess6FE6CC82",
+        "Roles": [
+          {
+            "Ref": "McpServerMcpFunctionRole318A8F2D",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "McpServerWebAclA12C2395": {
+      "Properties": {
+        "AssociationConfig": {
+          "RequestBody": {
+            "API_GATEWAY": {
+              "DefaultSizeInspectionLimit": "KB_32",
+            },
+          },
+        },
+        "DefaultAction": {
+          "Allow": {},
+        },
+        "Description": "Support Case Insights MCP API protection for sciprod",
+        "Name": "CaseInsights-Mcp-sciprod",
+        "Rules": [
+          {
+            "Action": {
+              "Block": {
+                "CustomResponse": {
+                  "ResponseCode": 429,
+                },
+              },
+            },
+            "Name": "RateLimitPerIp",
+            "Priority": 0,
+            "Statement": {
+              "RateBasedStatement": {
+                "AggregateKeyType": "IP",
+                "EvaluationWindowSec": 300,
+                "Limit": 300,
+              },
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "RateLimitPerIp",
+              "SampledRequestsEnabled": false,
+            },
+          },
+          {
+            "Action": {
+              "Block": {
+                "CustomResponse": {
+                  "ResponseCode": 413,
+                },
+              },
+            },
+            "Name": "BlockBodyOver32KiB",
+            "Priority": 1,
+            "Statement": {
+              "SizeConstraintStatement": {
+                "ComparisonOperator": "GT",
+                "FieldToMatch": {
+                  "Body": {
+                    "OversizeHandling": "MATCH",
+                  },
+                },
+                "Size": 32768,
+                "TextTransformations": [
+                  {
+                    "Priority": 0,
+                    "Type": "NONE",
+                  },
+                ],
+              },
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "BlockBodyOver32KiB",
+              "SampledRequestsEnabled": false,
+            },
+          },
+          {
+            "Name": "AWSManagedRulesCommonRuleSet",
+            "OverrideAction": {
+              "None": {},
+            },
+            "Priority": 2,
+            "Statement": {
+              "ManagedRuleGroupStatement": {
+                "Name": "AWSManagedRulesCommonRuleSet",
+                "RuleActionOverrides": [
+                  {
+                    "ActionToUse": {
+                      "Count": {},
+                    },
+                    "Name": "SizeRestrictions_BODY",
+                  },
+                ],
+                "VendorName": "AWS",
+              },
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "AWSManagedRulesCommonRuleSet",
+              "SampledRequestsEnabled": false,
+            },
+          },
+        ],
+        "Scope": "REGIONAL",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "VisibilityConfig": {
+          "CloudWatchMetricsEnabled": true,
+          "MetricName": "CaseInsights-Mcp-sciprod",
+          "SampledRequestsEnabled": false,
+        },
+      },
+      "Type": "AWS::WAFv2::WebACL",
+    },
+    "McpServerWebAclStageAssociation9A3E845E": {
+      "Properties": {
+        "ResourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:apigateway:us-east-1::/restapis/",
+              {
+                "Ref": "McpServerApi22C3CCFE",
+              },
+              "/stages/",
+              {
+                "Ref": "McpServerApiDeploymentStagev1394D9FD2",
+              },
+            ],
+          ],
+        },
+        "WebACLArn": {
+          "Fn::GetAtt": [
+            "McpServerWebAclA12C2395",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::WAFv2::WebACLAssociation",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;

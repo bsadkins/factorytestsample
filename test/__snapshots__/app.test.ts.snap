@@ -12,6 +12,11 @@ exports[`Support Case Insights app dev core stack template snapshot 1`] = `
         ],
       },
     },
+    "PublishOutputRefSharedLayersCommonLayer7C4E03F5833910D2": {
+      "Value": {
+        "Ref": "SharedLayersCommonLayer7C4E03F5",
+      },
+    },
     "PublishOutputRefStorageAccessLogsBucketFEE4D6FB763CD76F": {
       "Value": {
         "Ref": "StorageAccessLogsBucketFEE4D6FB",
@@ -4067,6 +4072,34 @@ def sort_filter_rules(json_obj):
                   "Arn",
                 ],
               },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityLambdaErrorsMcpServerAlarm112E3563",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityMcpInternalErrorsAlarm9BAF0D09",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityMcpApiServerErrorsAlarm39BB3C66",
+                  "Arn",
+                ],
+              },
+              "","",
+              {
+                "Fn::GetAtt": [
+                  "ObservabilityMcpAuthFailuresAlarmDC26952D",
+                  "Arn",
+                ],
+              },
               ""]}},{"type":"metric","width":12,"height":6,"x":0,"y":6,"properties":{"view":"timeSeries","title":"Accounts discovered and skipped","region":"",
               {
                 "Ref": "AWS::Region",
@@ -4202,7 +4235,19 @@ def sort_filter_rules(json_obj):
               {
                 "Ref": "ObservabilityRunCompletionFunctionA18ADCE8",
               },
-              "",{"label":"RunCompletion","stat":"Sum"}]],"yAxis":{}}}]}",
+              "",{"label":"RunCompletion","stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":8,"height":6,"x":0,"y":36,"properties":{"view":"timeSeries","title":"MCP requests and errors","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["SupportCaseInsights","McpRequests","service","mcp-server",{"stat":"Sum"}],["SupportCaseInsights","McpToolCalls","service","mcp-server",{"stat":"Sum"}],["SupportCaseInsights","McpErrors","service","mcp-server",{"stat":"Sum"}],["SupportCaseInsights","McpProtocolErrors","service","mcp-server",{"stat":"Sum"}],["SupportCaseInsights","McpToolErrors","service","mcp-server",{"stat":"Sum"}],["SupportCaseInsights","McpInternalErrors","service","mcp-server",{"stat":"Sum"}],["AWS/Lambda","Errors","FunctionName","Lambda-McpServer-scidev",{"label":"McpServer Lambda errors","stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":8,"height":6,"x":8,"y":36,"properties":{"view":"timeSeries","title":"MCP API responses (stage v1)","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["AWS/ApiGateway","Count","ApiName","CaseInsights-Mcp-scidev","Stage","v1",{"label":"Requests","stat":"Sum"}],["AWS/ApiGateway","4XXError","ApiName","CaseInsights-Mcp-scidev","Stage","v1",{"label":"4xx","stat":"Sum"}],["AWS/ApiGateway","5XXError","ApiName","CaseInsights-Mcp-scidev","Stage","v1",{"label":"5xx","stat":"Sum"}],["SupportCaseInsights","McpAuthFailures","ApiName","CaseInsights-Mcp-scidev",{"label":"Auth failures","stat":"Sum"}]],"yAxis":{}}},{"type":"metric","width":8,"height":6,"x":16,"y":36,"properties":{"view":"timeSeries","title":"MCP WAF blocked requests","region":"",
+              {
+                "Ref": "AWS::Region",
+              },
+              "","metrics":[["AWS/WAFV2","BlockedRequests","Region","us-east-1","Rule","ALL","WebACL","CaseInsights-Mcp-scidev",{"label":"All rules","stat":"Sum"}],["AWS/WAFV2","BlockedRequests","Region","us-east-1","Rule","RateLimitPerIp","WebACL","CaseInsights-Mcp-scidev",{"label":"Rate limit","stat":"Sum"}],["AWS/WAFV2","BlockedRequests","Region","us-east-1","Rule","BlockBodyOver32KiB","WebACL","CaseInsights-Mcp-scidev",{"label":"Body over 32 KiB","stat":"Sum"}],["AWS/WAFV2","BlockedRequests","Region","us-east-1","Rule","AWSManagedRulesCommonRuleSet","WebACL","CaseInsights-Mcp-scidev",{"label":"Common rule set","stat":"Sum"}]],"yAxis":{}}}]}",
             ],
           ],
         },
@@ -4618,6 +4663,47 @@ def sort_filter_rules(json_obj):
       },
       "Type": "AWS::CloudWatch::Alarm",
     },
+    "ObservabilityLambdaErrorsMcpServerAlarm112E3563": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The McpServer function reported invocation errors. Runbook: docs/runbook.md#lambdaerrors-mcpserver",
+        "AlarmName": "CaseInsights-scidev-LambdaErrors-McpServer",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": "Lambda-McpServer-scidev",
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
     "ObservabilityLambdaErrorsRunCompletionAlarmBC607BF5": {
       "Properties": {
         "AlarmActions": [
@@ -4726,6 +4812,133 @@ def sort_filter_rules(json_obj):
         "EvaluationPeriods": 1,
         "MetricName": "Errors",
         "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityMcpApiServerErrorsAlarm39BB3C66": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The MCP API returned 5xx responses on stage v1. Runbook: docs/runbook.md#mcpapiservererrors",
+        "AlarmName": "CaseInsights-scidev-McpApiServerErrors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "ApiName",
+            "Value": "CaseInsights-Mcp-scidev",
+          },
+          {
+            "Name": "Stage",
+            "Value": "v1",
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "5XXError",
+        "Namespace": "AWS/ApiGateway",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityMcpAuthFailuresAlarmDC26952D": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The MCP API refused at least 10 requests in five minutes for failed SigV4 authentication or resource-policy authorisation. Runbook: docs/runbook.md#mcpauthfailures",
+        "AlarmName": "CaseInsights-scidev-McpAuthFailures",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "ApiName",
+            "Value": "CaseInsights-Mcp-scidev",
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "McpAuthFailures",
+        "Namespace": "SupportCaseInsights",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Threshold": 10,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "ObservabilityMcpInternalErrorsAlarm9BAF0D09": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "ObservabilityAlarmTopicF724909D",
+          },
+        ],
+        "AlarmDescription": "The MCP server answered requests with a JSON-RPC internal error after an unexpected failure. Runbook: docs/runbook.md#mcpinternalerrors",
+        "AlarmName": "CaseInsights-scidev-McpInternalErrors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "DatapointsToAlarm": 1,
+        "Dimensions": [
+          {
+            "Name": "service",
+            "Value": "mcp-server",
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "McpInternalErrors",
+        "Namespace": "SupportCaseInsights",
         "Period": 300,
         "Statistic": "Sum",
         "Tags": [

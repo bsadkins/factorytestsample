@@ -37,6 +37,10 @@ describe('resource names', () => {
       glueTable: 'case_summary',
       crawler: 'case-insights-partition-crawler-sci-dev',
       athenaWorkgroup: 'CaseInsights-sci-dev',
+      mcpServerFunction: 'Lambda-McpServer-sci-dev',
+      mcpApi: 'CaseInsights-Mcp-sci-dev',
+      mcpWebAcl: 'CaseInsights-Mcp-sci-dev',
+      mcpAccessLogGroup: '/aws/apigateway/CaseInsights-Mcp-sci-dev/access',
     });
     expect(deadLetterQueueName('CaseInsights-CaseSummary-sci-dev')).toBe('CaseInsights-CaseSummary-sci-dev-DLQ');
   });
@@ -69,6 +73,10 @@ describe('resource names', () => {
     expect(names.memberRoleStack.length).toBeLessThanOrEqual(128);
     expect(names.memberRoleStackSet.length).toBeLessThanOrEqual(128);
     expect(names.athenaWorkgroup.length).toBeLessThanOrEqual(128);
+    expect(names.mcpServerFunction.length).toBeLessThanOrEqual(64);
+    expect(names.mcpStack.length).toBeLessThanOrEqual(128);
+    expect(names.mcpWebAcl).toMatch(/^[\w-]{1,128}$/);
+    expect(names.mcpAccessLogGroup).toMatch(/^[.\-_/#A-Za-z0-9]{1,512}$/);
     expect(names.alarmTopic).toMatch(/^[A-Za-z0-9_-]{1,256}$/);
     expect(names.dashboard).toMatch(/^[A-Za-z0-9_-]{1,255}$/);
     // Longest alarm purpose suffix used by Observability.

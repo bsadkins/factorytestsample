@@ -43,6 +43,11 @@ export interface ResourceNames {
   readonly glueTable: string;
   readonly crawler: string;
   readonly athenaWorkgroup: string;
+  readonly mcpServerFunction: string;
+  /** REST API name; also the ApiName dimension of its CloudWatch metrics. */
+  readonly mcpApi: string;
+  readonly mcpWebAcl: string;
+  readonly mcpAccessLogGroup: string;
 }
 
 export function resourceNames(config: Pick<CaseInsightsConfig, 'uniqueId'>): ResourceNames {
@@ -83,6 +88,10 @@ export function resourceNames(config: Pick<CaseInsightsConfig, 'uniqueId'>): Res
     glueTable: 'case_summary',
     crawler: `case-insights-partition-crawler-${id}`,
     athenaWorkgroup: `CaseInsights-${id}`,
+    mcpServerFunction: `Lambda-McpServer-${id}`,
+    mcpApi: `CaseInsights-Mcp-${id}`,
+    mcpWebAcl: `CaseInsights-Mcp-${id}`,
+    mcpAccessLogGroup: `/aws/apigateway/CaseInsights-Mcp-${id}/access`,
   };
 }
 

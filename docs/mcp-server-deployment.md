@@ -19,6 +19,17 @@ Live client-to-AWS connectivity, including Kiro discovering the eight tools agai
   The bridge needs only Python 3.12 and `boto3`; any environment with those works.
 - AWS credentials available through the standard credential provider chain: environment variables, a named profile in the shared credentials or config file, IAM Identity Center (`aws sso login --profile <name>`), an assumed role, or a container or instance role. Temporary credentials and their session token are supported and refreshed automatically. **Never put access keys or session tokens in an MCP client configuration file.**
 
+## Infrastructure and security controls
+
+The MCP stack depends on the Core and Analytics stacks and reads their outputs; neither reads MCP outputs, so they deploy and update without it. It contains:
+
+- **REST API** `CaseInsights-Mcp-<uniqueId>` (regional) with stage `v1` and one method, `POST /mcp`, with `AWS_IAM` authorisation and a Lambda proxy integration. There is no unauthenticated method, API key, authoriser or CORS configuration.
+- **Resource policy**: allows `execute-api:Invoke` on `/v1/POST/mcp` only to the ARNs in `mcpAllowedPrincipals` and only while `aws:PrincipalOrgID` equals `orgId`. Explicit denies refuse callers outside the Organization, principals not in the list (by `aws:PrincipalArn`, so these denies also bind same-account principals whose own IAM policies allow `execute-api:Invoke`), and every other stage, method or path. A change to the principals produces a new deployment so the policy takes effect.
+- **Stage settings**: throttling at `operations.mcp.throttleRateLimit` requests per second with burst `operations.mcp.throttleBurstLimit`, X-Ray tracing, and JSON access logs in `/aws/apigateway/CaseInsights-Mcp-<uniqueId>/access` (retention `logRetentionDays`). Access logs record request metadata only: no bodies, headers, query strings, caller ARNs or API Gateway error messages, which can repeat a signed request. Execution logging is off, because it needs an account-wide API Gateway CloudWatch role.
+- **AWS WAF** web ACL `CaseInsights-Mcp-<uniqueId>` on the stage: a per-IP rate rule (`operations.mcp.wafRateLimitPer5Minutes` per five minutes, `429`), an explicit block of bodies over 32,768 bytes (`413`), and the AWS managed Core rule set. The web ACL inspects the first 32 KiB of each body (the API Gateway default is 16 KiB) and treats larger bodies as matching the size rule. The managed rule set's 8 KB body-size rule only counts, so the application limit stays 32 KiB; the MCP function enforces the same limit on the decoded body. Sampled requests are off, because they would keep signed request headers.
+- **Function** `Lambda-McpServer-<uniqueId>` (Python 3.12, reserved concurrency `operations.mcp.reservedConcurrency`, default 20, 28-second timeout within API Gateway's 29-second limit) with the Core common layer. Its environment fixes the Analytics workgroup and database and the Bedrock model; requests cannot choose them. Its role can query only the Analytics workgroup, read the case summary table, read processed records, read and write query results under `query-results/`, and invoke only the configured model.
+- **Monitoring** in Core: alarms [LambdaErrors-McpServer](runbook.md#lambdaerrors-mcpserver), [McpInternalErrors](runbook.md#mcpinternalerrors), [McpApiServerErrors](runbook.md#mcpapiservererrors) and [McpAuthFailures](runbook.md#mcpauthfailures), and dashboard rows for MCP requests and errors, API responses and WAF blocks. `McpAuthFailures` is derived from access log entries refused by SigV4 or the resource policy.
+
 ## Finding the endpoint URL
 
 ```bash
@@ -136,4 +147,4 @@ An unsigned request, for example with plain `curl`, must receive HTTP `403`.
 .venv/bin/pytest test/scripts/test_mcp_aws_client.py
 ```
 
-These tests prove the bridge's behaviour, not API Gateway IAM authorisation, the resource policy or WAF, which are checked only as synthesised CloudFormation until a live deployment.
+These tests prove the bridge's behaviour, not API Gateway IAM authorisation, the resource policy or WAF, which are checked only as synthesised CloudFormation (`test/stacks/mcp-stack.test.ts`) until a live deployment. The deferred live checks are: a signed `tools/list` from an allowed principal succeeds; unsigned requests, unlisted principals and principals outside the Organization receive `403`; a 32,769-byte body receives `413` from WAF while a 32,768-byte body reaches the function; requests above the per-IP rate receive `429`; and the MCP alarms and dashboard rows show data.

@@ -97,7 +97,7 @@ The `env` context is required and must be `dev` or `prod`; the app reads `config
 
 `npm run verify` runs entirely on the local machine with invented data; it never deploys, bootstraps or calls AWS. Besides the per-handler tests, `test/lambda/test_core_pipeline.py` runs the Core pipeline end to end through the real handlers: scheduled discovery, the account-list S3 notification, the account reader, case retrieval and annotation, the workflow starter, every CaseAnalysis task and the processed-record commit, plus run completion and cleanup. `test/support/pipeline_kit.py` stands in only for the AWS services: moto S3, SQS and DynamoDB, SQS event source mapping semantics (batches, partial-batch failures, visibility timeouts, dead-letter redrive), the state machine's task order, retries and Catch, and paginated synthetic Organizations, Support and Bedrock responses. It covers pagination, excluded and skipped accounts, unresolved and already-processed cases, complete conversations, duplicate deliveries, stage and commit faults, redrive and next-run recovery, cleanup of abandoned work next to running work, and when the daily-completion heartbeat is emitted.
 
-`enableAnalytics` adds the Analytics stack; `enableMcp` (also `true` in `config/dev.json`) is validated but does not create a stack yet. `test/stacks/analytics-stack.test.ts` synthesises Analytics on and MCP off, and Analytics off, from validated configuration overrides.
+`enableAnalytics` adds the Analytics stack; `enableMcp` (also `true` in `config/dev.json`, and only valid with Analytics) adds the MCP stack, whose alarms and dashboard widgets are added to Core. `test/stacks/analytics-stack.test.ts` synthesises Analytics on and MCP off, and Analytics off; `test/stacks/mcp-stack.test.ts` synthesises the dev MCP stack, prod with MCP enabled and both environments with MCP off, and runs the packaged MCP function with the Core layer for `initialize` and `tools/list`.
 
 ### Deferred live verification
 
@@ -111,6 +111,7 @@ None of the following has been run. Local tests, snapshots, synth and cdk-nag re
 - [ ] Every dead-letter queue and the terminal failure queues stay empty after a normal run.
 - [ ] The dashboard shows data, the alarms are in the expected state and the alarm email subscription is confirmed; `DailyRunCompleted` arrives after a run.
 - [ ] The crawler adds partitions for real processed records, and Athena queries in `CaseInsights-<uniqueId>` (including the [query library](docs/athena.md#query-library)) return them with results encrypted in the results bucket.
+- [ ] The MCP endpoint answers signed requests from an allowed principal in the Organization, refuses unsigned requests, unlisted principals and principals outside the Organization with `403`, and WAF returns `413` for bodies over 32 KiB and `429` above the per-IP rate (see [MCP server deployment](docs/mcp-server-deployment.md#infrastructure-and-security-controls)).
 - [ ] The optional manual QuickSight setup works with the enforced workgroup, and a CSV export from the real processed bucket succeeds with only the documented S3 permissions.
 - [ ] MCP client connectivity, including Kiro, and rejection of unsigned requests with HTTP 403 (once the MCP server exists).
 

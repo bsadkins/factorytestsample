@@ -140,3 +140,28 @@ No daily run completed in the last 30 hours. Run Completion emits `DailyRunCompl
 3. Look for messages waiting in the stage queues or dead-letter queues and for RUNNING `CaseAnalysis` executions.
 4. Check the Run Completion log for `Run is not complete yet` entries, which give pending account and case counts per run, and for [RunCompletionErrors](#runcompletionerrors).
 5. When the backlog drains, the next hourly check completes the run and the alarm returns to OK. Runs older than 72 hours are no longer checked; the following day's run restores the heartbeat.
+
+## MCP server
+
+These alarms exist only when `enableMcp` is true. They live in the core stack and watch the MCP function `Lambda-McpServer-<uniqueId>`, the REST API `CaseInsights-Mcp-<uniqueId>` (stage `v1`) and its access log group `/aws/apigateway/CaseInsights-Mcp-<uniqueId>/access` by name. The MCP function logs the JSON-RPC method, tool name, outcome, status and duration of each request (`mcp_method`, `mcp_tool`, `mcp_outcome`, `status_code`, `tool_duration_ms`), never request bodies, tool arguments, SQL text or results. The dashboard rows *MCP requests and errors*, *MCP API responses (stage v1)* and *MCP WAF blocked requests* show the related metrics.
+
+### LambdaErrors-McpServer
+
+`Lambda-McpServer-<uniqueId>` reported invocation errors: an unhandled exception, a timeout (28 seconds) or running out of memory. Callers receive a 502 or 504 response from API Gateway. Check the function log group for `ERROR` entries and `Task timed out`, check that the Core common layer and the Analytics stack are deployed, and check the reserved concurrency (`operations.mcp.reservedConcurrency`): when all 20 executions are busy, API Gateway returns 429 or 5xx throttling responses instead.
+
+### McpInternalErrors
+
+The MCP server caught an unexpected failure and answered with a JSON-RPC internal error (`-32603`) without details. Query the function log for `MCP request failed unexpectedly` entries and their `mcp_method`, `mcp_tool` and `error_type` fields. Common causes are Athena errors in the workgroup `CaseInsights-<uniqueId>` (missing Glue table or partitions, results bucket access), Bedrock model access or Marketplace subscription problems, and throttling. Tool argument errors are reported as tool errors (`McpToolErrors`), not internal errors.
+
+### McpApiServerErrors
+
+The MCP API returned 5xx responses on stage `v1`. Compare with [LambdaErrors-McpServer](#lambdaerrors-mcpserver): integration failures and timeouts appear as 502 or 504 with `integrationStatus` in the access log. A 5xx without an integration status means API Gateway itself failed or the function was throttled; check the access log `errorType` field and the AWS Health Dashboard.
+
+### McpAuthFailures
+
+At least 10 requests in five minutes were refused before reaching the function because SigV4 authentication or the resource policy failed (`McpAuthFailures`, from access log entries whose `errorType` is `ACCESS_DENIED`, `EXPIRED_TOKEN`, `INVALID_SIGNATURE`, `MISSING_AUTHENTICATION_TOKEN` or `UNAUTHORIZED`). Requests blocked by AWS WAF are counted separately in the WAF widget.
+
+1. Query the access log group for refused requests, for example `fields @timestamp, errorType, sourceIp, callerAccountId, status | filter ispresent(errorType) and status in [401, 403] | stats count() by errorType, callerAccountId, sourceIp`.
+2. `EXPIRED_TOKEN` or `INVALID_SIGNATURE` from a known account usually means a client with stale credentials or a clock skew; refresh the credentials used by `scripts/mcp_aws_client.py`.
+3. `ACCESS_DENIED` means the caller is not in `mcpAllowedPrincipals` or not in the Organization `orgId`. Add an approved principal to the configuration and redeploy; never widen the policy to an account root or `*`.
+4. A stream of refusals from unknown source IPs is probing. The WAF rate rule limits each IP to `operations.mcp.wafRateLimitPer5Minutes` requests per five minutes; no further action is needed unless the volume affects legitimate callers.

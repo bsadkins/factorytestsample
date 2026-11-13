@@ -1,8 +1,10 @@
 import { type App, Tags } from 'aws-cdk-lib';
 import { type CaseInsightsConfig, type EnvironmentName, loadEnvironmentConfig, resourceNames } from './config';
+import { addMcpObservability } from './constructs/mcp-observability';
 import { enableNagChecks } from './nag';
 import { CaseInsightsAnalyticsStack } from './stacks/analytics-stack';
 import { CaseInsightsCoreStack } from './stacks/core-stack';
+import { CaseInsightsMcpStack } from './stacks/mcp-stack';
 import { CaseInsightsMemberRoleStack } from './stacks/member-role-stack';
 
 export interface CaseInsightsAppOptions {
@@ -17,6 +19,8 @@ export interface CaseInsightsAppStacks {
   readonly memberRole: CaseInsightsMemberRoleStack;
   /** Present only when enableAnalytics is true. */
   readonly analytics?: CaseInsightsAnalyticsStack;
+  /** Present only when enableMcp is true (which requires enableAnalytics). */
+  readonly mcp?: CaseInsightsMcpStack;
 }
 
 /**
@@ -63,5 +67,24 @@ export function addCaseInsightsStacks(app: App, options: CaseInsightsAppOptions)
     : undefined;
   analytics?.addStackDependency(core, 'Analytics reads the Core processed and access-log buckets');
 
-  return { config, core, memberRole, analytics };
+  let mcp: CaseInsightsMcpStack | undefined;
+  if (config.enableMcp) {
+    if (analytics === undefined) {
+      // Unreachable after schema validation; kept so the stack can never be built without its data source.
+      throw new Error('enableMcp requires enableAnalytics');
+    }
+    mcp = new CaseInsightsMcpStack(app, names.mcpStack, {
+      stackName: names.mcpStack,
+      description: `Support Case Insights MCP endpoint, WAF and read-only tool function (${config.uniqueId})`,
+      env,
+      config,
+      commonLayer: core.layers.commonLayer,
+      analytics: analytics.analytics,
+    });
+    mcp.addStackDependency(core, 'MCP uses the Core common layer and processed bucket');
+    mcp.addStackDependency(analytics, 'MCP queries the Analytics workgroup, catalog and results bucket');
+    addMcpObservability(core.observability, config);
+  }
+
+  return { config, core, memberRole, analytics, mcp };
 }
