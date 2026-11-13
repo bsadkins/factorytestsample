@@ -142,21 +142,7 @@ def test_no_exception_message_or_sentinel_reaches_any_trace_document(name: str) 
     assert handler_trace_probe.ERROR_CODE not in serialised
 
 
-LOG_LEAKS = {
-    "account_reader": "logs the full traceback with logger.exception, which repeats the AWS "
-    "error message",
-}
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        pytest.param(name, marks=pytest.mark.xfail(reason=LOG_LEAKS[name], strict=True))
-        if name in LOG_LEAKS
-        else name
-        for name in HANDLERS
-    ],
-)
+@pytest.mark.parametrize("name", HANDLERS)
 def test_handler_logs_and_metrics_do_not_carry_the_service_error_text(name: str) -> None:
     report = probe_reports()[name]
     assert handler_trace_probe.SENTINEL not in report["stdout"]

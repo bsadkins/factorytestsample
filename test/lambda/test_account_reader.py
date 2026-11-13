@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import logging
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,6 +15,7 @@ import boto3
 import pytest
 from account_reader import app
 from aws_lambda_powertools.utilities.typing import LambdaContext
+from botocore.exceptions import ClientError
 from common.account_list import (
     ACCOUNT_LIST_PREFIX,
     AccountRef,
@@ -219,6 +222,66 @@ def test_failed_attempt_is_retried_rather_than_cached(
 
     assert retried["accountsEnqueued"] == 3
     assert sorted(env.messages(), key=lambda m: m["accountId"]) == expected_messages()
+
+
+@pytest.fixture
+def log_stream(monkeypatch: pytest.MonkeyPatch) -> io.StringIO:
+    """Receives everything the handler's Powertools Logger writes. Logger binds its stream at
+    import time, so `capsys` only sees EMF metrics."""
+    stream = io.StringIO()
+    for log_handler in logging.getLogger(app.logger.service).handlers:
+        if isinstance(log_handler, logging.StreamHandler):
+            monkeypatch.setattr(log_handler, "stream", stream)
+    return stream
+
+
+SERVICE_SENTINEL = "SENTINEL-SERVICE-MESSAGE"
+
+
+@pytest.fixture
+def sqs_service_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every send fail with an AWS error whose message echoes request content."""
+
+    def failing_send(_sqs: SQSClient, _queue_url: str, _bodies: Sequence[Mapping[str, Any]]) -> int:
+        raise ClientError(
+            {
+                "Error": {"Code": "KMS.AccessDeniedException", "Message": SERVICE_SENTINEL},
+                "ResponseMetadata": {"HTTPStatusCode": 400},  # type: ignore[typeddict-item]
+            },
+            "SendMessageBatch",
+        )
+
+    monkeypatch.setattr(app, "send_messages", failing_send)
+
+
+@pytest.mark.usefixtures("sqs_service_error")
+def test_aws_failure_is_logged_without_the_service_message_or_traceback(
+    env: Env,
+    lambda_context: LambdaContext,
+    capsys: pytest.CaptureFixture[str],
+    metrics_in: MetricsIn,
+    log_stream: io.StringIO,
+) -> None:
+    event = s3_event(s3_record(account_list_key(RUN), env.put_list()))
+
+    with pytest.raises(app.AccountListProcessingError):
+        app.handler(event, lambda_context)
+
+    output = capsys.readouterr().out
+    logs = log_stream.getvalue()
+    assert SERVICE_SENTINEL not in output + logs
+    assert "Traceback" not in logs
+    records = [json.loads(line) for line in logs.splitlines()]
+    [failure] = [r for r in records if r.get("message") == "Account list processing failed"]
+    assert failure["level"] == "ERROR"
+    assert failure["error_type"] == "ClientError"
+    assert failure["error_code"] == "KMS.AccessDeniedException"
+    assert failure["http_status"] == 400
+    assert failure["object_key"] == account_list_key(RUN)
+    assert "exception" not in failure
+    assert "exception_name" not in failure
+    assert metrics_in(output) == {"AccountListFailures": 1}
+    assert env.messages() == []
 
 
 def test_empty_run_list_is_processed_without_messages(

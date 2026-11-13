@@ -225,7 +225,7 @@ def process_event(event: object, settings: Settings, aws: Clients) -> dict[str, 
             tally.invalid += 1
             continue
         except Exception as exc:
-            logger.exception(
+            logger.error(
                 "Account list processing failed", extra={**log_fields, **error_fields(exc)}
             )
             tally.failed += 1
