@@ -95,9 +95,11 @@ describe('MCP feature flag', () => {
       expect(JSON.stringify(Template.fromStack(producer as Stack).toJSON())).not.toContain(names.mcpStack);
     }
     const assembly = app.synth();
+    // The shared API Gateway logging owner (test/stacks/api-logging-stack.test.ts) deploys first.
     expect(assembly.stacks.map((stack) => stack.stackName).sort()).toEqual(
-      [names.coreStack, names.memberRoleStack, names.analyticsStack, names.mcpStack].sort(),
+      [names.coreStack, names.memberRoleStack, names.analyticsStack, names.mcpStack, `CaseInsightsApiLoggingStack-${stacks.config.apiGatewayLogging.sharedId}`].sort(),
     );
+    expect(mcp.dependencies).toContain(stacks.apiLogging);
     Annotations.fromStack(mcp).hasNoError('*', Match.anyValue());
   });
 
@@ -685,16 +687,22 @@ describe('MCP observability in Core', () => {
 });
 
 describe('configured MCP limits', () => {
-  test('throttles, WAF rate limit and reserved concurrency follow the configuration', () => {
-    const stacks = stacksFor('dev', { operations: { mcp: { reservedConcurrency: 7, throttleRateLimit: 3, throttleBurstLimit: 6, wafRateLimitPer5Minutes: 150 } } });
+  test('throttles and the WAF rate limit follow the configuration while reserved concurrency stays 20', () => {
+    const stacks = stacksFor('dev', { operations: { mcp: { reservedConcurrency: 20, throttleRateLimit: 3, throttleBurstLimit: 6, wafRateLimitPer5Minutes: 150 } } });
     const template = Template.fromStack(mcpOf(stacks));
-    template.hasResourceProperties('AWS::Lambda::Function', { Handler: 'mcp_server.app.handler', ReservedConcurrentExecutions: 7 });
+    template.hasResourceProperties('AWS::Lambda::Function', { Handler: 'mcp_server.app.handler', ReservedConcurrentExecutions: 20 });
     template.hasResourceProperties('AWS::ApiGateway::Stage', {
       MethodSettings: [Match.objectLike({ ThrottlingRateLimit: 3, ThrottlingBurstLimit: 6 })],
     });
     template.hasResourceProperties('AWS::WAFv2::WebACL', {
       Rules: Match.arrayWith([Match.objectLike({ Name: 'RateLimitPerIp', Statement: { RateBasedStatement: Match.objectLike({ Limit: 150 }) } })]),
     });
+  });
+
+  test.each([7, 1, 21, 100])('reserved concurrency %d is rejected before any stack is created', (value) => {
+    const app = testApp();
+    expect(() => stacksFor('dev', { operations: { mcp: { reservedConcurrency: value } } }, app)).toThrow(/reservedConcurrency must be 20/);
+    expect(app.node.children).toHaveLength(0);
   });
 
   test('a different model and token limit reach the function and its Bedrock policy only', () => {

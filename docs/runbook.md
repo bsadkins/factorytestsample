@@ -147,7 +147,7 @@ These alarms exist only when `enableMcp` is true. They live in the core stack an
 
 ### LambdaErrors-McpServer
 
-`Lambda-McpServer-<uniqueId>` reported invocation errors: an unhandled exception, a timeout (28 seconds) or running out of memory. Callers receive a 502 or 504 response from API Gateway. Check the function log group for `ERROR` entries and `Task timed out`, check that the Core common layer and the Analytics stack are deployed, and check the reserved concurrency (`operations.mcp.reservedConcurrency`): when all 20 executions are busy, API Gateway returns 429 or 5xx throttling responses instead.
+`Lambda-McpServer-<uniqueId>` reported invocation errors: an unhandled exception, a timeout (28 seconds) or running out of memory. Callers receive a 502 or 504 response from API Gateway. Check the function log group for `ERROR` entries and `Task timed out`, check that the Core common layer and the Analytics stack are deployed, and check the reserved concurrency, which is fixed at 20: when all 20 executions are busy, API Gateway returns 429 or 5xx throttling responses instead.
 
 ### McpInternalErrors
 
@@ -165,3 +165,12 @@ At least 10 requests in five minutes were refused before reaching the function b
 2. `EXPIRED_TOKEN` or `INVALID_SIGNATURE` from a known account usually means a client with stale credentials or a clock skew; refresh the credentials used by `scripts/mcp_aws_client.py`.
 3. `ACCESS_DENIED` means the caller is not in `mcpAllowedPrincipals` or not in the Organization `orgId`. Add an approved principal to the configuration and redeploy; never widen the policy to an account root or `*`.
 4. A stream of refusals from unknown source IPs is probing. The WAF rate rule limits each IP to `operations.mcp.wafRateLimitPer5Minutes` requests per five minutes; no further action is needed unless the volume affects legitimate callers.
+
+## MCP access logs are missing
+
+No alarm covers this directly; an empty access log group also leaves `McpAuthFailures` without data. REST API access logs need the account- and Region-wide API Gateway CloudWatch role setting described in [Shared API Gateway logging prerequisite](mcp-server-deployment.md#shared-api-gateway-logging-prerequisite).
+
+1. Run `aws apigateway get-account --region <region> --query cloudwatchRoleArn --output text`. In managed mode it must equal the `ApiGatewayCloudWatchRoleArn` output of `CaseInsightsApiLoggingStack-<sharedId>`; in existing mode it must equal `apiGatewayLogging.existingRoleArn` (also the MCP stack's `ApiGatewayCloudWatchRoleArn` output).
+2. If it shows another role, someone changed the account setting. Agree ownership with that party before changing it back: either redeploy the shared stack (managed mode) or switch the configuration to existing mode with their role and ask for write access to `/aws/apigateway/CaseInsights-Mcp-*`.
+3. If it is empty, redeploy with managed mode, or ask the owner of the existing role to set it.
+4. Check that the role still exists, trusts `apigateway.amazonaws.com` and allows `logs:CreateLogStream` and `logs:PutLogEvents` on `/aws/apigateway/CaseInsights-Mcp-*`, and that AWS STS is active in the Region.

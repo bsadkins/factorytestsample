@@ -62,6 +62,11 @@ describe('optional pipeline configuration', () => {
       expect(() => { validatePipelineStages(pipeline(), dev(), clash); }).toThrow(/different uniqueId values/);
     });
 
+    test('rejects dev and prod stages with different shared API Gateway logging settings', () => {
+      const conflict = parseConfig({ ...readConfigJson('prod.json'), apiGatewayLogging: { mode: 'managed', sharedId: 'other' } });
+      expect(() => { validatePipelineStages(pipeline(), dev(), conflict); }).toThrow(/same apiGatewayLogging settings/);
+    });
+
     test('rejects swapped environments', () => {
       expect(() => { validatePipelineStages(pipeline(), prod(), dev()); }).toThrow(ConfigValidationError);
     });

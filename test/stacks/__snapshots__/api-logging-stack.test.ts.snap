@@ -1,0 +1,131 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`managed shared API Gateway logging (default dev) template snapshot 1`] = `
+{
+  "Description": "Support Case Insights shared API Gateway CloudWatch Logs role and account setting (scishared)",
+  "Outputs": {
+    "ApiGatewayCloudWatchRoleArn": {
+      "Description": "Role set as the API Gateway CloudWatch role ARN for this account and Region (compare with aws apigateway get-account)",
+      "Value": {
+        "Fn::GetAtt": [
+          "ApiGatewayLoggingCloudWatchRole770CB1F9",
+          "Arn",
+        ],
+      },
+    },
+    "ApiGatewayCloudWatchRoleName": {
+      "Description": "Shared API Gateway CloudWatch Logs role (retained when the stack is deleted)",
+      "Value": {
+        "Ref": "ApiGatewayLoggingCloudWatchRole770CB1F9",
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "ApiGatewayLoggingAccount6B9E3F2C": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "CloudWatchRoleArn": {
+          "Fn::GetAtt": [
+            "ApiGatewayLoggingCloudWatchRole770CB1F9",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::ApiGateway::Account",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "ApiGatewayLoggingCloudWatchRole770CB1F9": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "apigateway.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "API Gateway CloudWatch Logs role for Support Case Insights REST API access logs (shared scishared)",
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:DescribeLogStreams",
+                    "logs:FilterLogEvents",
+                    "logs:GetLogEvents",
+                    "logs:PutLogEvents",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": "arn:aws:logs:us-east-1:111111111111:log-group:/aws/apigateway/CaseInsights-Mcp-*",
+                  "Sid": "WriteSolutionApiAccessLogs",
+                },
+                {
+                  "Action": "logs:DescribeLogGroups",
+                  "Effect": "Allow",
+                  "Resource": "arn:aws:logs:us-east-1:111111111111:log-group:*",
+                  "Sid": "DescribeLogGroups",
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "ApiGatewayAccessLogs",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "SharedId",
+            "Value": "scishared",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+      "UpdateReplacePolicy": "Retain",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;

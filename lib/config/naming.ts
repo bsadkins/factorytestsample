@@ -50,6 +50,18 @@ export interface ResourceNames {
   readonly mcpAccessLogGroup: string;
 }
 
+/** Prefix of every environment's MCP access log group; the shared API Gateway logging role is scoped to it. */
+export const MCP_ACCESS_LOG_GROUP_PREFIX = '/aws/apigateway/CaseInsights-Mcp-';
+
+export interface SharedApiLoggingNames {
+  readonly stack: string;
+}
+
+/** Names in the shared API Gateway logging namespace (apiGatewayLogging.sharedId), not an environment's uniqueId. */
+export function sharedApiLoggingNames(sharedId: string): SharedApiLoggingNames {
+  return { stack: `CaseInsightsApiLoggingStack-${sharedId}` };
+}
+
 export function resourceNames(config: Pick<CaseInsightsConfig, 'uniqueId'>): ResourceNames {
   const id = config.uniqueId;
   return {
@@ -91,7 +103,7 @@ export function resourceNames(config: Pick<CaseInsightsConfig, 'uniqueId'>): Res
     mcpServerFunction: `Lambda-McpServer-${id}`,
     mcpApi: `CaseInsights-Mcp-${id}`,
     mcpWebAcl: `CaseInsights-Mcp-${id}`,
-    mcpAccessLogGroup: `/aws/apigateway/CaseInsights-Mcp-${id}/access`,
+    mcpAccessLogGroup: `${MCP_ACCESS_LOG_GROUP_PREFIX}${id}/access`,
   };
 }
 

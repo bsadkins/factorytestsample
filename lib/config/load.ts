@@ -43,6 +43,14 @@ function semanticIssues(config: CaseInsightsConfig): string[] {
     );
   }
 
+  const { existingRoleArn } = config.apiGatewayLogging;
+  const roleAccount = existingRoleArn?.split(':')[4];
+  if (roleAccount !== undefined && roleAccount !== config.managementAccountId) {
+    issues.push(
+      `/apiGatewayLogging/existingRoleArn is in account ${roleAccount} but API Gateway needs a role in the management account ${config.managementAccountId}`,
+    );
+  }
+
   if (config.rawRetentionDays * 24 <= cleanup.graceHours) {
     issues.push(
       `/rawRetentionDays (${String(config.rawRetentionDays)}d) must exceed operations.cleanup.graceHours ` +

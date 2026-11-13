@@ -4,6 +4,10 @@ exports[`dev MCP stack template snapshot 1`] = `
 {
   "Description": "Support Case Insights MCP endpoint, WAF and read-only tool function (scidev)",
   "Outputs": {
+    "ApiGatewayLoggingStack": {
+      "Description": "Shared stack that owns the API Gateway CloudWatch role setting this API needs for access logs",
+      "Value": "CaseInsightsApiLoggingStack-scishared",
+    },
     "McpAccessLogGroupName": {
       "Description": "MCP API access log group",
       "Value": {
@@ -924,6 +928,10 @@ exports[`prod MCP stack template snapshot 1`] = `
 {
   "Description": "Support Case Insights MCP endpoint, WAF and read-only tool function (sciprod)",
   "Outputs": {
+    "ApiGatewayLoggingStack": {
+      "Description": "Shared stack that owns the API Gateway CloudWatch role setting this API needs for access logs",
+      "Value": "CaseInsightsApiLoggingStack-scishared",
+    },
     "McpAccessLogGroupName": {
       "Description": "MCP API access log group",
       "Value": {

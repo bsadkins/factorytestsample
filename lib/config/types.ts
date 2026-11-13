@@ -57,8 +57,11 @@ export interface AthenaOperationsConfig {
   readonly resultsRetentionDays: number;
 }
 
+/** Reserved concurrency of the MCP function: fixed by design, not an operator setting. */
+export const MCP_RESERVED_CONCURRENCY = 20;
+
 export interface McpOperationsConfig {
-  readonly reservedConcurrency: number;
+  readonly reservedConcurrency: typeof MCP_RESERVED_CONCURRENCY;
   readonly throttleRateLimit: number;
   readonly throttleBurstLimit: number;
   readonly wafRateLimitPer5Minutes: number;
@@ -72,6 +75,23 @@ export interface OperationsConfig {
   readonly storage: StorageOperationsConfig;
   readonly athena: AthenaOperationsConfig;
   readonly mcp: McpOperationsConfig;
+}
+
+/**
+ * Who owns the account/Region API Gateway CloudWatch Logs role setting that REST API access logging needs.
+ * - `managed`: the shared CaseInsightsApiLoggingStack-<sharedId> creates the role and the one
+ *   AWS::ApiGateway::Account association for the account and Region.
+ * - `existing`: the account/Region setting is already configured with `existingRoleArn`; nothing is created.
+ */
+export const API_GATEWAY_LOGGING_MODES = ['managed', 'existing'] as const;
+export type ApiGatewayLoggingMode = (typeof API_GATEWAY_LOGGING_MODES)[number];
+
+export interface ApiGatewayLoggingConfig {
+  readonly mode: ApiGatewayLoggingMode;
+  /** Namespace of the shared logging stack; the same for every environment in an account and Region. */
+  readonly sharedId: string;
+  /** Present exactly when mode is `existing`. */
+  readonly existingRoleArn?: string;
 }
 
 export interface CaseInsightsConfig {
@@ -92,6 +112,7 @@ export interface CaseInsightsConfig {
   readonly logRetentionDays: number;
   readonly alarmEmail?: string;
   readonly mcpAllowedPrincipals: readonly string[];
+  readonly apiGatewayLogging: ApiGatewayLoggingConfig;
   readonly schedules: ScheduleConfig;
   readonly operations: OperationsConfig;
 }

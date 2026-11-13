@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { validateSharedApiLoggingConsistency } from './api-logging';
 import type { CaseInsightsConfig, PipelineConfig } from './types';
 import { CONFIG_DIR, ConfigValidationError, PIPELINE_SCHEMA_PATH, readJsonFile, validateAgainstSchema } from './schema-validator';
 
@@ -21,7 +22,7 @@ export function loadPipelineConfig(filePath = path.join(CONFIG_DIR, PIPELINE_CON
 
 /**
  * Checks that the dev and prod stage configurations can be deployed side by side by one pipeline:
- * distinct namespaces in the same organization and management account.
+ * distinct namespaces in the same organization and management account, sharing one API Gateway logging owner.
  */
 export function validatePipelineStages(pipeline: PipelineConfig, dev: CaseInsightsConfig, prod: CaseInsightsConfig): void {
   const issues: string[] = [];
@@ -41,4 +42,5 @@ export function validatePipelineStages(pipeline: PipelineConfig, dev: CaseInsigh
   if (issues.length > 0) {
     throw new ConfigValidationError('pipeline stages', issues);
   }
+  validateSharedApiLoggingConsistency([dev, prod]);
 }

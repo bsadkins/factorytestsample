@@ -97,7 +97,7 @@ The `env` context is required and must be `dev` or `prod`; the app reads `config
 
 `npm run verify` runs entirely on the local machine with invented data; it never deploys, bootstraps or calls AWS. Besides the per-handler tests, `test/lambda/test_core_pipeline.py` runs the Core pipeline end to end through the real handlers: scheduled discovery, the account-list S3 notification, the account reader, case retrieval and annotation, the workflow starter, every CaseAnalysis task and the processed-record commit, plus run completion and cleanup. `test/support/pipeline_kit.py` stands in only for the AWS services: moto S3, SQS and DynamoDB, SQS event source mapping semantics (batches, partial-batch failures, visibility timeouts, dead-letter redrive), the state machine's task order, retries and Catch, and paginated synthetic Organizations, Support and Bedrock responses. It covers pagination, excluded and skipped accounts, unresolved and already-processed cases, complete conversations, duplicate deliveries, stage and commit faults, redrive and next-run recovery, cleanup of abandoned work next to running work, and when the daily-completion heartbeat is emitted.
 
-`enableAnalytics` adds the Analytics stack; `enableMcp` (also `true` in `config/dev.json`, and only valid with Analytics) adds the MCP stack, whose alarms and dashboard widgets are added to Core. `test/stacks/analytics-stack.test.ts` synthesises Analytics on and MCP off, and Analytics off; `test/stacks/mcp-stack.test.ts` synthesises the dev MCP stack, prod with MCP enabled and both environments with MCP off, and runs the packaged MCP function with the Core layer for `initialize` and `tools/list`.
+`enableAnalytics` adds the Analytics stack; `enableMcp` (also `true` in `config/dev.json`, and only valid with Analytics) adds the MCP stack, whose alarms and dashboard widgets are added to Core, and, in the default managed `apiGatewayLogging` mode, the shared `CaseInsightsApiLoggingStack-<sharedId>` that owns the account/Region API Gateway CloudWatch role setting REST access logs need (see [Shared API Gateway logging prerequisite](docs/mcp-server-deployment.md#shared-api-gateway-logging-prerequisite)). `test/stacks/api-logging-stack.test.ts` checks managed and existing mode, MCP disabled, identical dev and prod shared stacks, a pipeline-style root stack shared by two stages with exactly one `AWS::ApiGateway::Account`, and rejection of inconsistent settings. `test/stacks/analytics-stack.test.ts` synthesises Analytics on and MCP off, and Analytics off; `test/stacks/mcp-stack.test.ts` synthesises the dev MCP stack, prod with MCP enabled and both environments with MCP off, and runs the packaged MCP function with the Core layer for `initialize` and `tools/list`.
 
 ### Deferred live verification
 
@@ -114,6 +114,7 @@ None of the following has been run. Local tests, snapshots, synth and cdk-nag re
 - [ ] The MCP endpoint answers signed requests from an allowed principal in the Organization, refuses unsigned requests, unlisted principals and principals outside the Organization with `403`, and WAF returns `413` for bodies over 32 KiB and `429` above the per-IP rate (see [MCP server deployment](docs/mcp-server-deployment.md#infrastructure-and-security-controls)).
 - [ ] The optional manual QuickSight setup works with the enforced workgroup, and a CSV export from the real processed bucket succeeds with only the documented S3 permissions.
 - [ ] MCP client connectivity, including Kiro, and rejection of unsigned requests with HTTP 403 (once the MCP server exists).
+- [ ] In a clean account, `npx cdk deploy --all -c env=dev` creates `CaseInsightsApiLoggingStack-<sharedId>`, `aws apigateway get-account` shows its role, the MCP stage deploys and its access log group receives records; destroying dev leaves the role and setting in place for prod. In existing mode, the stage deploys against the pre-configured role.
 
 ## Configuration
 
@@ -126,7 +127,7 @@ None of the following has been run. Local tests, snapshots, synth and cdk-nag re
 | `config/prod.json` | Fictitious prod configuration with an alarm email |
 | `config/pipeline.schema.json`, `config/pipeline.example.json` | Optional CDK Pipelines settings, validated separately |
 
-Key fields and defaults: `uniqueId`, `orgId`, `managementAccountId`, `region` (`us-east-1`), `environment` (`dev` or `prod`), `enableAnalytics`, `enableMcp`, `memberRoleTargets` (root or OU IDs), `bedrockModelId` (`global.anthropic.claude-haiku-4-5-20251001-v1:0`; the only alternative is `global.anthropic.claude-sonnet-4-5-20250929-v1:0`), `bedrockMaxTokens` (1000), `bedrockMaxConcurrency` (5), `lookbackMonths` (12), `rawRetentionDays` (90), `logRetentionDays` (90), `alarmEmail`, `mcpAllowedPrincipals` and `schedules` (account lookup `cron(0 0 * * ? *)`, cleanup `cron(0 22 * * ? *)`, crawler `cron(0 9 * * ? *)`, all UTC). The `operations` object holds bounded queue, function, workflow, cleanup, storage, Athena and MCP limits.
+Key fields and defaults: `uniqueId`, `orgId`, `managementAccountId`, `region` (`us-east-1`), `environment` (`dev` or `prod`), `enableAnalytics`, `enableMcp`, `memberRoleTargets` (root or OU IDs), `bedrockModelId` (`global.anthropic.claude-haiku-4-5-20251001-v1:0`; the only alternative is `global.anthropic.claude-sonnet-4-5-20250929-v1:0`), `bedrockMaxTokens` (1000), `bedrockMaxConcurrency` (5), `lookbackMonths` (12), `rawRetentionDays` (90), `logRetentionDays` (90), `alarmEmail`, `mcpAllowedPrincipals`, `apiGatewayLogging` (`mode` `managed` or `existing`, shared namespace `sharedId` and, in existing mode only, `existingRoleArn`) and `schedules` (account lookup `cron(0 0 * * ? *)`, cleanup `cron(0 22 * * ? *)`, crawler `cron(0 9 * * ? *)`, all UTC). The `operations` object holds bounded queue, function, workflow, cleanup, storage, Athena and MCP limits; the MCP function's reserved concurrency is fixed at 20 and `operations.mcp.reservedConcurrency` accepts no other value, while the stage throttles and WAF rate limit stay configurable.
 
 Rules enforced before synthesis include:
 
@@ -134,9 +135,10 @@ Rules enforced before synthesis include:
 - `enableMcp` requires `enableAnalytics` and at least one MCP principal;
 - only the two global Bedrock inference profiles above are accepted;
 - queue visibility timeouts are at least six consumer timeouts, cleanup grace exceeds the workflow timeout, and raw retention exceeds cleanup grace;
+- `apiGatewayLogging.existingRoleArn` is required in existing mode, rejected in managed mode and must be a role in `managementAccountId`; dev and prod in the same account and Region must use identical `apiGatewayLogging` settings, so they share one owner of the account-wide setting;
 - unknown fields are rejected.
 
-The pipeline configuration requires an existing CodeConnections ARN in the pipeline account and the `main` branch. Dev and prod must use different `uniqueId` values in the same organization and management account.
+The pipeline configuration requires an existing CodeConnections ARN in the pipeline account and the `main` branch. Dev and prod must use different `uniqueId` values in the same organization and management account, and the same `apiGatewayLogging` settings.
 
 ## Python Lambda packaging
 

@@ -100,6 +100,39 @@ def test_mcp_requires_analytics() -> None:
     assert any("True was expected" in message for message in errors(dev))
 
 
+def test_mcp_reserved_concurrency_is_fixed_at_20() -> None:
+    mcp = load("schema.json")["properties"]["operations"]["properties"]["mcp"]["properties"]
+    assert mcp["reservedConcurrency"]["const"] == 20
+    assert mcp["reservedConcurrency"]["default"] == 20
+    for value in (1, 7, 21, 100):
+        document = copy.deepcopy(load("example.json"))
+        document["operations"]["mcp"]["reservedConcurrency"] = value
+        assert errors(document) != []
+    assert errors(load("example.json")) == []
+
+
+def test_shared_api_logging_modes() -> None:
+    dev = load("dev.json")
+    assert dev["apiGatewayLogging"] == load("prod.json")["apiGatewayLogging"]
+    existing = copy.deepcopy(dev)
+    existing["apiGatewayLogging"] = {
+        "mode": "existing",
+        "sharedId": "scishared",
+        "existingRoleArn": "arn:aws:iam::111111111111:role/ApiGatewayLogs",
+    }
+    assert errors(existing) == []
+    missing = copy.deepcopy(existing)
+    del missing["apiGatewayLogging"]["existingRoleArn"]
+    assert errors(missing) != []
+    managed_with_arn = copy.deepcopy(existing)
+    managed_with_arn["apiGatewayLogging"]["mode"] = "managed"
+    assert errors(managed_with_arn) != []
+    for bad in ({"mode": "off"}, {"sharedId": "Bad_Id"}, {"cloudWatchRole": False}):
+        document = copy.deepcopy(dev)
+        document["apiGatewayLogging"] = bad
+        assert errors(document) != []
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

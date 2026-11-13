@@ -31,7 +31,7 @@ describe('Support Case Insights app', () => {
 
   test.each(['dev', 'prod'] as const)('%s configuration synthesises with cdk-nag enforcing and no findings left', (env) => {
     const app = testApp();
-    const { config, core, memberRole, analytics, mcp } = addCaseInsightsStacks(app, { env });
+    const { config, core, memberRole, analytics, mcp, apiLogging } = addCaseInsightsStacks(app, { env });
     // cdk-nag is registered by addCaseInsightsStacks, so an unacknowledged finding makes synth throw
     // (proved by 'cdk-nag findings fail synthesis'). A passing synth writes a report with no plugin
     // entries at all, so the report cannot be the evidence on its own.
@@ -51,7 +51,9 @@ describe('Support Case Insights app', () => {
     expect(analytics).toBeDefined();
     // Both shipped configurations enable Analytics; only dev enables MCP.
     expect(mcp !== undefined).toBe(env === 'dev');
-    for (const stack of [core, memberRole, analytics, mcp]) {
+    // The shared API Gateway logging stack exists only with MCP in managed mode.
+    expect(apiLogging !== undefined).toBe(env === 'dev');
+    for (const stack of [core, memberRole, analytics, mcp, apiLogging]) {
       if (stack !== undefined) {
         Annotations.fromStack(stack).hasNoError('*', Match.anyValue());
       }
@@ -61,7 +63,7 @@ describe('Support Case Insights app', () => {
         `CaseInsightsCoreStack-${config.uniqueId}`,
         `CaseInsightsMemberRoleStack-${config.uniqueId}`,
         `CaseInsightsAnalyticsStack-${config.uniqueId}`,
-        ...(env === 'dev' ? [`CaseInsightsMcpStack-${config.uniqueId}`] : []),
+        ...(env === 'dev' ? [`CaseInsightsMcpStack-${config.uniqueId}`, `CaseInsightsApiLoggingStack-${config.apiGatewayLogging.sharedId}`] : []),
       ].sort(),
     );
   });
@@ -94,9 +96,9 @@ describe('Support Case Insights app', () => {
 
   test('every cdk-nag acknowledgement is listed here with a specific reason', () => {
     const app = testApp();
-    const { config, core: coreStack, analytics, mcp } = addCaseInsightsStacks(app, { env: 'dev' });
-    // Analytics and MCP acknowledgements are listed in test/stacks/analytics-stack.test.ts and test/stacks/mcp-stack.test.ts.
-    const listedElsewhere = [analytics, mcp].map((stack) => `${stack?.stackName ?? 'missing'}/`);
+    const { config, core: coreStack, analytics, mcp, apiLogging } = addCaseInsightsStacks(app, { env: 'dev' });
+    // Analytics, MCP and shared API logging acknowledgements are listed in their test/stacks/*.test.ts files.
+    const listedElsewhere = [analytics, mcp, apiLogging].map((stack) => `${stack?.stackName ?? 'missing'}/`);
     const acknowledged = acknowledgedRules(app).filter(({ path: constructPath }) => !listedElsewhere.some((prefix) => constructPath.startsWith(prefix))).map(({ path: constructPath, id, reason }) => ({
       path: constructPath,
       id: id.replace(/^.*::(?=AwsSolutions-)/, ''),

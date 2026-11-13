@@ -15,7 +15,7 @@ import type { ILayerVersion } from 'aws-cdk-lib/aws-lambda';
 import { FilterPattern, LogGroup } from 'aws-cdk-lib/aws-logs';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
-import { type CaseInsightsConfig, resourceNames } from '../config';
+import { type CaseInsightsConfig, MCP_RESERVED_CONCURRENCY, resourceNames } from '../config';
 import { acknowledgeNagFinding, acknowledgeWildcardResourceFinding } from '../nag';
 import { lambdaPackagesCode, REPO_ROOT } from '../packaging/python-assets';
 import { ATHENA_RESULTS_PREFIX } from './analytics';
@@ -136,7 +136,7 @@ export class McpServer extends Construct {
       serviceName: MCP_SERVICE_NAME,
       layers: [props.commonLayer],
       timeout: MCP_FUNCTION_TIMEOUT,
-      reservedConcurrentExecutions: config.operations.mcp.reservedConcurrency,
+      reservedConcurrentExecutions: MCP_RESERVED_CONCURRENCY,
       environment: {
         ATHENA_WORKGROUP: analytics.workgroupName,
         ATHENA_DATABASE: analytics.databaseName,
@@ -165,7 +165,9 @@ export class McpServer extends Construct {
       restApiName: names.mcpApi,
       description: `Support Case Insights MCP endpoint (${config.uniqueId})`,
       endpointConfiguration: { types: [EndpointType.REGIONAL] },
-      // Execution logging needs an account-wide API Gateway CloudWatch role; access logs are used instead.
+      // Access logging needs the account/Region API Gateway CloudWatch role setting, which belongs to the
+      // shared CaseInsightsApiLoggingStack-<sharedId> or an existing configuration (apiGatewayLogging).
+      // A per-API role here would create a competing AWS::ApiGateway::Account in every environment.
       cloudWatchRole: false,
       policy: resourcePolicy,
       deployOptions: {
@@ -201,7 +203,7 @@ export class McpServer extends Construct {
     acknowledgeNagFinding(
       this.api.deploymentStage,
       'AwsSolutions-APIG6',
-      'Execution logging needs the account-wide API Gateway CloudWatch role shared by every API in the Region; each request is recorded in the JSON access log and traced with X-Ray instead.',
+      'Execution logs can contain request and response data and would add per-method log groups; each request is recorded in the payload-free JSON access log, which uses the shared account/Region CloudWatch role, and traced with X-Ray instead.',
     );
     acknowledgeNagFinding(
       this.method,

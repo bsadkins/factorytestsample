@@ -15,6 +15,10 @@
   "rawRetentionDays": 30,
   "logRetentionDays": 30,
   "mcpAllowedPrincipals": ["arn:aws:iam::111111111111:role/CaseInsightsAnalyst"],
+  "apiGatewayLogging": {
+    "mode": "managed",
+    "sharedId": "scishared"
+  },
   "schedules": {
     "accountLookup": "cron(0 0 * * ? *)",
     "cleanup": "cron(0 22 * * ? *)",

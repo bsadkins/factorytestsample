@@ -3,7 +3,7 @@
   "$id": "https://github.com/bsadkins/factorytestsample/config/schema.json",
   "title": "Support Case Insights environment configuration",
   "description": "Configuration for config/<env>.json. The CDK app validates every file against this schema, applies the defaults shown here, then applies the cross-field rules listed in $comment before any stack is synthesised.",
-  "$comment": "Cross-field rules enforced by lib/config/load.ts in addition to this schema: operations.queues.visibilityTimeoutSeconds (when set) >= 6 x operations.functions.consumerTimeoutSeconds; operations.cleanup.graceHours x 60 > operations.workflow.executionTimeoutMinutes; rawRetentionDays x 24 > operations.cleanup.graceHours; every cron schedule uses '?' in exactly one of day-of-month or day-of-week.",
+  "$comment": "Cross-field rules enforced by lib/config/load.ts in addition to this schema: operations.queues.visibilityTimeoutSeconds (when set) >= 6 x operations.functions.consumerTimeoutSeconds; operations.cleanup.graceHours x 60 > operations.workflow.executionTimeoutMinutes; rawRetentionDays x 24 > operations.cleanup.graceHours; every cron schedule uses '?' in exactly one of day-of-month or day-of-week; apiGatewayLogging.existingRoleArn is in managementAccountId. When synthesising one environment, the app also reads the other config/<env>.json (if present) and rejects different apiGatewayLogging settings for environments in the same account and Region.",
   "type": "object",
   "additionalProperties": false,
   "required": ["uniqueId", "orgId", "managementAccountId", "environment", "memberRoleTargets"],
@@ -118,6 +118,44 @@
         "pattern": "^arn:aws(-[a-z]+)*:iam::[0-9]{12}:(role|user)/[A-Za-z0-9+=,.@_/-]{1,512}$"
       },
       "default": []
+    },
+    "apiGatewayLogging": {
+      "type": "object",
+      "description": "Owner of the account- and Region-wide API Gateway CloudWatch Logs role setting that REST API access logging requires (used only when enableMcp is true). Every environment deployed to the same account and Region must use identical settings.",
+      "additionalProperties": false,
+      "default": {},
+      "properties": {
+        "mode": {
+          "type": "string",
+          "description": "managed: the shared stack CaseInsightsApiLoggingStack-<sharedId> creates the API Gateway logging role and the single account/Region setting, retained when environments are destroyed. existing: the setting is already configured (for example by another application or a platform team) with existingRoleArn; nothing is created or changed.",
+          "enum": ["managed", "existing"],
+          "default": "managed"
+        },
+        "sharedId": {
+          "type": "string",
+          "description": "Namespace of the shared logging stack, independent of uniqueId so dev and prod reuse one owner. Lower-case letters, digits and single hyphens; starts with a letter.",
+          "minLength": 3,
+          "maxLength": 12,
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+          "default": "shared"
+        },
+        "existingRoleArn": {
+          "type": "string",
+          "description": "Required when mode is existing, not allowed otherwise: the IAM role in managementAccountId already set as the API Gateway CloudWatch role ARN in this Region.",
+          "pattern": "^arn:aws(-[a-z]+)*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$"
+        }
+      },
+      "allOf": [
+        {
+          "description": "existingRoleArn is required when mode is existing and not allowed when mode is managed.",
+          "if": {
+            "properties": { "mode": { "type": "string", "const": "existing" } },
+            "required": ["mode"]
+          },
+          "then": { "required": ["existingRoleArn"] },
+          "else": { "not": { "required": ["existingRoleArn"] } }
+        }
+      ]
     },
     "schedules": {
       "type": "object",
@@ -301,9 +339,8 @@
           "properties": {
             "reservedConcurrency": {
               "type": "integer",
-              "description": "Reserved concurrency for the MCP Lambda function.",
-              "minimum": 1,
-              "maximum": 100,
+              "description": "Reserved concurrency for the MCP Lambda function. Fixed at 20; any other value is rejected.",
+              "const": 20,
               "default": 20
             },
             "throttleRateLimit": {

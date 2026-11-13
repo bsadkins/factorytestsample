@@ -7,9 +7,11 @@ import {
   SONNET_4_5_GLOBAL_PROFILE,
   loadConfigFile,
   loadEnvironmentConfig,
+  MCP_RESERVED_CONCURRENCY,
   parseConfig,
   queueVisibilityTimeoutSeconds,
   resolveEnvironmentName,
+  validateSharedApiLoggingConsistency,
 } from '../../lib';
 import { ownedTempDir } from '../helpers/temp-dirs';
 import { minimalConfig, readConfigJson, type JsonObject } from './helpers';
@@ -79,6 +81,7 @@ describe('defaults', () => {
       rawRetentionDays: 90,
       logRetentionDays: 90,
       mcpAllowedPrincipals: [],
+      apiGatewayLogging: { mode: 'managed', sharedId: 'shared' },
       schedules: {
         accountLookup: 'cron(0 0 * * ? *)',
         cleanup: 'cron(0 22 * * ? *)',
@@ -172,6 +175,33 @@ describe('rejected configurations', () => {
     ['fractional Athena results retention', withOperations({ athena: { resultsRetentionDays: 1.5 } }), /must be integer/],
     ['IA transition before 30 days', withOperations({ storage: { processedInfrequentAccessDays: 7 } }), /must be >= 30/],
     ['unknown operations group', withOperations({ vpc: {} }), /unsupported property "vpc"/],
+    ['MCP reserved concurrency other than 20', withOperations({ mcp: { reservedConcurrency: 7 } }), /\/operations\/mcp\/reservedConcurrency must be 20/],
+    ['MCP reserved concurrency above 20', withOperations({ mcp: { reservedConcurrency: 100 } }), /reservedConcurrency must be 20/],
+    ['MCP reserved concurrency as a string', withOperations({ mcp: { reservedConcurrency: '20' } }), /reservedConcurrency must be 20/],
+    ['unknown API logging mode', minimalConfig({ apiGatewayLogging: { mode: 'off' } }), /\/apiGatewayLogging\/mode must be one of "managed", "existing"/],
+    ['upper-case shared namespace', minimalConfig({ apiGatewayLogging: { sharedId: 'Shared' } }), /\/apiGatewayLogging\/sharedId must match pattern/],
+    ['shared namespace too long', minimalConfig({ apiGatewayLogging: { sharedId: 'abcdefghijklm' } }), /\/apiGatewayLogging\/sharedId must NOT have more than 12/],
+    ['unknown API logging property', minimalConfig({ apiGatewayLogging: { cloudWatchRole: false } }), /unsupported property "cloudWatchRole"/],
+    [
+      'existing mode without a role ARN',
+      minimalConfig({ apiGatewayLogging: { mode: 'existing' } }),
+      /rule violated: existingRoleArn is required when mode is existing and not allowed when mode is managed/,
+    ],
+    [
+      'managed mode with a role ARN',
+      minimalConfig({ apiGatewayLogging: { existingRoleArn: 'arn:aws:iam::111111111111:role/ApiGatewayLogs' } }),
+      /rule violated: existingRoleArn is required when mode is existing/,
+    ],
+    [
+      'existing role that is not an IAM role ARN',
+      minimalConfig({ apiGatewayLogging: { mode: 'existing', existingRoleArn: 'arn:aws:iam::111111111111:user/ApiGatewayLogs' } }),
+      /\/apiGatewayLogging\/existingRoleArn must match pattern/,
+    ],
+    [
+      'existing role in another account',
+      minimalConfig({ apiGatewayLogging: { mode: 'existing', existingRoleArn: 'arn:aws:iam::222222222222:role/ApiGatewayLogs' } }),
+      /\/apiGatewayLogging\/existingRoleArn is in account 222222222222 but API Gateway needs a role in the management account 111111111111/,
+    ],
     [
       'visibility below six consumer timeouts',
       withOperations({ queues: { visibilityTimeoutSeconds: 1000 }, functions: { consumerTimeoutSeconds: 300 } }),
@@ -224,6 +254,54 @@ describe('rejected configurations', () => {
 
   test('a non-object document', () => {
     expect(issuesFor(['not', 'an', 'object'])).toEqual(['(root) must be object']);
+  });
+});
+
+describe('MCP reserved concurrency', () => {
+  test('is fixed at 20 by default and when stated explicitly', () => {
+    expect(MCP_RESERVED_CONCURRENCY).toBe(20);
+    expect(parseConfig(minimalConfig()).operations.mcp.reservedConcurrency).toBe(20);
+    expect(parseConfig(withOperations({ mcp: { reservedConcurrency: 20 } })).operations.mcp.reservedConcurrency).toBe(20);
+  });
+
+  test('the schema declares const 20 and default 20 while the other MCP limits stay configurable', () => {
+    const schema = readConfigJson('schema.json') as {
+      properties: { operations: { properties: { mcp: { properties: Record<string, Record<string, unknown>> } } } };
+    };
+    const mcp = schema.properties.operations.properties.mcp.properties;
+    expect(mcp.reservedConcurrency).toMatchObject({ const: 20, default: 20 });
+    expect(mcp.reservedConcurrency?.minimum).toBeUndefined();
+    expect(mcp.reservedConcurrency?.maximum).toBeUndefined();
+    const configured = parseConfig(withOperations({ mcp: { throttleRateLimit: 3, throttleBurstLimit: 6, wafRateLimitPer5Minutes: 150 } }));
+    expect(configured.operations.mcp).toEqual({ reservedConcurrency: 20, throttleRateLimit: 3, throttleBurstLimit: 6, wafRateLimitPer5Minutes: 150 });
+  });
+});
+
+describe('shared API Gateway logging settings', () => {
+  const existing = { mode: 'existing', sharedId: 'shared', existingRoleArn: 'arn:aws:iam::111111111111:role/platform/ApiGatewayLogs' };
+
+  test('existing mode accepts a role ARN with a path in the management account', () => {
+    expect(parseConfig(minimalConfig({ apiGatewayLogging: existing })).apiGatewayLogging).toEqual(existing);
+  });
+
+  test('a configurable shared namespace keeps the managed default mode', () => {
+    expect(parseConfig(minimalConfig({ apiGatewayLogging: { sharedId: 'platform-api' } })).apiGatewayLogging).toEqual({
+      mode: 'managed',
+      sharedId: 'platform-api',
+    });
+  });
+
+  test('dev and prod in the same account and Region must agree', () => {
+    const dev = parseConfig(minimalConfig());
+    const prod = parseConfig(minimalConfig({ environment: 'prod', uniqueId: 'sciprod', alarmEmail: 'ops@example.com', apiGatewayLogging: existing }));
+    expect(() => { validateSharedApiLoggingConsistency([dev, prod]); }).toThrow(
+      /dev \(scitest\) and prod \(sciprod\) deploy to the same account and Region must use the same apiGatewayLogging settings/,
+    );
+    const prodElsewhere = parseConfig(
+      minimalConfig({ environment: 'prod', uniqueId: 'sciprod', alarmEmail: 'ops@example.com', region: 'eu-west-1', apiGatewayLogging: existing }),
+    );
+    expect(() => { validateSharedApiLoggingConsistency([dev, prodElsewhere]); }).not.toThrow();
+    expect(() => { validateSharedApiLoggingConsistency([dev, parseConfig(minimalConfig({ uniqueId: 'other' }))]); }).not.toThrow();
   });
 });
 

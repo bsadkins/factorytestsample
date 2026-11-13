@@ -21,15 +21,85 @@ Live client-to-AWS connectivity, including Kiro discovering the eight tools agai
 
 ## Infrastructure and security controls
 
-The MCP stack depends on the Core and Analytics stacks and reads their outputs; neither reads MCP outputs, so they deploy and update without it. It contains:
+The MCP stack depends on the Core and Analytics stacks and reads their outputs; neither reads MCP outputs, so they deploy and update without it. In managed API Gateway logging mode it also deploys after the shared `CaseInsightsApiLoggingStack-<sharedId>` (see [below](#shared-api-gateway-logging-prerequisite)). It contains:
 
 - **REST API** `CaseInsights-Mcp-<uniqueId>` (regional) with stage `v1` and one method, `POST /mcp`, with `AWS_IAM` authorisation and a Lambda proxy integration. There is no unauthenticated method, API key, authoriser or CORS configuration.
 - **Resource policy**: allows `execute-api:Invoke` on `/v1/POST/mcp` only to the ARNs in `mcpAllowedPrincipals` and only while `aws:PrincipalOrgID` equals `orgId`. Explicit denies refuse callers outside the Organization, principals not in the list (by `aws:PrincipalArn`, so these denies also bind same-account principals whose own IAM policies allow `execute-api:Invoke`), and every other stage, method or path. A change to the principals produces a new deployment so the policy takes effect.
-- **Stage settings**: throttling at `operations.mcp.throttleRateLimit` requests per second with burst `operations.mcp.throttleBurstLimit`, X-Ray tracing, and JSON access logs in `/aws/apigateway/CaseInsights-Mcp-<uniqueId>/access` (retention `logRetentionDays`). Access logs record request metadata only: no bodies, headers, query strings, caller ARNs or API Gateway error messages, which can repeat a signed request. Execution logging is off, because it needs an account-wide API Gateway CloudWatch role.
+- **Stage settings**: throttling at `operations.mcp.throttleRateLimit` requests per second with burst `operations.mcp.throttleBurstLimit`, X-Ray tracing, and JSON access logs in `/aws/apigateway/CaseInsights-Mcp-<uniqueId>/access` (retention `logRetentionDays`). Access logs record request metadata only: no bodies, headers, query strings, caller ARNs or API Gateway error messages, which can repeat a signed request. Execution logging is off, because execution logs can contain request and response data. Access logs need the account- and Region-wide API Gateway CloudWatch role setting; see [Shared API Gateway logging prerequisite](#shared-api-gateway-logging-prerequisite).
 - **AWS WAF** web ACL `CaseInsights-Mcp-<uniqueId>` on the stage: a per-IP rate rule (`operations.mcp.wafRateLimitPer5Minutes` per five minutes, `429`), an explicit block of bodies over 32,768 bytes (`413`), and the AWS managed Core rule set. The web ACL inspects the first 32 KiB of each body (the API Gateway default is 16 KiB) and treats larger bodies as matching the size rule. The managed rule set's 8 KB body-size rule only counts, so the application limit stays 32 KiB; the MCP function enforces the same limit on the decoded body. Sampled requests are off, because they would keep signed request headers.
-- **Function** `Lambda-McpServer-<uniqueId>` (Python 3.12, reserved concurrency `operations.mcp.reservedConcurrency`, default 20, 28-second timeout within API Gateway's 29-second limit) with the Core common layer. Its environment fixes the Analytics workgroup and database and the Bedrock model; requests cannot choose them. Its role can query only the Analytics workgroup, read the case summary table, read processed records, read and write query results under `query-results/`, and invoke only the configured model.
+- **Function** `Lambda-McpServer-<uniqueId>` (Python 3.12, reserved concurrency fixed at 20 (`operations.mcp.reservedConcurrency` accepts only 20), 28-second timeout within API Gateway's 29-second limit) with the Core common layer. Its environment fixes the Analytics workgroup and database and the Bedrock model; requests cannot choose them. Its role can query only the Analytics workgroup, read the case summary table, read processed records, read and write query results under `query-results/`, and invoke only the configured model.
 - **Monitoring** in Core: alarms [LambdaErrors-McpServer](runbook.md#lambdaerrors-mcpserver), [McpInternalErrors](runbook.md#mcpinternalerrors), [McpApiServerErrors](runbook.md#mcpapiservererrors) and [McpAuthFailures](runbook.md#mcpauthfailures), and dashboard rows for MCP requests and errors, API responses and WAF blocks. `McpAuthFailures` is derived from access log entries refused by SigV4 or the resource policy.
 
+## Shared API Gateway logging prerequisite
+
+REST API access logs can only be delivered after the account's API Gateway settings name a CloudWatch Logs role (`cloudWatchRoleArn`) in that Region, even with execution logging off. There is one such setting per account and Region, shared by every REST API there. It therefore does not belong to an environment's MCP stack; the MCP API keeps `cloudWatchRole: false`, and the owner is chosen with `apiGatewayLogging` in `config/<env>.json`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `mode` | `managed` | `managed`: the shared stack `CaseInsightsApiLoggingStack-<sharedId>` creates the role and the account setting. `existing`: the setting is already configured by someone else; nothing is created or changed. |
+| `sharedId` | `shared` | Namespace of the shared stack, independent of `uniqueId` so that dev and prod share one owner. The shipped examples use `scishared`. Same rules as `uniqueId`. |
+| `existingRoleArn` | none | Required in `existing` mode and rejected in `managed` mode: the IAM role in `managementAccountId` that is already set as the CloudWatch role ARN in `region`. |
+
+Every environment deployed to the same account and Region must use identical `apiGatewayLogging` settings. When the app synthesises one environment it also reads the other `config/<env>.json`, if present, and stops with an error when the two disagree; the optional pipeline's stage validation applies the same rule. The setting only matters when `enableMcp` is true: with MCP disabled no shared stack, role or account setting is added.
+
+### Managed mode
+
+With MCP enabled, ordinary `npx cdk deploy --all -c env=<env>` also deploys `CaseInsightsApiLoggingStack-<sharedId>`, and the MCP stack depends on it so the setting exists before the `v1` stage is created. The shared stack contains:
+
+- one IAM role trusted only by `apigateway.amazonaws.com`, with a generated name (outputs `ApiGatewayCloudWatchRoleName` and `ApiGatewayCloudWatchRoleArn`) and one inline policy, `ApiGatewayAccessLogs`:
+  - `logs:CreateLogStream`, `logs:PutLogEvents`, `logs:DescribeLogStreams`, `logs:GetLogEvents` and `logs:FilterLogEvents` on `arn:aws:logs:<region>:<account-id>:log-group:/aws/apigateway/CaseInsights-Mcp-*`, which covers the MCP access log group of every environment namespace;
+  - `logs:DescribeLogGroups` on `arn:aws:logs:<region>:<account-id>:log-group:*`, because this list operation cannot be limited to named log groups. It grants no read or write access to log data.
+
+  There is no `logs:CreateLogGroup`: each MCP stack creates its own access log group with its retention, and execution logging stays off. The AWS managed policy `AmazonAPIGatewayPushToCloudWatchLogs` grants the same actions on every log group; this role is narrower.
+- one `AWS::ApiGateway::Account` resource that sets that role as the CloudWatch role ARN for the account and Region.
+
+Both resources have `DeletionPolicy: Retain`. Environment stacks never contain an `AWS::ApiGateway::Account` resource or an API Gateway logging role. The shared stack's template depends only on `sharedId`, the account and the Region (it carries `Project` and `SharedId` tags, not environment tags), so dev and prod synthesise the identical stack and whichever deploys second finds nothing to change. The CDK API for pipelines follows the same model: `addSharedApiLogging(app, [dev, prod])` creates the shared stack once at the root, and each stage receives it through `addCaseInsightsEnvironmentStacks(stage, config, { sharedApiLogging })`. CDK cannot order stacks across stages, so the pipeline must deploy the shared stack before its dev stage.
+
+**Check ownership before the first deployment.** The CDK app never queries your account. Managed mode sets the account-wide value, replacing any role ARN that is already configured, and its role can write only to this solution's log groups. Before the first deployment in an account and Region, run:
+
+```bash
+aws apigateway get-account --region <region> --query cloudwatchRoleArn --output text
+```
+
+- `None` (nothing configured): managed mode is appropriate.
+- A role that `CaseInsightsApiLoggingStack-<sharedId>` created (compare with its `ApiGatewayCloudWatchRoleArn` output): managed mode is already in place.
+- Any other role, for example one owned by another application, a platform team or a landing zone: do not take it over. Use existing mode with that ARN, and ask its owner to allow writes to `/aws/apigateway/CaseInsights-Mcp-*`.
+
+Then review `npx cdk diff -c env=<env>` before deploying. An added or changed `AWS::ApiGateway::Account` in `CaseInsightsApiLoggingStack-<sharedId>` is an account- and Region-wide change that affects every REST API there, including APIs that are not part of this solution. If other REST APIs in the Region also need the setting for their logs, use a broader role that they share, in existing mode, rather than the solution-scoped managed role.
+
+### Existing-role mode
+
+```json
+"apiGatewayLogging": {
+  "mode": "existing",
+  "sharedId": "scishared",
+  "existingRoleArn": "arn:aws:iam::111111111111:role/ApiGatewayCloudWatchLogs"
+}
+```
+
+Nothing is created or changed: no shared stack, role or `AWS::ApiGateway::Account`. The MCP stack records the ARN in its `ApiGatewayCloudWatchRoleArn` output so you can compare it with `aws apigateway get-account`. You are responsible for the setting: the role must already be set as the CloudWatch role ARN in that account and Region, must be in the management account (the loader checks the account ID), must trust `apigateway.amazonaws.com` and must allow at least the actions above on `/aws/apigateway/CaseInsights-Mcp-*` (`AmazonAPIGatewayPushToCloudWatchLogs` is sufficient). If the setting is missing, API Gateway rejects the stage's access log configuration and the MCP stack deployment fails; configure the setting, or switch to managed mode if nobody else owns it.
+
+### Regional STS
+
+API Gateway assumes the logging role through AWS STS in the API's Region, so STS must be active there. It is active by default in Regions that are enabled by default; for opt-in Regions, check **IAM → Account settings → Security Token Service (STS)**. If setting the role ARN fails with an STS error, activate STS for the Region and deploy again.
+
+### Teardown and final clean-up
+
+The shared role and account setting outlive environment teardown, so destroying dev cannot break prod's access logs:
+
+- `npx cdk destroy --all -c env=dev` also deletes `CaseInsightsApiLoggingStack-<sharedId>` when it is part of that app, but the role (with its inline policy) and the account setting are retained. Prod's API keeps logging.
+- A later deployment with MCP enabled recreates the shared stack. It creates a new role (the generated name avoids a clash with the retained one) and points the setting at it. The previously retained role is then unused and can be deleted once `aws apigateway get-account` shows the new ARN.
+
+Delete the shared resources deliberately, by hand, only after every MCP environment in that account and Region has been destroyed:
+
+1. Confirm what the setting points at: `aws apigateway get-account --region <region> --query cloudwatchRoleArn --output text`.
+2. Confirm that no other REST API in the Region still needs it: list them with `aws apigateway get-rest-apis --region <region>` and check each stage's access logging and execution logging settings with `aws apigateway get-stages --rest-api-id <api-id> --region <region>`. If another API uses it, hand the setting to that API's owner with `aws apigateway update-account --region <region> --patch-operations op=replace,path=/cloudwatchRoleArn,value=<their-role-arn>`, or leave it in place.
+3. If the shared stack still exists, delete it; its resources are retained: `aws cloudformation delete-stack --stack-name CaseInsightsApiLoggingStack-<sharedId> --region <region>`.
+4. Once nothing depends on the role, delete it: `aws iam delete-role-policy --role-name <role-name> --policy-name ApiGatewayAccessLogs`, then `aws iam delete-role --role-name <role-name>`. Deleting the role while the setting still names it breaks access logging for every API in the Region that relies on it.
+
+In existing mode there is nothing of this solution's to clean up; the setting and role belong to their owner.
+
+None of this has been exercised against a real account. The synthesised templates are checked locally (`test/stacks/api-logging-stack.test.ts`): one `AWS::ApiGateway::Account` and one API Gateway-trusted role in managed mode, none in existing mode or with MCP disabled, the role's trust and permissions, retention, the dependency of the MCP stack, identical dev and prod shared stacks and rejection of inconsistent settings. Delivery of access log records depends on the live account and is part of the deferred checklist.
 ## Finding the endpoint URL
 
 ```bash
@@ -147,4 +217,4 @@ An unsigned request, for example with plain `curl`, must receive HTTP `403`.
 .venv/bin/pytest test/scripts/test_mcp_aws_client.py
 ```
 
-These tests prove the bridge's behaviour, not API Gateway IAM authorisation, the resource policy or WAF, which are checked only as synthesised CloudFormation (`test/stacks/mcp-stack.test.ts`) until a live deployment. The deferred live checks are: a signed `tools/list` from an allowed principal succeeds; unsigned requests, unlisted principals and principals outside the Organization receive `403`; a 32,769-byte body receives `413` from WAF while a 32,768-byte body reaches the function; requests above the per-IP rate receive `429`; and the MCP alarms and dashboard rows show data.
+These tests prove the bridge's behaviour, not API Gateway IAM authorisation, the resource policy or WAF, which are checked only as synthesised CloudFormation (`test/stacks/mcp-stack.test.ts`) until a live deployment. The deferred live checks are: `aws apigateway get-account` shows the shared role (managed mode) or the configured existing role, and the access log group receives records; a signed `tools/list` from an allowed principal succeeds; unsigned requests, unlisted principals and principals outside the Organization receive `403`; a 32,769-byte body receives `413` from WAF while a 32,768-byte body reaches the function; requests above the per-IP rate receive `429`; and the MCP alarms and dashboard rows show data.

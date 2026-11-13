@@ -1,5 +1,7 @@
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import {
+  type ApiGatewayLoggingConfig,
+  API_GATEWAY_LOGGING_MODES,
   type CaseInsightsConfig,
   type OperationsConfig,
   type PipelineConfig,
@@ -37,9 +39,12 @@ const CONFIG_KEYS = {
   logRetentionDays: true,
   alarmEmail: true,
   mcpAllowedPrincipals: true,
+  apiGatewayLogging: true,
   schedules: true,
   operations: true,
 } satisfies Record<keyof CaseInsightsConfig, true>;
+
+const API_LOGGING_KEYS = { mode: true, sharedId: true, existingRoleArn: true } satisfies Record<keyof ApiGatewayLoggingConfig, true>;
 
 const SCHEDULE_KEYS = { accountLookup: true, cleanup: true, crawler: true } satisfies Record<keyof ScheduleConfig, true>;
 
@@ -107,6 +112,13 @@ describe('schema and TypeScript parity', () => {
     for (const [group, keys] of Object.entries(OPERATIONS_KEYS)) {
       expect(keysOf(operations?.properties?.[group])).toEqual(Object.keys(keys).sort());
     }
+  });
+
+  test('apiGatewayLogging matches ApiGatewayLoggingConfig exactly', () => {
+    const logging = schema.properties?.apiGatewayLogging;
+    expect(keysOf(logging)).toEqual(Object.keys(API_LOGGING_KEYS).sort());
+    expect(logging?.properties?.mode?.enum).toEqual([...API_GATEWAY_LOGGING_MODES]);
+    expect(logging?.properties?.mode?.default).toBe('managed');
   });
 
   test('pipeline schema matches PipelineConfig exactly', () => {

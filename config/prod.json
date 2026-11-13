@@ -16,6 +16,10 @@
   "logRetentionDays": 90,
   "alarmEmail": "case-insights-alerts@example.com",
   "mcpAllowedPrincipals": [],
+  "apiGatewayLogging": {
+    "mode": "managed",
+    "sharedId": "scishared"
+  },
   "schedules": {
     "accountLookup": "cron(0 0 * * ? *)",
     "cleanup": "cron(0 22 * * ? *)",
