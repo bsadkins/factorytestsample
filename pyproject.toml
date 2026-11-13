@@ -21,14 +21,14 @@ select = ["E", "W", "F", "I", "B", "UP", "N", "S", "SIM", "RUF", "PT", "C4", "PL
 python_version = "3.12"
 strict = true
 files = ["src", "test", "scripts"]
-mypy_path = "src/lambda"
+mypy_path = "src/lambda:test/support"
 explicit_package_bases = true
 warn_unreachable = true
 cache_dir = ".mypy_cache"
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
-pythonpath = ["src/lambda"]
+pythonpath = ["src/lambda", "test/support"]
 addopts = ["--strict-markers", "--strict-config", "--import-mode=importlib"]
 markers = [
     "live_bedrock: calls the real Amazon Bedrock API; skipped unless CASE_INSIGHTS_LIVE_BEDROCK=1",
