@@ -886,6 +886,544 @@ def sort_filter_rules(json_obj):
       },
       "Type": "AWS::IAM::Role",
     },
+    "CaseCollectionCaseAnnotationAccess7B75099B": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "WriteRawCaseObjects",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "account_number=*",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageProcessedBucket69BE6922",
+                  "Arn",
+                ],
+              },
+              "Sid": "ListProcessedCases",
+            },
+            {
+              "Action": [
+                "dynamodb:DeleteItem",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageIdempotencyTable5D6E4193",
+                  "Arn",
+                ],
+              },
+              "Sid": "IdempotencyRecords",
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "QueuesSummaryQueue969A41CA",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "QueuesWorkflowFailures66009843",
+                    "Arn",
+                  ],
+                },
+              ],
+              "Sid": "SendSummaryReferences",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseCollectionCaseAnnotationAccess7B75099B",
+        "Roles": [
+          {
+            "Ref": "MemberAccessCaseAnnotationRole8062B9E8",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseCollectionCaseAnnotationFunctionD1470FE3": {
+      "DependsOn": [
+        "CaseCollectionCaseAnnotationTelemetryPolicy13B37261",
+        "MemberAccessCaseAnnotationRoleDefaultPolicy92E2CEB4",
+        "MemberAccessCaseAnnotationRole8062B9E8",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Stores complete Support case conversations and queues them for summary (scidev)",
+        "Environment": {
+          "Variables": {
+            "CASE_INSIGHTS_UNIQUE_ID": "scidev",
+            "FAILURE_QUEUE_URL": {
+              "Ref": "QueuesWorkflowFailures66009843",
+            },
+            "IDEMPOTENCY_TABLE_NAME": {
+              "Ref": "StorageIdempotencyTable5D6E4193",
+            },
+            "MEMBER_ROLE_NAME": "Support-Case-Analysis-Role-scidev",
+            "MEMBER_ROLE_PARTITION": "aws",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "case-annotation",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "PROCESSED_BUCKET": {
+              "Ref": "StorageProcessedBucket69BE6922",
+            },
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+            "SUMMARY_QUEUE_URL": {
+              "Ref": "QueuesSummaryQueue969A41CA",
+            },
+          },
+        },
+        "FunctionName": "Lambda-CaseAnnotation-scidev",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseCollectionCaseAnnotationLogGroup1F29F235",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "MemberAccessCaseAnnotationRole8062B9E8",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseCollectionCaseAnnotationFunctionSqsEventSourceCaseInsightsCoreStackscidevQueuesAnnotationQueue1436DFB7CC3D3C57": {
+      "DependsOn": [
+        "CaseCollectionCaseAnnotationTelemetryPolicy13B37261",
+      ],
+      "Properties": {
+        "BatchSize": 5,
+        "EventSourceArn": {
+          "Fn::GetAtt": [
+            "QueuesAnnotationQueue58F7E39D",
+            "Arn",
+          ],
+        },
+        "FunctionName": {
+          "Ref": "CaseCollectionCaseAnnotationFunctionD1470FE3",
+        },
+        "FunctionResponseTypes": [
+          "ReportBatchItemFailures",
+        ],
+        "ScalingConfig": {
+          "MaximumConcurrency": 5,
+        },
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Lambda::EventSourceMapping",
+    },
+    "CaseCollectionCaseAnnotationLogGroup1F29F235": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-CaseAnnotation-scidev",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "CaseCollectionCaseAnnotationTelemetryPolicy13B37261": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseCollectionCaseAnnotationLogGroup1F29F235",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseCollectionCaseAnnotationTelemetryPolicy13B37261",
+        "Roles": [
+          {
+            "Ref": "MemberAccessCaseAnnotationRole8062B9E8",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseCollectionCaseRetrievalAccessA2B49AF7": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "WriteRawCaseObjects",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "account_number=*",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageProcessedBucket69BE6922",
+                  "Arn",
+                ],
+              },
+              "Sid": "ListProcessedCases",
+            },
+            {
+              "Action": [
+                "dynamodb:DeleteItem",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageIdempotencyTable5D6E4193",
+                  "Arn",
+                ],
+              },
+              "Sid": "IdempotencyRecords",
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesAnnotationQueue58F7E39D",
+                  "Arn",
+                ],
+              },
+              "Sid": "SendAnnotationReferences",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseCollectionCaseRetrievalAccessA2B49AF7",
+        "Roles": [
+          {
+            "Ref": "MemberAccessCaseRetrievalRoleB0C5E593",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseCollectionCaseRetrievalFunctionB07B13A0": {
+      "DependsOn": [
+        "CaseCollectionCaseRetrievalTelemetryPolicy9256885A",
+        "MemberAccessCaseRetrievalRoleDefaultPolicy00B98317",
+        "MemberAccessCaseRetrievalRoleB0C5E593",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Collects resolved Support cases per member account for annotation (scidev)",
+        "Environment": {
+          "Variables": {
+            "ANNOTATION_QUEUE_URL": {
+              "Ref": "QueuesAnnotationQueue58F7E39D",
+            },
+            "CASE_INSIGHTS_UNIQUE_ID": "scidev",
+            "IDEMPOTENCY_TABLE_NAME": {
+              "Ref": "StorageIdempotencyTable5D6E4193",
+            },
+            "LOOKBACK_MONTHS": "12",
+            "MEMBER_ROLE_NAME": "Support-Case-Analysis-Role-scidev",
+            "MEMBER_ROLE_PARTITION": "aws",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "case-retrieval",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "PROCESSED_BUCKET": {
+              "Ref": "StorageProcessedBucket69BE6922",
+            },
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+          },
+        },
+        "FunctionName": "Lambda-CaseRetrieval-scidev",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseCollectionCaseRetrievalLogGroup6EF6F3DB",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "MemberAccessCaseRetrievalRoleB0C5E593",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseCollectionCaseRetrievalFunctionSqsEventSourceCaseInsightsCoreStackscidevQueuesActiveAccountsQueue14C705FE4A3C0CB1": {
+      "DependsOn": [
+        "CaseCollectionCaseRetrievalTelemetryPolicy9256885A",
+      ],
+      "Properties": {
+        "BatchSize": 1,
+        "EventSourceArn": {
+          "Fn::GetAtt": [
+            "QueuesActiveAccountsQueueB932EA89",
+            "Arn",
+          ],
+        },
+        "FunctionName": {
+          "Ref": "CaseCollectionCaseRetrievalFunctionB07B13A0",
+        },
+        "FunctionResponseTypes": [
+          "ReportBatchItemFailures",
+        ],
+        "ScalingConfig": {
+          "MaximumConcurrency": 5,
+        },
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Lambda::EventSourceMapping",
+    },
+    "CaseCollectionCaseRetrievalLogGroup6EF6F3DB": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-CaseRetrieval-scidev",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "CaseCollectionCaseRetrievalTelemetryPolicy9256885A": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseCollectionCaseRetrievalLogGroup6EF6F3DB",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseCollectionCaseRetrievalTelemetryPolicy9256885A",
+        "Roles": [
+          {
+            "Ref": "MemberAccessCaseRetrievalRoleB0C5E593",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
     "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F": {
       "DependsOn": [
         "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
@@ -975,6 +1513,38 @@ def sort_filter_rules(json_obj):
       },
       "Type": "AWS::IAM::Role",
     },
+    "MemberAccessCaseAnnotationRoleDefaultPolicy92E2CEB4": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "sqs:ChangeMessageVisibility",
+                "sqs:DeleteMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:ReceiveMessage",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesAnnotationQueue58F7E39D",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "MemberAccessCaseAnnotationRoleDefaultPolicy92E2CEB4",
+        "Roles": [
+          {
+            "Ref": "MemberAccessCaseAnnotationRole8062B9E8",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
     "MemberAccessCaseAnnotationRoleMemberRoleAccessDAA186D0": {
       "Properties": {
         "PolicyDocument": {
@@ -1034,6 +1604,38 @@ def sort_filter_rules(json_obj):
         ],
       },
       "Type": "AWS::IAM::Role",
+    },
+    "MemberAccessCaseRetrievalRoleDefaultPolicy00B98317": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "sqs:ChangeMessageVisibility",
+                "sqs:DeleteMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:ReceiveMessage",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesActiveAccountsQueueB932EA89",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "MemberAccessCaseRetrievalRoleDefaultPolicy00B98317",
+        "Roles": [
+          {
+            "Ref": "MemberAccessCaseRetrievalRoleB0C5E593",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
     },
     "MemberAccessCaseRetrievalRoleMemberRoleAccess9DED2A2B": {
       "Properties": {
@@ -3588,6 +4190,544 @@ def sort_filter_rules(json_obj):
       },
       "Type": "AWS::IAM::Role",
     },
+    "CaseCollectionCaseAnnotationAccess7B75099B": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "WriteRawCaseObjects",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "account_number=*",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageProcessedBucket69BE6922",
+                  "Arn",
+                ],
+              },
+              "Sid": "ListProcessedCases",
+            },
+            {
+              "Action": [
+                "dynamodb:DeleteItem",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageIdempotencyTable5D6E4193",
+                  "Arn",
+                ],
+              },
+              "Sid": "IdempotencyRecords",
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "QueuesSummaryQueue969A41CA",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::GetAtt": [
+                    "QueuesWorkflowFailures66009843",
+                    "Arn",
+                  ],
+                },
+              ],
+              "Sid": "SendSummaryReferences",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseCollectionCaseAnnotationAccess7B75099B",
+        "Roles": [
+          {
+            "Ref": "MemberAccessCaseAnnotationRole8062B9E8",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseCollectionCaseAnnotationFunctionD1470FE3": {
+      "DependsOn": [
+        "CaseCollectionCaseAnnotationTelemetryPolicy13B37261",
+        "MemberAccessCaseAnnotationRoleDefaultPolicy92E2CEB4",
+        "MemberAccessCaseAnnotationRole8062B9E8",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Stores complete Support case conversations and queues them for summary (sciprod)",
+        "Environment": {
+          "Variables": {
+            "CASE_INSIGHTS_UNIQUE_ID": "sciprod",
+            "FAILURE_QUEUE_URL": {
+              "Ref": "QueuesWorkflowFailures66009843",
+            },
+            "IDEMPOTENCY_TABLE_NAME": {
+              "Ref": "StorageIdempotencyTable5D6E4193",
+            },
+            "MEMBER_ROLE_NAME": "Support-Case-Analysis-Role-sciprod",
+            "MEMBER_ROLE_PARTITION": "aws",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "case-annotation",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "PROCESSED_BUCKET": {
+              "Ref": "StorageProcessedBucket69BE6922",
+            },
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+            "SUMMARY_QUEUE_URL": {
+              "Ref": "QueuesSummaryQueue969A41CA",
+            },
+          },
+        },
+        "FunctionName": "Lambda-CaseAnnotation-sciprod",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseCollectionCaseAnnotationLogGroup1F29F235",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "MemberAccessCaseAnnotationRole8062B9E8",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseCollectionCaseAnnotationFunctionSqsEventSourceCaseInsightsCoreStacksciprodQueuesAnnotationQueueF832D44414C0F074": {
+      "DependsOn": [
+        "CaseCollectionCaseAnnotationTelemetryPolicy13B37261",
+      ],
+      "Properties": {
+        "BatchSize": 5,
+        "EventSourceArn": {
+          "Fn::GetAtt": [
+            "QueuesAnnotationQueue58F7E39D",
+            "Arn",
+          ],
+        },
+        "FunctionName": {
+          "Ref": "CaseCollectionCaseAnnotationFunctionD1470FE3",
+        },
+        "FunctionResponseTypes": [
+          "ReportBatchItemFailures",
+        ],
+        "ScalingConfig": {
+          "MaximumConcurrency": 5,
+        },
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Lambda::EventSourceMapping",
+    },
+    "CaseCollectionCaseAnnotationLogGroup1F29F235": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-CaseAnnotation-sciprod",
+        "RetentionInDays": 90,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "CaseCollectionCaseAnnotationTelemetryPolicy13B37261": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseCollectionCaseAnnotationLogGroup1F29F235",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseCollectionCaseAnnotationTelemetryPolicy13B37261",
+        "Roles": [
+          {
+            "Ref": "MemberAccessCaseAnnotationRole8062B9E8",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseCollectionCaseRetrievalAccessA2B49AF7": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageRawBucketBBD9BDC5",
+                        "Arn",
+                      ],
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "WriteRawCaseObjects",
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "account_number=*",
+                  ],
+                },
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageProcessedBucket69BE6922",
+                  "Arn",
+                ],
+              },
+              "Sid": "ListProcessedCases",
+            },
+            {
+              "Action": [
+                "dynamodb:DeleteItem",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "StorageIdempotencyTable5D6E4193",
+                  "Arn",
+                ],
+              },
+              "Sid": "IdempotencyRecords",
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesAnnotationQueue58F7E39D",
+                  "Arn",
+                ],
+              },
+              "Sid": "SendAnnotationReferences",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseCollectionCaseRetrievalAccessA2B49AF7",
+        "Roles": [
+          {
+            "Ref": "MemberAccessCaseRetrievalRoleB0C5E593",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CaseCollectionCaseRetrievalFunctionB07B13A0": {
+      "DependsOn": [
+        "CaseCollectionCaseRetrievalTelemetryPolicy9256885A",
+        "MemberAccessCaseRetrievalRoleDefaultPolicy00B98317",
+        "MemberAccessCaseRetrievalRoleB0C5E593",
+      ],
+      "Properties": {
+        "Architectures": [
+          "x86_64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": "Collects resolved Support cases per member account for annotation (sciprod)",
+        "Environment": {
+          "Variables": {
+            "ANNOTATION_QUEUE_URL": {
+              "Ref": "QueuesAnnotationQueue58F7E39D",
+            },
+            "CASE_INSIGHTS_UNIQUE_ID": "sciprod",
+            "IDEMPOTENCY_TABLE_NAME": {
+              "Ref": "StorageIdempotencyTable5D6E4193",
+            },
+            "LOOKBACK_MONTHS": "12",
+            "MEMBER_ROLE_NAME": "Support-Case-Analysis-Role-sciprod",
+            "MEMBER_ROLE_PARTITION": "aws",
+            "POWERTOOLS_LOGGER_LOG_EVENT": "false",
+            "POWERTOOLS_LOGGER_SAMPLE_RATE": "0",
+            "POWERTOOLS_LOG_LEVEL": "INFO",
+            "POWERTOOLS_METRICS_NAMESPACE": "SupportCaseInsights",
+            "POWERTOOLS_SERVICE_NAME": "case-retrieval",
+            "POWERTOOLS_TRACER_CAPTURE_ERROR": "false",
+            "POWERTOOLS_TRACER_CAPTURE_RESPONSE": "false",
+            "PROCESSED_BUCKET": {
+              "Ref": "StorageProcessedBucket69BE6922",
+            },
+            "RAW_BUCKET": {
+              "Ref": "StorageRawBucketBBD9BDC5",
+            },
+          },
+        },
+        "FunctionName": "Lambda-CaseRetrieval-sciprod",
+        "Handler": "app.handler",
+        "Layers": [
+          {
+            "Ref": "SharedLayersCommonLayer7C4E03F5",
+          },
+        ],
+        "LoggingConfig": {
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "CaseCollectionCaseRetrievalLogGroup6EF6F3DB",
+          },
+        },
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "MemberAccessCaseRetrievalRoleB0C5E593",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active",
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CaseCollectionCaseRetrievalFunctionSqsEventSourceCaseInsightsCoreStacksciprodQueuesActiveAccountsQueueD97CA927CC264691": {
+      "DependsOn": [
+        "CaseCollectionCaseRetrievalTelemetryPolicy9256885A",
+      ],
+      "Properties": {
+        "BatchSize": 1,
+        "EventSourceArn": {
+          "Fn::GetAtt": [
+            "QueuesActiveAccountsQueueB932EA89",
+            "Arn",
+          ],
+        },
+        "FunctionName": {
+          "Ref": "CaseCollectionCaseRetrievalFunctionB07B13A0",
+        },
+        "FunctionResponseTypes": [
+          "ReportBatchItemFailures",
+        ],
+        "ScalingConfig": {
+          "MaximumConcurrency": 5,
+        },
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Lambda::EventSourceMapping",
+    },
+    "CaseCollectionCaseRetrievalLogGroup6EF6F3DB": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/Lambda-CaseRetrieval-sciprod",
+        "RetentionInDays": 90,
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "CaseCollectionCaseRetrievalTelemetryPolicy9256885A": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "CaseCollectionCaseRetrievalLogGroup6EF6F3DB",
+                  "Arn",
+                ],
+              },
+              "Sid": "WriteOwnLogGroup",
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "WriteXRaySegments",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CaseCollectionCaseRetrievalTelemetryPolicy9256885A",
+        "Roles": [
+          {
+            "Ref": "MemberAccessCaseRetrievalRoleB0C5E593",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
     "MemberAccessCaseAnnotationRole8062B9E8": {
       "Properties": {
         "AssumeRolePolicyDocument": {
@@ -3620,6 +4760,38 @@ def sort_filter_rules(json_obj):
         ],
       },
       "Type": "AWS::IAM::Role",
+    },
+    "MemberAccessCaseAnnotationRoleDefaultPolicy92E2CEB4": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "sqs:ChangeMessageVisibility",
+                "sqs:DeleteMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:ReceiveMessage",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesAnnotationQueue58F7E39D",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "MemberAccessCaseAnnotationRoleDefaultPolicy92E2CEB4",
+        "Roles": [
+          {
+            "Ref": "MemberAccessCaseAnnotationRole8062B9E8",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
     },
     "MemberAccessCaseAnnotationRoleMemberRoleAccessDAA186D0": {
       "Properties": {
@@ -3680,6 +4852,38 @@ def sort_filter_rules(json_obj):
         ],
       },
       "Type": "AWS::IAM::Role",
+    },
+    "MemberAccessCaseRetrievalRoleDefaultPolicy00B98317": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "sqs:ChangeMessageVisibility",
+                "sqs:DeleteMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:ReceiveMessage",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "QueuesActiveAccountsQueueB932EA89",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "MemberAccessCaseRetrievalRoleDefaultPolicy00B98317",
+        "Roles": [
+          {
+            "Ref": "MemberAccessCaseRetrievalRoleB0C5E593",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
     },
     "MemberAccessCaseRetrievalRoleMemberRoleAccess9DED2A2B": {
       "Properties": {

@@ -2,6 +2,7 @@ import { Stack, type StackProps } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import type { CaseInsightsConfig } from '../config';
 import { AccountDiscovery } from '../constructs/account-discovery';
+import { CaseCollection } from '../constructs/case-collection';
 import { CoreStorage } from '../constructs/core-storage';
 import { MemberAccessRoles } from '../constructs/member-access-roles';
 import { PipelineQueues } from '../constructs/pipeline-queues';
@@ -23,6 +24,7 @@ export class CaseInsightsCoreStack extends Stack {
   public readonly queues: PipelineQueues;
   public readonly memberAccess: MemberAccessRoles;
   public readonly accountDiscovery: AccountDiscovery;
+  public readonly caseCollection: CaseCollection;
 
   public constructor(scope: Construct, id: string, props: CaseInsightsCoreStackProps) {
     super(scope, id, props);
@@ -37,6 +39,19 @@ export class CaseInsightsCoreStack extends Stack {
       idempotencyTable: this.storage.idempotencyTable,
       activeAccountsQueue: this.queues.activeAccounts.queue,
       failureQueue: this.queues.accountDiscoveryFailures,
+      commonLayer: this.layers.commonLayer,
+    });
+    this.caseCollection = new CaseCollection(this, 'CaseCollection', {
+      config: props.config,
+      rawBucket: this.storage.rawBucket,
+      processedBucket: this.storage.processedBucket,
+      idempotencyTable: this.storage.idempotencyTable,
+      activeAccountsQueue: this.queues.activeAccounts.queue,
+      annotationQueue: this.queues.annotation.queue,
+      summaryQueue: this.queues.summary.queue,
+      failureQueue: this.queues.workflowFailures,
+      retrievalRole: this.memberAccess.retrievalRole,
+      annotationRole: this.memberAccess.annotationRole,
       commonLayer: this.layers.commonLayer,
     });
   }

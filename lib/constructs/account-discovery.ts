@@ -1,6 +1,4 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { type CfnElement, Duration, Stack, TimeZone } from 'aws-cdk-lib';
+import { Duration, Stack, TimeZone } from 'aws-cdk-lib';
 import type { ITable } from 'aws-cdk-lib/aws-dynamodb';
 import { Policy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import type { ILayerVersion } from 'aws-cdk-lib/aws-lambda';
@@ -13,7 +11,7 @@ import type { IQueue } from 'aws-cdk-lib/aws-sqs';
 import { Construct, type IConstruct } from 'constructs';
 import { type CaseInsightsConfig, resourceNames } from '../config';
 import { acknowledgeNagFinding } from '../nag';
-import { REPO_ROOT } from '../packaging/python-assets';
+import { handlerDirectory, logicalIdOf } from './construct-utils';
 import { PipelineFunction } from './pipeline-function';
 
 /** Key prefix of run-scoped account lists; must equal ACCOUNT_LIST_PREFIX in common/account_list.py. */
@@ -192,24 +190,6 @@ export class AccountDiscovery extends Construct {
       }),
     });
   }
-}
-
-function handlerDirectory(name: string): string {
-  const dir = path.join(REPO_ROOT, 'src', 'lambda', name);
-  if (!fs.existsSync(path.join(dir, 'app.py'))) {
-    throw new Error(`Lambda handler not found: ${dir}/app.py`);
-  }
-  return dir;
-}
-
-/** Logical ID of a construct's CloudFormation resource, as cdk-nag renders it in finding IDs. */
-function logicalIdOf(construct: IConstruct): string {
-  const child = construct.node.defaultChild;
-  if (child === undefined) {
-    throw new Error(`${construct.node.path} has no CloudFormation resource`);
-  }
-  const stack = Stack.of(construct);
-  return String(stack.resolve(stack.getLogicalId(child as CfnElement)));
 }
 
 /** Role of the stack-level singleton function CDK uses to configure S3 bucket notifications. */

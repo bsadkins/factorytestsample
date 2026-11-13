@@ -18,6 +18,8 @@ describe('resource names', () => {
       accountLookupFunction: 'Lambda-AccountLookup-sci-dev',
       accountReaderFunction: 'Lambda-AccountReader-sci-dev',
       accountLookupSchedule: 'CaseInsights-AccountLookup-sci-dev',
+      caseRetrievalFunction: 'Lambda-CaseRetrieval-sci-dev',
+      caseAnnotationFunction: 'Lambda-CaseAnnotation-sci-dev',
       accountDiscoveryFailureQueue: 'CaseInsights-AccountDiscoveryFailures-sci-dev',
       caseAnalysisStateMachine: 'CaseAnalysis-sci-dev',
       glueDatabase: 'case_insights_sci_dev',
@@ -36,6 +38,8 @@ describe('resource names', () => {
     expect(names.accountLookupFunction.length).toBeLessThanOrEqual(64);
     expect(names.accountReaderFunction.length).toBeLessThanOrEqual(64);
     expect(names.accountLookupSchedule.length).toBeLessThanOrEqual(64);
+    expect(names.caseRetrievalFunction.length).toBeLessThanOrEqual(64);
+    expect(names.caseAnnotationFunction.length).toBeLessThanOrEqual(64);
     expect(names.accountDiscoveryFailureQueue.length).toBeLessThanOrEqual(80);
     expect(names.caseAnalysisStateMachine.length).toBeLessThanOrEqual(80);
     expect(names.coreStack.length).toBeLessThanOrEqual(128);

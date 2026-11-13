@@ -56,6 +56,7 @@ describe('Support Case Insights app', () => {
     const memberRoleFinding = `AwsSolutions-IAM5[Resource::arn:aws:iam::*:role/Support-Case-Analysis-Role-${config.uniqueId}]`;
     const accountListsFinding = `AwsSolutions-IAM5[Resource::<${coreStack.getLogicalId(coreStack.storage.accountListBucket.node.defaultChild as never)}.Arn>/account-lists/*]`;
     const lookupVersionsFinding = `AwsSolutions-IAM5[Resource::<${coreStack.getLogicalId(coreStack.accountDiscovery.lookupFunction.function.node.defaultChild as never)}.Arn>:*]`;
+    const rawObjectsFinding = `AwsSolutions-IAM5[Resource::<${coreStack.getLogicalId(coreStack.storage.rawBucket.node.defaultChild as never)}.Arn>/account_number=*]`;
     const notificationsHandler = coreStack.node.children.find((child) => child.node.id.startsWith('BucketNotificationsHandler'));
     expect(acknowledged.map(({ path: constructPath, id }) => [constructPath, id]).sort()).toEqual(
       [
@@ -71,6 +72,12 @@ describe('Support Case Insights app', () => {
         [`${core}/AccountDiscovery/AccountLookupAccess`, accountListsFinding],
         [`${core}/AccountDiscovery/AccountReaderAccess`, accountListsFinding],
         [`${core}/AccountDiscovery/AccountLookupScheduleRole`, lookupVersionsFinding],
+        [`${core}/CaseCollection/CaseRetrieval/TelemetryPolicy`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/CaseCollection/CaseRetrieval/Function`, 'AwsSolutions-L1'],
+        [`${core}/CaseCollection/CaseRetrievalAccess`, rawObjectsFinding],
+        [`${core}/CaseCollection/CaseAnnotation/TelemetryPolicy`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/CaseCollection/CaseAnnotation/Function`, 'AwsSolutions-L1'],
+        [`${core}/CaseCollection/CaseAnnotationAccess`, rawObjectsFinding],
         [
           `${notificationsHandler?.node.path ?? 'missing'}/Role`,
           'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]',

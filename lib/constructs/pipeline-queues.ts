@@ -13,7 +13,10 @@ export interface PipelineQueueResources {
   readonly annotation: StageQueueResources;
   /** Annotated case references; consumed by the workflow starter. */
   readonly summary: StageQueueResources;
-  /** Terminal queue for case-analysis attempts that exhausted their workflow retries. */
+  /**
+   * Terminal queue for case-analysis attempts that exhausted their workflow retries, and for
+   * conversations that annotation stored but that are too large to summarise.
+   */
   readonly workflowFailures: IQueue;
   /** Terminal queue for discovery schedule deliveries and asynchronous invocations that exhausted retries. */
   readonly accountDiscoveryFailures: IQueue;
