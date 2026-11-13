@@ -51,6 +51,7 @@ from common.s3_json import (
 )
 from common.sqs import InvalidMessageError, parse_message_body
 from common.sqs_batch import RecordFailedError, process_sqs_batch, run_idempotent
+from common.tracing import withhold_exception_messages
 from common.workflow import (
     ACTIVE_STATUSES,
     FAILED_STATUSES,
@@ -76,6 +77,7 @@ if TYPE_CHECKING:
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+withhold_exception_messages()
 
 IDEMPOTENCY_EXPIRY_SECONDS: Final = 7 * 24 * 60 * 60
 IDEMPOTENCY_CONFIG: Final = idempotency_config(expires_after_seconds=IDEMPOTENCY_EXPIRY_SECONDS)

@@ -31,6 +31,7 @@ from common.account_list import (
 from common.aws import client_config
 from common.processed import validate_account_id
 from common.s3_json import S3PreconditionFailedError, write_json
+from common.tracing import withhold_exception_messages
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+withhold_exception_messages()
 
 ACTIVE: Final = "ACTIVE"
 # Organizations throttles ListAccounts aggressively; let the SDK back off for longer.

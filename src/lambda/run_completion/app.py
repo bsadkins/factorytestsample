@@ -62,6 +62,7 @@ from common.run_markers import (
 )
 from common.s3_json import read_json_object
 from common.safe_logging import error_fields
+from common.tracing import withhold_exception_messages
 from common.workflow import (
     ACTIVE_STATUSES,
     FAILED_STATUSES,
@@ -81,6 +82,7 @@ if TYPE_CHECKING:
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+withhold_exception_messages()
 
 TIME_MARGIN_SECONDS: Final = 30
 MIN_LOOKBACK_HOURS: Final = 24

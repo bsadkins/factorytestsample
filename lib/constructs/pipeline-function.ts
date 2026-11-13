@@ -22,8 +22,9 @@ export const METRICS_NAMESPACE = 'SupportCaseInsights';
 /**
  * Powertools settings applied to every function. Event and response capture stay off so case
  * content never reaches logs or X-Ray trace metadata. Callers cannot override these. They do not
- * govern exceptions that the X-Ray SDK records on its automatic AWS SDK subsegments; a handler
- * withholds those messages by calling `common.tracing.withhold_exception_messages`.
+ * govern exceptions that the X-Ray SDK records on its automatic AWS SDK subsegments; every handler
+ * that creates a Tracer withholds those messages by calling
+ * `common.tracing.withhold_exception_messages`.
  */
 export const SAFE_POWERTOOLS_ENVIRONMENT: Readonly<Record<string, string>> = {
   POWERTOOLS_METRICS_NAMESPACE: METRICS_NAMESPACE,

@@ -44,6 +44,7 @@ from common.s3_json import (
     write_json,
 )
 from common.templates import prompt_version
+from common.tracing import withhold_exception_messages
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+withhold_exception_messages()
 
 MAX_RAW_METADATA_BYTES: Final = 1024 * 1024
 _CHECKPOINT_CODES: Final = {

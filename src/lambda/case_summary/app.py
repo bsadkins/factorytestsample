@@ -51,6 +51,7 @@ from common.s3_json import (
 )
 from common.summary import check_summary, describe_issues
 from common.templates import prompt_version, render_summary_correction, render_summary_prompt
+from common.tracing import withhold_exception_messages
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -59,6 +60,7 @@ if TYPE_CHECKING:
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+withhold_exception_messages()
 
 MAX_SUMMARY_CORRECTIONS: Final = 1
 

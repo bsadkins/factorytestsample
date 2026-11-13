@@ -69,6 +69,7 @@ from common.s3_json import (
     write_json,
 )
 from common.safe_logging import error_fields
+from common.tracing import withhold_exception_messages
 from common.workflow import (
     ACTIVE_STATUSES,
     FAILED_STATUSES,
@@ -95,6 +96,7 @@ if TYPE_CHECKING:
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+withhold_exception_messages()
 
 CASE_PREFIX: Final = "account_number="
 CURSOR_KEY: Final = "cleanup-state/cursor.json"

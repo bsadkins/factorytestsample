@@ -63,6 +63,7 @@ from common.support import (
     support_api_region,
     support_client,
 )
+from common.tracing import withhold_exception_messages
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.batch.types import PartialItemFailureResponse
@@ -76,6 +77,7 @@ if TYPE_CHECKING:
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+withhold_exception_messages()
 
 RAW_SCHEMA_VERSION: Final = 1
 # Longer than the 4-day source-queue retention; the key includes the run ID, so expiry never lets

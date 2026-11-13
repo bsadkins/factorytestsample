@@ -68,6 +68,7 @@ from common.support import (
     support_api_region,
     support_client,
 )
+from common.tracing import withhold_exception_messages
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.batch.types import PartialItemFailureResponse
@@ -80,6 +81,7 @@ if TYPE_CHECKING:
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+withhold_exception_messages()
 
 IDEMPOTENCY_EXPIRY_SECONDS: Final = 7 * 24 * 60 * 60
 IDEMPOTENCY_CONFIG: Final = idempotency_config(expires_after_seconds=IDEMPOTENCY_EXPIRY_SECONDS)

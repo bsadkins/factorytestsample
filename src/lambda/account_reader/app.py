@@ -35,6 +35,7 @@ from common.processed import validate_account_id
 from common.s3_json import S3JsonDecodeError, S3ObjectTooLargeError, read_json
 from common.safe_logging import error_fields
 from common.sqs import send_messages
+from common.tracing import withhold_exception_messages
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+withhold_exception_messages()
 
 # Long enough to cover S3's duplicate deliveries and Lambda's asynchronous retries; the key
 # includes the run's object identity, so expiry never lets another run collide.

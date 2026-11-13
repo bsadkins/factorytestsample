@@ -57,6 +57,7 @@ from common.failures import (
 )
 from common.safe_logging import error_fields
 from common.sqs import send_messages
+from common.tracing import withhold_exception_messages
 from common.workflow import MAX_ATTEMPTS_PER_RUN, execution_name, parse_execution_name
 
 if TYPE_CHECKING:
@@ -67,6 +68,7 @@ if TYPE_CHECKING:
 logger = Logger()
 tracer = Tracer()
 metrics = Metrics()
+withhold_exception_messages()
 
 # Errors whose messages are stable, content-free codes (see common.analysis and common.bedrock).
 SAFE_CODE_ERRORS: Final = frozenset(
