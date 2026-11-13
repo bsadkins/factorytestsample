@@ -16,11 +16,11 @@ This branch currently contains the project foundation and the shared Python runt
 - observability (`Observability`): the hourly run completion check that emits the daily-completion heartbeat, the alarm topic, the alarms and the operations dashboard, described in [Observability and daily completion](#observability-and-daily-completion);
 - reusable constructs for later pipeline stages: a standard Python function factory (`PipelineFunction`) and the Bedrock model allowlist policy (`BedrockInvokePolicy`);
 - the shared Python package `src/lambda/common/` (taxonomies, prompt rendering, model-output validation, Bedrock, STS, S3, SQS and retry helpers) and the prompt templates in `src/templates/`, packaged as two Lambda layers;
-- the optional Analytics stack (`enableAnalytics`), described in [Analytics](#analytics);
+- the optional Analytics stack (`enableAnalytics`) and the CSV exporter `scripts/generate_csv_insights.py`, described in [Analytics](#analytics);
 - strict TypeScript and Python tooling, exact dependency pins, an npm lockfile and hash-locked Python requirements;
 - local lint, type-check, test, synth and security commands.
 
-The MCP server, CDK pipeline and full documentation are **not implemented yet**; [docs/runbook.md](docs/runbook.md) is a provisional alarm runbook. Nothing has been deployed to AWS; StackSet instance creation is untested until a real deployment.
+The MCP server, CDK pipeline and full documentation are **not implemented yet**. Available guides: [docs/athena.md](docs/athena.md) (Athena analytics and optional QuickSight setup), [docs/csv_export.md](docs/csv_export.md) (CSV export for Power BI and Excel) and [docs/runbook.md](docs/runbook.md), a provisional alarm runbook. Nothing has been deployed to AWS; StackSet instance creation is untested until a real deployment.
 
 ## Security foundation
 
@@ -57,6 +57,8 @@ The MCP server, CDK pipeline and full documentation are **not implemented yet**;
 - **Catalog.** Glue database `case_insights_<uniqueId>` (hyphens become underscores) holds the external table `case_summary` over `s3://<processed bucket>/`, partitioned by `account_number` and `case_number` (`account_number=<id>/case_number=<displayId>/data.json`). It uses the OpenX JSON SerDe with case-sensitive matching: Glue column names are lower case, and each column maps explicitly to its mixed-case JSON key (for example `rca_category` reads `RCA_Category`). Every column is a string; dates stay ISO-8601 text. A Jest test checks the columns against `common.processed_record.PROCESSED_FIELDS`.
 - **Partition refresh.** The crawler `case-insights-partition-crawler-<uniqueId>` runs on `schedules.crawler` (default `cron(0 9 * * ? *)`, 09:00 UTC). It targets the existing table, adds new partitions and only logs schema changes, so newly processed cases become queryable after the next crawl. Run it sooner with the `ManualCrawlerStartCommand` stack output (`aws glue start-crawler --name case-insights-partition-crawler-<uniqueId> --region <region>`). Its role, trusted only by Glue, can read processed records and refresh partitions of this table; it cannot write or delete records.
 - **Workgroup.** `CaseInsights-<uniqueId>` (Athena engine version 3) enforces its configuration: results go to `query-results/` in a dedicated private, versioned, SSE-S3 results bucket (`SSE_S3` result encryption, no KMS key) that expires results after `operations.athena.resultsRetentionDays` (default 30), and each query stops after `operations.athena.bytesScannedCutoffPerQuery` bytes (default 10 GiB, minimum 10 MiB). The results bucket logs to the Core access-log bucket under `athena-results/`.
+- **Queries and QuickSight.** [docs/athena.md](docs/athena.md) documents the table schema and column mappings, crawler delay and manual refresh, analyst permissions, the example query library (RCA distribution, lifecycle categories by service, day-of-week, week-of-month and monthly patterns, severity trends and top accounts) and an optional manual QuickSight setup. QuickSight is not provisioned by this application.
+- **CSV export.** `scripts/generate_csv_insights.py` exports processed records straight from the processed bucket to CSV with boto3 and pandas. It needs only `s3:ListBucket` on the bucket and `s3:GetObject` on `account_number=*`, does not use Athena and does not wait for the crawler. [docs/csv_export.md](docs/csv_export.md) covers permissions, every option, filtering, output, exit codes, scheduling, Power BI and Excel.
 
 ## Prerequisites
 
@@ -108,7 +110,8 @@ None of the following has been run. Local tests, snapshots, synth and cdk-nag re
 - [ ] A scheduled or manual run processes real cases through Bedrock (model access and Marketplace subscription in place) and writes processed records.
 - [ ] Every dead-letter queue and the terminal failure queues stay empty after a normal run.
 - [ ] The dashboard shows data, the alarms are in the expected state and the alarm email subscription is confirmed; `DailyRunCompleted` arrives after a run.
-- [ ] The crawler adds partitions for real processed records, and Athena queries in `CaseInsights-<uniqueId>` return them with results encrypted in the results bucket.
+- [ ] The crawler adds partitions for real processed records, and Athena queries in `CaseInsights-<uniqueId>` (including the [query library](docs/athena.md#query-library)) return them with results encrypted in the results bucket.
+- [ ] The optional manual QuickSight setup works with the enforced workgroup, and a CSV export from the real processed bucket succeeds with only the documented S3 permissions.
 - [ ] MCP client connectivity, including Kiro, and rejection of unsigned requests with HTTP 403 (once the MCP server exists).
 
 ## Configuration
@@ -174,11 +177,12 @@ lib/constructs/      CDK constructs (storage, queues, roles, function factory, B
 lib/packaging/       Docker-free Python asset bundling and content hashing
 lib/stacks/          CDK stacks
 lib/nag.ts           cdk-nag registration
-docs/                Operations documentation (provisional alarm runbook)
+docs/                Operations documentation (Athena and CSV export guides, provisional alarm runbook)
 config/              Schemas and environment configuration
 src/lambda/<name>/   One directory per Lambda handler (app.py)
 src/lambda/common/   Shared Python Lambda package (shared layer, /opt/python/common)
 src/templates/       Prompt templates (templates layer, /opt/templates)
+scripts/             CSV exporter (generate_csv_insights.py) and taxonomy documentation renderer
 scripts/build/       Wheel-only layer bundler
 scripts/security/    Dependency advisory scanner
 test/                Jest and pytest suites; prompt fixtures in test/fixtures/prompts
