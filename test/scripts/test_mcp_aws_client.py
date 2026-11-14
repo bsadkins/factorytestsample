@@ -27,6 +27,7 @@ from mcp_kit import dataset, make_kit
 from mcp_tools.context import ToolContext
 from sigv4_loopback import (
     ENV_KEY,
+    ENV_SECRET,
     ENV_TOKEN,
     POWERTOOLS_ENV,
     PROFILE_KEY,
@@ -499,13 +500,19 @@ def test_plain_http_is_accepted_for_loopback(plain_fixture: Fixture, tmp_path: P
 # Local message validation ------------------------------------------------------------------------
 
 
-def sized_call(request_id: int, size: int) -> bytes:
-    """A valid tools/call line of exactly `size` UTF-8 bytes, padded with two-byte characters."""
+def sized_call(request_id: int | bytes, size: int) -> bytes:
+    """A valid tools/call line of exactly `size` UTF-8 bytes, padded with two-byte characters.
+
+    A bytes `request_id` is inserted as literal JSON wire bytes.
+    """
 
     def encode(padding: str) -> bytes:
         arguments = {"sql": f"SELECT '{padding}'"}
-        message = rpc("tools/call", request_id, {"name": "query_athena", "arguments": arguments})
-        return json.dumps(message, ensure_ascii=False).encode("utf-8")
+        message = rpc("tools/call", 0, {"name": "query_athena", "arguments": arguments})
+        data = json.dumps(message, ensure_ascii=False).encode("utf-8")
+        if isinstance(request_id, int):
+            return data.replace(b'"id": 0', b'"id": ' + str(request_id).encode(), 1)
+        return data.replace(b'"id": 0', b'"id": ' + request_id, 1)
 
     needed = size - len(encode(""))
     data = encode("é" * (needed // 2) + "a" * (needed % 2))
@@ -620,6 +627,313 @@ def test_endpoint_error_without_id_for_a_null_id_request_stays_id_less(
         "error": error,
     }
     assert bridge.finish()[0] == 0
+
+
+# Request ids -------------------------------------------------------------------------------------
+
+# MCP 2025-11-25: a response id is a string or an integer; an id that cannot identify the request
+# is omitted. Strings with an unpaired surrogate are not valid Unicode text, so they cannot be
+# written to stdout as UTF-8 and cannot identify a request either.
+UNUSABLE_IDS: list[bytes] = [b"[]", b"true", b"false", b"{}", b'{"a":1}', b"1.5", b'"\\ud800"']
+HANDLER_INVALID_ID = {
+    "jsonrpc": "2.0",
+    "error": {"code": -32600, "message": "id must be a string or an integer"},
+}
+HANDLER_INVALID_TEXT = {
+    "jsonrpc": "2.0",
+    "error": {"code": -32600, "message": "Request is not valid UTF-8 text"},
+}
+
+
+def raw_call(raw_id: bytes, method: bytes = b'"ping"') -> bytes:
+    """A request line whose id and method are given as literal JSON wire bytes."""
+    return b'{"jsonrpc":"2.0","id":' + raw_id + b',"method":' + method + b"}"
+
+
+def assert_protocol_clean(bridge: Bridge) -> None:
+    """Every stdout line is strict UTF-8 JSON-RPC and every id present is a usable request id."""
+    for line in bridge.stdout_lines:
+        document = json.loads(line.decode("utf-8", errors="strict"))
+        assert document["jsonrpc"] == "2.0"
+        if "id" in document:
+            request_id = document["id"]
+            assert isinstance(request_id, str) or type(request_id) is int
+            if isinstance(request_id, str):
+                request_id.encode("utf-8")
+
+
+def finish_cleanly(bridge: Bridge) -> str:
+    code, rest, stderr = bridge.finish()
+    assert code == 0
+    assert rest == []
+    assert "Unexpected bridge failure" not in stderr
+    assert "Traceback" not in stderr
+    assert_protocol_clean(bridge)
+    assert_clean(stderr, b"".join(bridge.stdout_lines))
+    return stderr
+
+
+def test_unusable_ids_are_omitted_from_endpoint_errors(
+    fixture: Fixture, lambda_backend: Backend, tmp_path: Path
+) -> None:
+    fixture.use(lambda_backend)
+    bridge = Bridge(["--max-concurrency", "1"], bridge_env(tmp_path, fixture))
+    expected: list[dict[str, Any]] = []
+    for raw_id in UNUSABLE_IDS:
+        bridge.send_raw(raw_call(raw_id))
+        expected.append(HANDLER_INVALID_TEXT if raw_id == b'"\\ud800"' else HANDLER_INVALID_ID)
+    bridge.send_raw(raw_call(b'"\\ud83d\\ude00"'))  # an escaped surrogate pair is valid text
+    expected.append({"jsonrpc": "2.0", "id": "\U0001f600", "result": {}})
+    for valid_id in (0, "", "s", 101):
+        bridge.send(rpc("ping", valid_id))
+        expected.append({"jsonrpc": "2.0", "id": valid_id, "result": {}})
+
+    assert [bridge.recv() for _ in expected] == expected
+    finish_cleanly(bridge)
+    assert len(fixture.received) == len(expected)
+    assert all(received.signature.valid for received in fixture.received)
+
+
+def test_escaped_surrogate_ids_each_get_one_reply(
+    fixture: Fixture, lambda_backend: Backend, tmp_path: Path
+) -> None:
+    fixture.use(lambda_backend)
+    bridge = Bridge(["--max-concurrency", "1"], bridge_env(tmp_path, fixture))
+    surrogate = b'"\\ud800"'
+    bridge.send_raw(raw_call(surrogate, b"[]"))  # answered locally: method is not a string
+    bridge.send_raw(raw_call(surrogate))  # forwarded; the handler rejects it without an id
+    bridge.send_raw(raw_call(b'"\\udc00x"', b'{"m":1}'))
+    bridge.send(rpc("ping", 202))
+
+    assert [bridge.recv() for _ in range(4)] == [
+        invalid_method_error(),
+        HANDLER_INVALID_TEXT,
+        invalid_method_error(),
+        {"jsonrpc": "2.0", "id": 202, "result": {}},
+    ]
+    stderr = finish_cleanly(bridge)
+    assert len(bridge.stdout_lines) == 4
+    assert len(fixture.received) == 2
+    assert fixture.received[1].message()["id"] == 202
+    assert stderr.count("Refused a message whose method is not a string") == 2
+
+
+def test_unusable_ids_are_omitted_from_local_invalid_request_errors(
+    fixture: Fixture, tmp_path: Path
+) -> None:
+    fixture.use(lambda received: result_for(received, {}))
+    bridge = Bridge(["--max-concurrency", "1"], bridge_env(tmp_path, fixture))
+    expected: list[dict[str, Any]] = []
+    for raw_id in UNUSABLE_IDS:
+        bridge.send_raw(raw_call(raw_id, b"7"))
+        expected.append(invalid_method_error())
+        bridge.send_raw(sized_call(raw_id, 32769))
+        expected.append(oversized_error())
+    bridge.send_raw(raw_call(b"0", b"7"))
+    expected.append(invalid_method_error(id=0))
+    bridge.send_raw(sized_call(b"0", 32769))
+    expected.append(oversized_error(id=0))
+    bridge.send_raw(sized_call(b'""', 32769))
+    expected.append(oversized_error(id=""))
+
+    assert [bridge.recv() for _ in expected] == expected
+    finish_cleanly(bridge)
+    assert fixture.received == []
+
+
+def oversized_error(**request_id: object) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        **request_id,
+        "error": {
+            "code": -32600,
+            "message": "Request body exceeds 32768 bytes",
+            "data": {"source": "mcp_aws_client", "maxBytes": 32768},
+        },
+    }
+
+
+def unreachable_error(**request_id: object) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        **request_id,
+        "error": {
+            "code": -32001,
+            "message": "The MCP endpoint could not be reached",
+            "data": {
+                "source": "mcp_aws_client",
+                "errorType": "EndpointConnectionError",
+                "retryable": True,
+            },
+        },
+    }
+
+
+def test_unusable_ids_are_omitted_from_connection_errors(tmp_path: Path) -> None:
+    with socket.socket() as probe:
+        # Bound but not listening, so connections are refused without leaving the host.
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        env = {**base_env(tmp_path, f"http://127.0.0.1:{port}/v1/mcp"), **env_credentials()}
+        bridge = Bridge(["--max-concurrency", "1"], env)
+        expected: list[dict[str, Any]] = []
+        for raw_id in [*UNUSABLE_IDS, b"null"]:
+            bridge.send_raw(raw_call(raw_id))
+            expected.append(unreachable_error())
+        for valid_id in (0, "c", 303):
+            bridge.send(rpc("ping", valid_id))
+            expected.append(unreachable_error(id=valid_id))
+
+        assert [bridge.recv() for _ in expected] == expected
+        finish_cleanly(bridge)
+
+
+def test_unusable_ids_are_omitted_from_timeout_and_tls_errors(
+    fixture: Fixture, tmp_path: Path
+) -> None:
+    def backend(received: Received) -> Reply:
+        time.sleep(3)
+        return 200, {"Content-Type": "application/json"}, b"{}"
+
+    fixture.use(backend)
+    bridge = Bridge(["--timeout", "1", "--max-concurrency", "2"], bridge_env(tmp_path, fixture))
+    bridge.send_raw(raw_call(b"[]"))
+    bridge.send_raw(raw_call(b'"\\ud800"'))
+    replies = [bridge.recv(), bridge.recv()]
+    bridge.send(rpc("ping", 0))
+    replies.append(bridge.recv())
+    assert [reply.get("id", "-") for reply in replies] == ["-", "-", 0]
+    assert all(reply["error"]["data"]["errorType"] == "ReadTimeoutError" for reply in replies)
+    finish_cleanly(bridge)
+
+    env = bridge_env(tmp_path, fixture)
+    del env["AWS_CA_BUNDLE"]  # the self-signed fixture certificate is not trusted
+    untrusted = Bridge(["--max-concurrency", "1"], env)
+    untrusted.send_raw(raw_call(b"true"))
+    untrusted.send_raw(raw_call(b'"\\ud800"'))
+    untrusted.send(rpc("ping", 0))
+    replies = [untrusted.recv() for _ in range(3)]
+    assert [reply.get("id", "-") for reply in replies] == ["-", "-", 0]
+    assert all(reply["error"]["data"]["errorType"] == "SSLError" for reply in replies)
+    finish_cleanly(untrusted)
+
+
+def scripted_by_method(received: Received) -> Reply:
+    """Endpoint failures selected by method; `echo/*` echo the request's raw id back."""
+    message = json.loads(received.body)
+    method = message["method"]
+    if method == "http/502":
+        return 502, {"Content-Type": "text/html"}, b"<html>Bad Gateway</html>"
+    if method == "invalid/reply":
+        return 200, {"Content-Type": "text/plain"}, b"ok"
+    error = {"code": -32600, "message": "rejected"}
+    if method == "echo/result":
+        return json_reply({"jsonrpc": "2.0", "id": message["id"], "result": {}})
+    if method == "echo/error":
+        return json_reply({"jsonrpc": "2.0", "id": message["id"], "error": error}, 400)
+    return json_reply({"jsonrpc": "2.0", "error": error}, 400)
+
+
+def test_unusable_ids_are_omitted_from_http_and_invalid_response_errors(
+    plain_fixture: Fixture, tmp_path: Path
+) -> None:
+    plain_fixture.use(scripted_by_method)
+    bridge = Bridge(["--max-concurrency", "1"], bridge_env(tmp_path, plain_fixture))
+    methods = [b'"http/502"', b'"invalid/reply"', b'"echo/result"', b'"echo/error"', b'"idless"']
+    codes: list[tuple[object, object]] = []
+    for raw_id in [b"[]", b"true", b"{}", b"1.5", b"0", b'"r"']:
+        for method in methods:
+            bridge.send_raw(raw_call(raw_id, method))
+            reply = bridge.recv()
+            outcome = reply["error"]["code"] if "error" in reply else "result"
+            codes.append((reply.get("id", "-"), outcome))
+
+    unusable = [("-", -32000), ("-", -32002), ("-", -32002), ("-", -32002), ("-", -32600)]
+    assert codes == [
+        *unusable * 4,
+        *[(0, -32000), (0, -32002), (0, "result"), (0, -32600), (0, -32600)],
+        *[("r", -32000), ("r", -32002), ("r", "result"), ("r", -32600), ("r", -32600)],
+    ]
+    finish_cleanly(bridge)
+
+
+def test_reply_ids_must_match_the_request_id_exactly(
+    plain_fixture: Fixture, tmp_path: Path
+) -> None:
+    replies = {0: False, 1: 1.0, 2: "2"}
+    plain_fixture.use(
+        lambda received: json_reply(
+            {"jsonrpc": "2.0", "id": replies[received.message()["id"]], "result": {}}
+        )
+    )
+    bridge = Bridge(["--max-concurrency", "1"], bridge_env(tmp_path, plain_fixture))
+    for request_id in replies:
+        reply = bridge.request(rpc("ping", request_id))
+        assert type(reply["id"]) is int
+        assert reply["id"] == request_id
+        assert reply["error"]["code"] == -32002
+    finish_cleanly(bridge)
+
+
+def test_endpoint_text_with_an_unpaired_surrogate_is_written_as_utf8(
+    plain_fixture: Fixture, tmp_path: Path
+) -> None:
+    plain_fixture.use(
+        lambda received: (
+            200,
+            {"Content-Type": "application/json"},
+            b'{"jsonrpc":"2.0","id":7,"result":{"text":"caf\\u00e9 \\udc80"}}',
+        )
+    )
+    bridge = Bridge([], bridge_env(tmp_path, plain_fixture))
+    assert bridge.request(rpc("ping", 7)) == {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {"text": "caf\u00e9 \udc80"},
+    }
+    assert bridge.request(rpc("ping", 7))["id"] == 7
+    finish_cleanly(bridge)
+
+
+class FailingCredentials:
+    def get_frozen_credentials(self) -> object:
+        raise RuntimeError("refresh failed")
+
+
+class FailingHttp:
+    def send(self, request: object) -> object:
+        raise RuntimeError("unexpected")
+
+
+@pytest.mark.parametrize(
+    ("credentials", "http", "code"),
+    [
+        pytest.param(FailingCredentials(), None, -32003, id="credentials"),
+        pytest.param(None, FailingHttp(), -32603, id="unexpected-failure"),
+    ],
+)
+def test_in_process_error_paths_omit_unusable_ids(
+    client_module: ModuleType, credentials: object, http: object, code: int
+) -> None:
+    settings = client_module.Settings(
+        url="http://127.0.0.1:9/v1/mcp",
+        region=REGION,
+        profile=None,
+        ca_bundle=None,
+        timeout=1,
+        concurrency=1,
+    )
+    frozen = client_module.Credentials(ENV_KEY, ENV_SECRET, ENV_TOKEN)
+    bridge = client_module.Bridge(settings, credentials or frozen, http or FailingHttp())
+    for raw_id in [*UNUSABLE_IDS, b"null"]:
+        reply = bridge.handle_line(raw_call(raw_id))
+        assert "id" not in reply
+        assert reply["error"]["code"] == code
+    for valid_id in (b"0", b'"x"'):
+        reply = bridge.handle_line(raw_call(valid_id))
+        assert reply["id"] == json.loads(valid_id)
+        assert reply["error"]["code"] == code
+    assert bridge.handle_line(b'{"jsonrpc":"2.0","method":"notifications/initialized"}') is None
 
 
 # Configuration -----------------------------------------------------------------------------------

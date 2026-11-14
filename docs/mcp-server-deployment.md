@@ -140,8 +140,9 @@ Stdout carries MCP protocol messages only. Diagnostics go to stderr and never in
 | `-32003` | Credentials could not be obtained or refreshed | `errorType` |
 | `-32600` | The message exceeds the endpoint's 32,768-byte limit, is a batch, or has a `method` that is not a string; it is not sent | |
 | `-32700` | The line is not valid JSON; it is not sent | |
+| `-32603` | Unexpected failure inside the bridge | |
 
-When the bridge cannot tell which request a local error belongs to (invalid JSON, a batch, a line over 1 MiB, or a malformed message without a usable string or integer `id`), the error has no `id` member, as the MCP 2025-11-25 schema requires; it never sends `"id": null`.
+When the bridge cannot tell which request an error belongs to (invalid JSON, a batch, a line over 1 MiB, or a message without a usable `id`), the error has no `id` member, as the MCP 2025-11-25 schema requires; it never sends `"id": null`. A usable `id` is an integer, including `0`, or a string that is valid Unicode text; booleans, arrays, objects, fractional numbers and strings containing an escaped unpaired surrogate such as `"\ud800"` are never echoed, by local errors or by endpoint errors the bridge relays. A reply whose `id` does not match the request's exactly is reported as `-32002`. Every request receives exactly one reply; an unexpected failure inside the bridge is answered with `-32603`.
 
 JSON-RPC errors produced by the MCP function itself (for example `-32602` for an unknown tool) are passed through unchanged. The body of an API Gateway error is never copied, because signature errors can echo the canonical request, including the session token.
 

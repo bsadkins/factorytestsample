@@ -8,8 +8,8 @@ JSON-RPC reply is written to stdout as one line.
 
 Stdout carries MCP protocol messages only. Diagnostics go to stderr and never include
 credentials, signatures, request or response bodies, tool arguments or case content. HTTP and
-connection failures for a request become JSON-RPC errors carrying the request's own id, so the
-client never waits for a reply that will not arrive.
+connection failures for a request become JSON-RPC errors carrying the request's own id (omitted
+when it is not a valid MCP request id), so the client never waits for a reply that will not arrive.
 
 Only boto3/botocore are required; the script does not import the Lambda code.
 """
@@ -66,6 +66,7 @@ UPSTREAM_HTTP_ERROR: Final = -32000
 UPSTREAM_UNREACHABLE: Final = -32001
 UPSTREAM_INVALID_RESPONSE: Final = -32002
 CREDENTIALS_UNAVAILABLE: Final = -32003
+INTERNAL_ERROR: Final = -32603
 
 EXECUTE_API_HOST: Final = re.compile(
     r"^[a-z0-9]+\.execute-api\.([a-z]{2}(?:-[a-z]+)+-\d+)\.amazonaws\.com(?:\.cn)?$"
@@ -125,8 +126,8 @@ JSON-RPC errors (-32000 HTTP error, -32001 unreachable or timed out, -32002 inva
 Plain http:// URLs are accepted only for loopback hosts, for local testing.
 
 Messages the endpoint cannot accept are answered locally: -32700 for invalid JSON, -32600 for
-batches, oversized messages and non-string methods. An error whose request id is unknown has no
-id member.
+batches, oversized messages and non-string methods. An error has no id member when the request
+id is missing, null, or not a string or integer (strings must be valid Unicode text).
 
 Exit status: 0 stdin closed, 2 invalid options or configuration, 3 AWS credentials or
 configuration could not be loaded.
@@ -193,14 +194,41 @@ def resolve_region(url: str, explicit: str | None, profile_region: str | None) -
     return region
 
 
+RequestId = str | int
+
+
+def _usable_id(value: object) -> RequestId | None:
+    """`value` if it can identify a request in a reply, else None.
+
+    MCP request ids are strings or integers (booleans are not integers). A string decoded from
+    an escaped unpaired surrogate such as `"\\ud800"` is not Unicode text: it cannot be written
+    to stdout as UTF-8, so it cannot identify the request in a reply either.
+    """
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return None
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _same_id(reply_id: object, request_id: RequestId | None) -> bool:
+    """Whether a reply's id is exactly the request's; `0 == False` and `1 == 1.0` do not count."""
+    return request_id is not None and type(reply_id) is type(request_id) and reply_id == request_id
+
+
 def _rpc_error(
-    request_id: object, code: int, message: str, data: Mapping[str, Any]
+    request_id: RequestId | None, code: int, message: str, data: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """A bridge-local JSON-RPC error; without a known request id it has no `id` member.
+    """A bridge-local JSON-RPC error; without a usable request id it has no `id` member.
 
     The MCP 2025-11-25 schema makes `JSONRPCErrorResponse.id` optional but never null.
     """
     response: dict[str, Any] = {"jsonrpc": "2.0"}
+    request_id = _usable_id(request_id)
     if request_id is not None:
         response["id"] = request_id
     response["error"] = {
@@ -209,13 +237,6 @@ def _rpc_error(
         "data": {"source": "mcp_aws_client", **data},
     }
     return response
-
-
-def _usable_id(value: object) -> str | int | None:
-    """`value` if it is a valid MCP request id (string or integer), else None."""
-    if isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool)):
-        return value
-    return None
 
 
 def _error_type(response: AWSResponse) -> str | None:
@@ -302,17 +323,32 @@ class Bridge:
             return _rpc_error(
                 None, INVALID_REQUEST, "Batch and non-object messages are not supported", {}
             )
+        is_request = "method" in message and "id" in message
+        request_id = _usable_id(message.get("id")) if is_request else None
+        try:
+            return self._dispatch(line, message, is_request, request_id)
+        except Exception as exc:
+            logger.error("Unexpected bridge failure (%s)", type(exc).__name__)
+            if not is_request:
+                return None
+            return _rpc_error(request_id, INTERNAL_ERROR, "Internal bridge error", {})
+
+    def _dispatch(
+        self,
+        line: bytes,
+        message: Mapping[str, Any],
+        is_request: bool,
+        request_id: RequestId | None,
+    ) -> dict[str, Any] | None:
         if "method" in message and not isinstance(message["method"], str):
             # Neither a request nor a notification; JSON-RPC answers it even without an id.
             logger.warning("Refused a message whose method is not a string")
             return _rpc_error(
-                _usable_id(message.get("id")),
+                request_id,
                 INVALID_REQUEST,
                 "Invalid Request: method must be a string",
                 {},
             )
-        is_request = "method" in message and "id" in message
-        request_id = message.get("id") if is_request else None
         label = _method_label(message)
         if len(line) > MAX_REQUEST_BYTES:
             logger.warning("Refused %s: message exceeds %d bytes", label, MAX_REQUEST_BYTES)
@@ -336,7 +372,7 @@ class Bridge:
         return headers
 
     def _forward(
-        self, body: bytes, message: Mapping[str, Any], label: str, request_id: object
+        self, body: bytes, message: Mapping[str, Any], label: str, request_id: RequestId | None
     ) -> dict[str, Any] | None:
         started = time.monotonic()
         try:
@@ -373,7 +409,7 @@ class Bridge:
         return self._reply(response, message, label, request_id, elapsed_ms)
 
     def _credentials_error(
-        self, label: str, request_id: object, exc: BaseException
+        self, label: str, request_id: RequestId | None, exc: BaseException
     ) -> dict[str, Any]:
         logger.warning("%s not sent: AWS credentials unavailable (%s)", label, type(exc).__name__)
         return _rpc_error(
@@ -388,7 +424,7 @@ class Bridge:
         response: AWSResponse,
         message: Mapping[str, Any],
         label: str,
-        request_id: object,
+        request_id: RequestId | None,
         elapsed_ms: int,
     ) -> dict[str, Any] | None:
         status = response.status_code
@@ -411,7 +447,7 @@ class Bridge:
                     document.pop("id", None)
                 else:
                     document["id"] = request_id
-            elif reply_id != request_id:
+            elif not _same_id(reply_id, request_id):
                 logger.warning("%s failed: response id does not match the request", label)
                 return _rpc_error(
                     request_id,
@@ -474,7 +510,12 @@ class StdoutWriter:
         self._lock = threading.Lock()
 
     def write(self, message: Mapping[str, Any]) -> None:
-        data = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        try:
+            data = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        except UnicodeEncodeError:
+            # Endpoint text may carry an unpaired surrogate from a JSON escape; ASCII output
+            # re-escapes it, so the line is still valid UTF-8.
+            data = json.dumps(message, ensure_ascii=True, separators=(",", ":")).encode("ascii")
         with self._lock:
             self._stream.write(data + b"\n")
             self._stream.flush()

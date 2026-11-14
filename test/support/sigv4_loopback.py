@@ -389,7 +389,8 @@ class Bridge:
         self.stdout_lines.append(line)
         assert line.endswith(b"\n")
         assert line.count(b"\n") == 1
-        document: dict[str, Any] = json.loads(line)
+        # json.loads(bytes) would accept surrogates encoded with 'surrogatepass'.
+        document: dict[str, Any] = json.loads(line.decode("utf-8", errors="strict"))
         assert document["jsonrpc"] == "2.0"
         return document
 
