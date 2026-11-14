@@ -1,7 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { aws_s3 as s3 } from 'aws-cdk-lib';
+import { type CfnElement, aws_s3 as s3 } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
+import type { IConstruct } from 'constructs';
 import {
   addCaseInsightsStacks,
   CaseInsightsCoreStack,
@@ -87,6 +88,18 @@ describe('Support Case Insights app', () => {
     for (const roleId of scheduleRoles) {
       expect(trustStatements(template, roleId)).toEqual([schedulerTrustStatement(core.config)]);
     }
+  });
+
+  test('core stack outputs the exact targets the reprocess script checks against its deployment', () => {
+    const { core } = addCaseInsightsStacks(testApp(), { env: 'dev' });
+    const template = Template.fromStack(core);
+    const ref = (resource: IConstruct): string => core.getLogicalId(resource.node.defaultChild as CfnElement);
+    expect(template.findOutputs('*')).toMatchObject({
+      RawBucketName: { Value: { Ref: ref(core.storage.rawBucket) } },
+      ProcessedBucketName: { Value: { Ref: ref(core.storage.processedBucket) } },
+      CaseAnalysisStateMachineArn: { Value: { Ref: ref(core.caseAnalysis.stateMachine) } },
+      CaseSummaryQueueUrl: { Value: { Ref: ref(core.queues.summary.queue) } },
+    });
   });
 
   test.each(['dev', 'prod'] as const)('%s core stack template snapshot', (env) => {

@@ -1,4 +1,4 @@
-import { Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Stack, type StackProps } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import type { CaseInsightsConfig } from '../config';
 import { AccountDiscovery } from '../constructs/account-discovery';
@@ -96,5 +96,19 @@ export class CaseInsightsCoreStack extends Stack {
         { label: 'AccountDiscoveryFailures', queue: queues.accountDiscoveryFailures },
       ],
     });
+    this.addRecoveryOutputs();
+  }
+
+  /** Stable output keys that operator tooling resolves and checks against the configured deployment. */
+  private addRecoveryOutputs(): void {
+    const outputs: [string, string, string][] = [
+      ['RawBucketName', this.storage.rawBucket.bucketName, 'Raw case data, ownership markers and stage checkpoints'],
+      ['ProcessedBucketName', this.storage.processedBucket.bucketName, 'Committed processed case records'],
+      ['CaseAnalysisStateMachineArn', this.caseAnalysis.stateMachine.stateMachineArn, 'CaseAnalysis Standard workflow'],
+      ['CaseSummaryQueueUrl', this.queues.summary.queue.queueUrl, 'Summary queue consumed by the workflow starter'],
+    ];
+    for (const [key, value, description] of outputs) {
+      new CfnOutput(this, `${key}Output`, { key, value, description });
+    }
   }
 }

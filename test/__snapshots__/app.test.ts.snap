@@ -4,6 +4,24 @@ exports[`Support Case Insights app dev core stack template snapshot 1`] = `
 {
   "Description": "Support Case Insights core pipeline (scidev)",
   "Outputs": {
+    "CaseAnalysisStateMachineArn": {
+      "Description": "CaseAnalysis Standard workflow",
+      "Value": {
+        "Ref": "CaseAnalysisStateMachine234D35AF",
+      },
+    },
+    "CaseSummaryQueueUrl": {
+      "Description": "Summary queue consumed by the workflow starter",
+      "Value": {
+        "Ref": "QueuesSummaryQueue969A41CA",
+      },
+    },
+    "ProcessedBucketName": {
+      "Description": "Committed processed case records",
+      "Value": {
+        "Ref": "StorageProcessedBucket69BE6922",
+      },
+    },
     "PublishOutputFnGetAttStorageProcessedBucket69BE6922ArnCAED39FC": {
       "Value": {
         "Fn::GetAtt": [
@@ -25,6 +43,12 @@ exports[`Support Case Insights app dev core stack template snapshot 1`] = `
     "PublishOutputRefStorageProcessedBucket69BE692206355CC2": {
       "Value": {
         "Ref": "StorageProcessedBucket69BE6922",
+      },
+    },
+    "RawBucketName": {
+      "Description": "Raw case data, ownership markers and stage checkpoints",
+      "Value": {
+        "Ref": "StorageRawBucketBBD9BDC5",
       },
     },
   },
@@ -7611,6 +7635,24 @@ exports[`Support Case Insights app prod core stack template snapshot 1`] = `
 {
   "Description": "Support Case Insights core pipeline (sciprod)",
   "Outputs": {
+    "CaseAnalysisStateMachineArn": {
+      "Description": "CaseAnalysis Standard workflow",
+      "Value": {
+        "Ref": "CaseAnalysisStateMachine234D35AF",
+      },
+    },
+    "CaseSummaryQueueUrl": {
+      "Description": "Summary queue consumed by the workflow starter",
+      "Value": {
+        "Ref": "QueuesSummaryQueue969A41CA",
+      },
+    },
+    "ProcessedBucketName": {
+      "Description": "Committed processed case records",
+      "Value": {
+        "Ref": "StorageProcessedBucket69BE6922",
+      },
+    },
     "PublishOutputFnGetAttStorageProcessedBucket69BE6922ArnCAED39FC": {
       "Value": {
         "Fn::GetAtt": [
@@ -7627,6 +7669,12 @@ exports[`Support Case Insights app prod core stack template snapshot 1`] = `
     "PublishOutputRefStorageProcessedBucket69BE692206355CC2": {
       "Value": {
         "Ref": "StorageProcessedBucket69BE6922",
+      },
+    },
+    "RawBucketName": {
+      "Description": "Raw case data, ownership markers and stage checkpoints",
+      "Value": {
+        "Ref": "StorageRawBucketBBD9BDC5",
       },
     },
   },

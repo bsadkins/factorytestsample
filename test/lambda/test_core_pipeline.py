@@ -10,13 +10,19 @@ from handler output fed back into the assertions.
 from __future__ import annotations
 
 import dataclasses
+import importlib.util
 import io
 import json
 import logging
 import re
+import sys
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import ModuleType
+from typing import Any
 
+import boto3
 import pytest
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from case_retrieval import app as retrieval_app
@@ -49,6 +55,7 @@ from pipeline_kit import (
     run_day,
     run_id_for,
 )
+from workflow_kit import STATE_MACHINE_ARN
 
 ALPHA, BETA, GAMMA, DELTA, EPSILON = (
     "111111111111",
@@ -81,6 +88,7 @@ PROCESSED_FIELDS = {
     "Prompt_Version",
 }
 LOGGER_SERVICE = "handler-test"
+REPROCESS_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "reprocess-cases.py"
 CORE_FUNCTIONS = {
     "AccountLookup",
     "AccountReader",
@@ -676,3 +684,123 @@ def test_dispatched_case_is_awaited_after_a_settling_failure_and_lost_access(
     assert pipeline.heartbeats() == 1
     counts = pipeline.read(RAW, run_key(run, "completion.json"))["counts"]
     assert (counts["accountsSkipped"], counts["cases"], counts["casesProcessed"]) == (3, 3, 3)
+
+
+@dataclasses.dataclass
+class ReprocessCli:
+    """`scripts/reprocess-cases.py` wired to the pipeline's buckets, summary queue and workflow.
+
+    Target validation against the Core stack outputs is covered in test_reprocess_cases.py.
+    """
+
+    script: ModuleType
+    s3: Any
+    config_dir: Path
+    capsys: pytest.CaptureFixture[str]
+
+    def run(self, *args: str) -> tuple[int, str]:
+        self.capsys.readouterr()
+        code = self.script.main(["--env", "e2e", "--config-dir", str(self.config_dir), *args])
+        return int(code), self.capsys.readouterr().out
+
+
+@pytest.fixture
+def reprocess_cli(
+    pipeline: Pipeline,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> ReprocessCli:
+    spec = importlib.util.spec_from_file_location("reprocess_cases_e2e", REPROCESS_SCRIPT)
+    assert spec is not None
+    assert spec.loader is not None
+    script = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = script
+    spec.loader.exec_module(script)
+    config = {
+        "uniqueId": "e2e",
+        "environment": "e2e",
+        "managementAccountId": MANAGEMENT,
+        "region": "us-east-1",
+        "lookbackMonths": 12,
+    }
+    (tmp_path / "e2e.json").write_text(json.dumps(config), encoding="utf-8")
+    s3 = boto3.client("s3", region_name="us-east-1")
+    clients = script.Clients(
+        sts=None, cloudformation=None, s3=s3, sqs=pipeline.sqs, sfn=pipeline.sfn
+    )
+    monkeypatch.setattr(script, "create_clients", lambda _profile, _region: clients)
+    monkeypatch.setattr(
+        script,
+        "resolve_deployment",
+        lambda config, _clients: script.Deployment(
+            config, MANAGEMENT, RAW, PROCESSED, STATE_MACHINE_ARN, pipeline.queue_urls["summary"]
+        ),
+    )
+    monkeypatch.setattr(script, "now", lambda: pipeline.clock[0])
+    return ReprocessCli(script, s3, tmp_path, capsys)
+
+
+def test_opt_in_reprocess_reanalyses_only_the_selected_case_under_a_fresh_identity(
+    pipeline: Pipeline, reprocess_cli: ReprocessCli, start: datetime, log_stream: io.StringIO
+) -> None:
+    pipeline.discover()
+    pipeline.settle()
+    [original_execution] = pipeline.executions_for("1001")
+    original_record = pipeline.processed(ALPHA, "1001")
+    assert original_record is not None
+    inferences = len(pipeline.bedrock.calls)
+    created = (run_day(start) - timedelta(days=3)).date().isoformat()
+    window = ("--from", created, "--to", created, "--account-id", ALPHA, "--delay-seconds", "0")
+
+    code, preview = reprocess_cli.run(*window, "--dry-run")
+    assert code == 0
+    assert re.search(rf"^requeue +{ALPHA} 1001 ", preview, re.MULTILINE)
+    assert " 1002 " not in preview
+    token = re.search(r"Plan token: (rp-[0-9a-f]{12})", preview)
+    assert token is not None
+    # The first reference reaches the starter before the record is removed: it is answered from
+    # the processed record, exactly like an ordinary redrive of a committed case.
+    delivered_early: list[int] = []
+
+    def deliver_before_first_delete(**_: object) -> None:
+        if not delivered_early:
+            delivered_early.append(pipeline.deliver("summary"))
+
+    reprocess_cli.s3.meta.events.register(
+        "before-call.s3.DeleteObject", deliver_before_first_delete
+    )
+    code, report = reprocess_cli.run(*window, "--confirm", token.group(1))
+    assert code == 0
+    assert delivered_early == [1]
+    assert pipeline.metric("CasesAlreadyProcessed", "WorkflowStarter") == 1
+    assert "Totals: requeued 1" in report
+    assert pipeline.processed(ALPHA, "1001") is None
+
+    # The follow-up reference starts a new execution whose name no closed execution holds.
+    pipeline.settle()
+    new_executions = [e for e in pipeline.executions_for("1001") if e is not original_execution]
+    [reanalysis] = new_executions
+    assert reanalysis.status == "SUCCEEDED"
+    assert reanalysis.name != original_execution.name
+    ref = SummaryRef.parse(json.loads(reanalysis.input)["case"])
+    assert ref.run_id != json.loads(original_execution.input)["case"]["runId"]
+    assert reanalysis.name == execution_name(ALPHA, "1001", ref.run_id, 1)
+    assert len(pipeline.bedrock.calls_for("1001", "summary")) == 2
+    assert {c.display for c in pipeline.bedrock.calls[inferences:]} == {"1001"}
+    record = pipeline.processed(ALPHA, "1001")
+    assert record is not None
+    assert {k: record[k] for k in ORIGINAL_FIELDS} == {
+        k: original_record[k] for k in ORIGINAL_FIELDS
+    }
+    assert pipeline.versions(PROCESSED, case_key(ALPHA, "1001")) == 2
+    for account, display in ((ALPHA, "1002"), (EPSILON, "5001")):
+        assert pipeline.versions(PROCESSED, case_key(account, display)) == 1
+
+    # Ordinary discovery goes back to skipping the case once it is committed again.
+    pipeline.advance(days=1)
+    pipeline.discover()
+    pipeline.settle()
+    assert len(pipeline.bedrock.calls_for("1001", "summary")) == 2
+    assert pipeline.versions(PROCESSED, case_key(ALPHA, "1001")) == 2
+    assert_no_case_content(pipeline, log_stream)
