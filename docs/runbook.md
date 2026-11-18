@@ -1,6 +1,6 @@
 # Alarm runbook
 
-> **Provisional.** This runbook lists every alarm the core stack creates, with first diagnosis and repair steps. The full operations documentation set will extend it; the alarm inventory here is checked against the synthesised alarms by `test/constructs/observability.test.ts`.
+> **Provisional.** This runbook lists every alarm the core stack creates, with first diagnosis and repair steps, and the [recovery tools](#recovery-tools) for dead-letter queue redrive and opt-in reprocessing. The full operations documentation set will extend it; the alarm inventory here is checked against the synthesised alarms by `test/constructs/observability.test.ts`.
 
 All alarms are named `CaseInsights-<uniqueId>-<purpose>` and notify the SNS topic `CaseInsights-Alarms-<uniqueId>`. When `alarmEmail` is set (it is required in prod), AWS sends a confirmation email to that address after deployment; nothing is delivered until the recipient selects the confirmation link. The dashboard `CaseInsights-<uniqueId>` shows every metric referenced below and the state of every alarm.
 
@@ -88,15 +88,15 @@ Every dead-letter queue and terminal queue alarms when it holds at least one vis
 
 ### QueueMessages-ActiveAccountsDLQ
 
-Account messages for which case retrieval failed `operations.queues.maxReceiveCount` times. Check the [LambdaErrors-CaseRetrieval](#lambdaerrors-caseretrieval) causes, then redrive the messages to `CaseInsights-ActiveAccounts-<uniqueId>` with an SQS redrive (start-message-move-task). The account's run stays incomplete until it is retrieved or the run leaves the run-completion lookback window.
+Account messages for which case retrieval failed `operations.queues.maxReceiveCount` times. Check the [LambdaErrors-CaseRetrieval](#lambdaerrors-caseretrieval) causes, then redrive the messages to `CaseInsights-ActiveAccounts-<uniqueId>` with `scripts/redrive-dlq.sh --env <env> --queue active-accounts` (see [Redrive a stage dead-letter queue](#redrive-a-stage-dead-letter-queue)). The account's run stays incomplete until it is retrieved or the run leaves the run-completion lookback window.
 
 ### QueueMessages-AnnotationDLQ
 
-Case references for which annotation failed repeatedly. Fix the cause and redrive to `CaseInsights-CaseAnnotation-<uniqueId>`.
+Case references for which annotation failed repeatedly. Fix the cause and redrive to `CaseInsights-CaseAnnotation-<uniqueId>` with `scripts/redrive-dlq.sh --env <env> --queue annotation`.
 
 ### QueueMessages-SummaryDLQ
 
-Annotated case references the workflow starter could not start. Fix the cause and redrive to `CaseInsights-CaseSummary-<uniqueId>`.
+Annotated case references the workflow starter could not start. Fix the cause and redrive to `CaseInsights-CaseSummary-<uniqueId>` with `scripts/redrive-dlq.sh --env <env> --queue summary`. Committed cases among them are answered as already processed.
 
 ### QueueMessages-WorkflowFailures
 
@@ -110,6 +110,117 @@ Annotated case references the workflow starter could not start. Fix the cause an
 ### QueueMessages-AccountDiscoveryFailures
 
 Schedule deliveries or asynchronous invocations of account lookup or account reader that exhausted their retries. Each message includes the original event. Fix the cause (see [LambdaErrors-AccountLookup](#lambdaerrors-accountlookup) and [LambdaErrors-AccountReader](#lambdaerrors-accountreader)) and invoke account lookup manually to start a fresh run.
+
+## Recovery tools
+
+Two scripts change pipeline state on purpose. Both check that they target the right deployment before reading anything, show what they would do, and change nothing until you confirm with the token from that preview. Both run from the repository root with credentials for the management account, in the Region of `config/<env>.json`. Neither script deletes any S3 object version, writes to AWS Support, or calls Bedrock.
+
+| Situation | Tool |
+| --- | --- |
+| Messages in a stage dead-letter queue (active accounts, annotation or summary) after the cause is fixed | `scripts/redrive-dlq.sh` |
+| A record on the workflow failure queue to retry before the next scheduled run | Send its case reference with a new `redriveId` to the summary queue (see [QueueMessages-WorkflowFailures](#queuemessages-workflowfailures)) |
+| A discovery failure | Invoke account lookup (see [QueueMessages-AccountDiscoveryFailures](#queuemessages-accountdiscoveryfailures)) |
+| Committed cases to analyse again, for example after a prompt or model change | `scripts/reprocess-cases.py` |
+
+Redrive and the failure-record retry never analyse a committed case again: the starter, every stage and case retrieval answer a reference to a case with a processed record as already processed. Reprocessing is the only deliberate exception.
+
+### Redrive a stage dead-letter queue
+
+`scripts/redrive-dlq.sh --env <env> --queue <active-accounts|annotation|summary>` starts one SQS message move task (`StartMessageMoveTask`) from `CaseInsights-<Stage>-<uniqueId>-DLQ` to `CaseInsights-<Stage>-<uniqueId>`. It needs the AWS CLI v2 and `python3`. Run `scripts/redrive-dlq.sh --help` for every option.
+
+Before anything moves, the script:
+
+1. reads `config/<env>.json` and refuses unknown queues; the workflow-failures and account-discovery-failures terminal queues have no source queue and are refused with the right procedure;
+2. checks that the credentials belong to `managementAccountId`;
+3. looks up both queues by their deployment names in that account and Region, checks both ARNs, and checks that the dead-letter queue is the stage queue's `RedrivePolicy` target, so a queue of another deployment or environment is never used;
+4. refuses to start while a move task from the dead-letter queue is RUNNING or CANCELLING;
+5. prints both queues, the approximate number of visible and in-flight messages and a redrive token. The token is derived from the account, Region and queue pair, so a token from another environment or queue is rejected.
+
+`--dry-run` stops after the preview. Without it, the script asks for the token, or takes it from `--confirm` (non-interactive use requires `--confirm`). An empty dead-letter queue needs no redrive and nothing is started.
+
+```text
+$ scripts/redrive-dlq.sh --env dev --queue summary --dry-run
+Redrive preview for deployment scidev (env dev, account 111111111111, us-east-1)
+From dead-letter queue: CaseInsights-CaseSummary-scidev-DLQ (arn:aws:sqs:us-east-1:111111111111:CaseInsights-CaseSummary-scidev-DLQ)
+To stage queue:         CaseInsights-CaseSummary-scidev (arn:aws:sqs:us-east-1:111111111111:CaseInsights-CaseSummary-scidev)
+Messages in the dead-letter queue (approximate): 7 visible, 1 in flight
+Move rate: chosen by SQS
+Redrive token: rd-<token>
+Dry run: no changes were made. To start the redrive, rerun with --confirm rd-<token>.
+
+$ scripts/redrive-dlq.sh --env dev --queue summary --confirm rd-<token>
+...
+Started move task 0b1d7c1e-example-task-handle.
+Task status: RUNNING (2 of about 8 messages moved)
+Moving a message back to CaseInsights-CaseSummary-scidev does not mean it was processed. ...
+Progress: aws sqs list-message-move-tasks --source-arn arn:aws:sqs:us-east-1:111111111111:CaseInsights-CaseSummary-scidev-DLQ --region us-east-1
+Cancel:   aws sqs cancel-message-move-task --task-handle 0b1d7c1e-example-task-handle --region us-east-1
+```
+
+(Account and task handle are invented; `rd-<token>` stands for the token the preview prints.)
+
+Messages are moved unchanged, so every reference keeps its account, case, run and redrive identity; for a summary reference whose earlier attempt closed, the starter recovers it under the next attempt name of the same run. A started task only means SQS is moving the messages: watch the dead-letter queue depth, the stage function's logs and the alarms. Messages that fail again return to the dead-letter queue after `operations.queues.maxReceiveCount` receives.
+
+Exit status: 0 started (task RUNNING or COMPLETED) or nothing to redrive; 1 an AWS request failed, the task was not started, the task reports FAILED or CANCELLED, or its status could not be read after starting (do not start another; check with the printed command); 2 invalid options, configuration or target; 3 cancelled or not confirmed. AWS error messages are not printed, only their error codes.
+
+Permissions: `sts:GetCallerIdentity`; `sqs:GetQueueUrl` and `sqs:GetQueueAttributes` on both queues; `sqs:ListMessageMoveTasks`, `sqs:StartMessageMoveTask`, `sqs:ReceiveMessage`, `sqs:DeleteMessage` and `sqs:GetQueueAttributes` on the dead-letter queue; `sqs:SendMessage` on the stage queue; `sqs:CancelMessageMoveTask` on the dead-letter queue to cancel. The queues use SSE-SQS, so no KMS permissions are needed.
+
+### Reprocess committed cases
+
+`scripts/reprocess-cases.py --env <env> --from YYYY-MM-DD --to YYYY-MM-DD` makes committed cases in an explicit date range eligible for analysis again. Run it with the repository's virtual environment (`.venv/bin/python scripts/reprocess-cases.py ...`); `--help` lists every option.
+
+Selection:
+
+- **Date field.** `--date-field timeCreated` (default) uses the Support case creation time stored in the processed record; `--date-field Case_Retrieval_Date` uses the time the pipeline retrieved the case for the committed analysis.
+- **Time zone and bounds.** Values are converted to UTC. `--from` and `--to` are UTC calendar days and both are inclusive: the range is `[--from 00:00:00Z, day after --to 00:00:00Z)`. A record at `2026-03-31T23:59:59Z` is inside `--to 2026-03-31`; one at `2026-04-01T00:00:00Z` is not.
+- **No implicit scope.** Both dates are required and must be valid; a reversed range is refused. There is no "all records" mode, and a range that matches nothing changes nothing. `--account-id` (repeatable) and `--case` (with exactly one `--account-id`) narrow the scope further. Plans that would change more than `--max-cases` cases (default 100, at most 5000) are refused.
+- **Targets.** The credentials must belong to `managementAccountId`. Buckets, the summary queue and the state machine come from the `RawBucketName`, `ProcessedBucketName`, `CaseSummaryQueueUrl` and `CaseAnalysisStateMachineArn` outputs of `CaseInsightsCoreStack-<uniqueId>`; the queue and state machine must carry this deployment's names, and both buckets must have versioning enabled.
+
+For each selected case the preview shows one action:
+
+- **requeue**: the raw `data.json` and `communications.json` are still present and consistent, so a new execution can analyse them.
+- **rediscover**: the raw inputs have expired, but the case was created inside the collection lookback window (with two days to spare), so the next scheduled run collects it again.
+- **skip**: anything else, left unchanged. This includes a RUNNING execution of the case, an execution in PENDING_REDRIVE, an ownership marker naming an execution that is being started (claimed less than an hour ago), a Case Cleanup reset in progress, an unreadable marker or a failed status lookup (status unknown), and expired raw inputs outside the lookback window.
+
+`--dry-run` stops after the preview and prints the plan token. Without it, the script asks for the token, or takes it from `--confirm`. The token covers the exact records and processed-record versions in the preview, so if anything changed, run a new preview.
+
+After confirmation, each case is handled on its own:
+
+1. The script checks again that the processed record has the previewed version and that no work became active; otherwise the case is skipped.
+2. For **requeue**, it sends a summary reference with a delivery delay (`--delay-seconds`, default 60) under a fresh run ID (`<timestamp>-<random>`) and a redrive ID `reprocess-...`. The new run makes the Workflow Starter start attempt 1 of a new execution name, so a closed execution name is never reused.
+3. It removes the stage checkpoints, then the processed record (conditional on the previewed ETag, so a record rewritten meanwhile is kept). If removal finished close to or after the delay, it sends one follow-up reference (redrive ID `<redrive ID>-f`); duplicate references never start a second execution.
+
+A reference that arrives while the processed record still exists is answered as already processed, so a run that stops before removing a record leaves that case as it was. If a follow-up reference cannot be sent, the report prints the exact message to send to the summary queue. If the script is killed after removing a record but before a needed follow-up, the case has no processed record and may have no pending reference: send its case reference to the summary queue with a new `redriveId`, or let Case Cleanup and the next scheduled run collect it again while it is inside the lookback window. The report lists every case as `requeued`, `rediscover`, `skipped` or `failed`, with its previous processed version ID, and exits 1 when any case failed. A queued reference only starts a new execution: check the CaseAnalysis executions, the workflow failure queue and the processed record for the result.
+
+Versioned objects: the processed record and checkpoints are removed with plain deletes, which add S3 delete markers. No version is deleted by version ID, so an older record can never become current again. The previous processed version stays restorable until `operations.storage.noncurrentVersionRetentionDays` expires it: to restore one, copy that version over the current key (`aws s3api copy-object --copy-source '<bucket>/<key>?versionId=<id>' --bucket <bucket> --key <key>`). Until a case is committed again it has no processed record, so Athena and the MCP server do not return it, and Case Cleanup may reset it like any other uncommitted case once its inputs are older than the cleanup grace; the next scheduled run then collects it again while it is inside the lookback window.
+
+```text
+$ .venv/bin/python scripts/reprocess-cases.py --env dev --from 2026-03-01 --to 2026-03-31 --dry-run
+Reprocess preview for deployment scidev (env dev, account 111111111111, us-east-1)
+Date field: timeCreated (UTC) from 2026-03-01T00:00:00Z inclusive to 2026-04-01T00:00:00Z exclusive (2026-03-01 to 2026-03-31 inclusive)
+Scope: every account
+Examined 4 processed records: 3 in range, 1 outside the range (unchanged), 0 unreadable (unchanged).
+ACTION      ACCOUNT      CASE                 timeCreated          PROMPT              PROCESSED VERSION                  REASON
+requeue     111122223333 170000000001         2026-03-01T00:00:00Z pv-0123456789abcdef 49d7bc84-9fa0-4923-b0b3-b314a94b53cc raw inputs available; a new execution is queued
+skip        111122223333 170000000004         2026-03-15T09:30:00Z pv-0123456789abcdef 666631b3-55bf-42ee-8fc8-32fa54394e92 a RUNNING CaseAnalysis execution belongs to the case
+requeue     444455556666 170000000002         2026-03-31T23:59:59Z pv-0123456789abcdef 4b9af83f-7ba1-4f1b-9c01-05429aecd6bb raw inputs available; a new execution is queued
+Plan token: rp-<token> (2 case(s) to change)
+Dry run: no changes were made. To execute this plan, rerun with --confirm rp-<token>.
+
+$ .venv/bin/python scripts/reprocess-cases.py --env dev --from 2026-03-01 --to 2026-03-31 --confirm rp-<token>
+...
+Reprocess run ID 20261114T120000Z-ef77f0ed, redrive ID reprocess-20261114120000-ef77f0ed
+requeued    111122223333 170000000001 previous version 49d7bc84-9fa0-4923-b0b3-b314a94b53cc: record removed; new execution queued
+requeued    444455556666 170000000002 previous version 4b9af83f-7ba1-4f1b-9c01-05429aecd6bb: record removed; new execution queued
+Totals: requeued 2
+Queued references only start new executions; check the CaseAnalysis executions, the workflow failure queue and the processed records for the actual results.
+```
+
+(Accounts, cases and versions are invented; `rp-<token>` stands for the token the preview prints.)
+
+Exit status: 0 done or nothing to do; 1 some cases failed; 2 invalid options, configuration or target; 3 cancelled or not confirmed.
+
+Permissions: `sts:GetCallerIdentity`; `cloudformation:DescribeStacks` on `CaseInsightsCoreStack-<uniqueId>`; `s3:GetBucketVersioning` on the raw and processed buckets; `s3:ListBucket`, `s3:GetObject` and `s3:DeleteObject` on the processed bucket; `s3:GetObject` on the raw bucket (`data.json`, `communications.json`, `workflow.json`, `checkpoints/*`) and `s3:DeleteObject` on `account_number=*/case_number=*/checkpoints/*`; `sqs:GetQueueAttributes` and `sqs:SendMessage` on the summary queue; `states:ListExecutions` on the state machine and `states:DescribeExecution` on its executions. The buckets use SSE-S3, so no KMS permissions are needed.
 
 ## Failure records and reconciliation
 
