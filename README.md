@@ -17,10 +17,11 @@ This branch currently contains the project foundation and the shared Python runt
 - reusable constructs for later pipeline stages: a standard Python function factory (`PipelineFunction`) and the Bedrock model allowlist policy (`BedrockInvokePolicy`);
 - the shared Python package `src/lambda/common/` (taxonomies, prompt rendering, model-output validation, Bedrock, STS, S3, SQS and retry helpers) and the prompt templates in `src/templates/`, packaged as two Lambda layers;
 - the optional Analytics stack (`enableAnalytics`) and the CSV exporter `scripts/generate_csv_insights.py`, described in [Analytics](#analytics);
+- the optional approval-gated CDK pipeline (`-c pipeline=true`), described in [Optional CDK pipeline](#optional-cdk-pipeline);
 - strict TypeScript and Python tooling, exact dependency pins, an npm lockfile and hash-locked Python requirements;
 - local lint, type-check, test, synth and security commands.
 
-The MCP server's CDK stack, CDK pipeline and full documentation are **not implemented yet**. Available guides: [docs/athena.md](docs/athena.md) (Athena analytics and optional QuickSight setup), [docs/csv_export.md](docs/csv_export.md) (CSV export for Power BI and Excel), [docs/mcp-server-deployment.md](docs/mcp-server-deployment.md) (the SigV4 stdio bridge `scripts/mcp_aws_client.py` with Kiro and Claude Desktop setup) and [docs/runbook.md](docs/runbook.md), a provisional alarm runbook that also covers dead-letter queue redrive and opt-in reprocessing. Nothing has been deployed to AWS; StackSet instance creation is untested until a real deployment.
+The full documentation is **not complete yet**. Available guides: [docs/pipeline.md](docs/pipeline.md) (the optional approval-gated CDK pipeline), [docs/athena.md](docs/athena.md) (Athena analytics and optional QuickSight setup), [docs/csv_export.md](docs/csv_export.md) (CSV export for Power BI and Excel), [docs/mcp-server-deployment.md](docs/mcp-server-deployment.md) (the SigV4 stdio bridge `scripts/mcp_aws_client.py` with Kiro and Claude Desktop setup) and [docs/runbook.md](docs/runbook.md), a provisional alarm runbook that also covers dead-letter queue redrive and opt-in reprocessing. Nothing has been deployed to AWS; StackSet instance creation is untested until a real deployment.
 
 ## Security foundation
 
@@ -144,7 +145,11 @@ Rules enforced before synthesis include:
 - `apiGatewayLogging.existingRoleArn` is required in existing mode, rejected in managed mode and must be a role in `managementAccountId`; dev and prod in the same account and Region must use identical `apiGatewayLogging` settings, so they share one owner of the account-wide setting;
 - unknown fields are rejected.
 
-The pipeline configuration requires an existing CodeConnections ARN in the pipeline account and the `main` branch. Dev and prod must use different `uniqueId` values in the same organization and management account, and the same `apiGatewayLogging` settings.
+The pipeline configuration requires an existing CodeConnections ARN in the pipeline account and the `main` branch. Dev and prod must use different `uniqueId` values in the same organization, management account and Region as the pipeline, and the same `apiGatewayLogging` settings.
+
+## Optional CDK pipeline
+
+Standalone `npx cdk deploy --all -c env=<env>` stays the default. `-c pipeline=true` (without `env`) instead synthesises `CaseInsightsPipelineStack`, a CDK Pipelines app in the management account: source from `main` through an existing CodeConnections connection, a Build step that runs `npm run verify` and synthesises the pipeline, self-mutation, the shared API Gateway logging stack when needed, dev, then a manual `PromoteToProd` approval before prod. It reads `config/pipeline.json` (copy `config/pipeline.example.json`) plus `config/dev.json` and `config/prod.json`. Bootstrapping, authorising the connection and the first deployment are left to an administrator, and the approval does not protect against people who can write to `main`. See [docs/pipeline.md](docs/pipeline.md).
 
 ## Python Lambda packaging
 
@@ -184,9 +189,10 @@ bin/                 CDK app entry point
 lib/config/          Typed configuration, validation and resource names
 lib/constructs/      CDK constructs (storage, queues, roles, function factory, Bedrock policy, layers, pipeline stages)
 lib/packaging/       Docker-free Python asset bundling and content hashing
-lib/stacks/          CDK stacks
+lib/stacks/          CDK stacks (including the optional pipeline stack)
+lib/stages/          CDK Pipelines stages (shared API Gateway logging, one environment)
 lib/nag.ts           cdk-nag registration
-docs/                Operations documentation (Athena and CSV export guides, provisional alarm and recovery runbook)
+docs/                Operations documentation (pipeline, Athena and CSV export guides, provisional alarm and recovery runbook)
 config/              Schemas and environment configuration
 src/lambda/<name>/   One directory per Lambda handler (app.py)
 src/lambda/common/   Shared Python Lambda package (shared layer, /opt/python/common)

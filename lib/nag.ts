@@ -1,4 +1,5 @@
 import { type App, Stack, Validations } from 'aws-cdk-lib';
+import type { CfnPolicy } from 'aws-cdk-lib/aws-iam';
 import { AwsSolutionsChecks } from 'cdk-nag';
 import { flattenCfnReference } from 'cdk-nag/lib/utils/flatten-cfn-reference';
 import type { IConstruct } from 'constructs';
@@ -49,6 +50,78 @@ export function acknowledgeWildcardResourceFinding(scope: IConstruct, resource: 
         acknowledgeNagFinding(scope, `AwsSolutions-IAM5[Resource::${rendered}]`, reason);
       }
       return [];
+    },
+  });
+}
+
+/** One expected wildcard in a policy that aws-cdk-lib generates, as cdk-nag names it (`Action::...` or `Resource::...`). */
+export interface GeneratedWildcardRule {
+  readonly finding: string | RegExp;
+  readonly reason: string;
+}
+
+interface PolicyDocumentJson {
+  readonly Statement?: readonly { Effect?: string; Action?: unknown; Resource?: unknown }[];
+}
+
+function asList(value: unknown): unknown[] {
+  if (value === undefined) {
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
+}
+
+/** The AwsSolutions-IAM5 finding names cdk-nag reports for a resolved policy document (same rules as cdk-nag). */
+export function iamWildcardFindings(document: PolicyDocumentJson): string[] {
+  const findings = new Set<string>();
+  for (const statement of document.Statement ?? []) {
+    if (statement.Effect !== 'Allow') {
+      continue;
+    }
+    for (const action of asList(statement.Action)) {
+      if (typeof action === 'string' && action.includes('*')) {
+        findings.add(`Action::${action}`);
+      }
+    }
+    for (const resource of asList(statement.Resource)) {
+      const rendered = flattenCfnReference(resource);
+      if (rendered.includes('*')) {
+        findings.add(`Resource::${rendered}`);
+      }
+    }
+  }
+  return [...findings];
+}
+
+/**
+ * Acknowledges the IAM5 findings of a policy that aws-cdk-lib generates (and this app does not write),
+ * one exact finding ID at a time. At synthesis every wildcard cdk-nag would report is matched against
+ * `rules`: a match is acknowledged with that rule's reason, any other wildcard still fails synthesis,
+ * and a rule that matches nothing is a validation error, so the list cannot silently go stale.
+ */
+export function acknowledgeGeneratedPolicyWildcards(policy: CfnPolicy, rules: readonly GeneratedWildcardRule[]): void {
+  for (const rule of rules) {
+    checkReason(`AwsSolutions-IAM5[${String(rule.finding)}]`, rule.reason);
+  }
+  let evaluated = false;
+  policy.node.addValidation({
+    validate: () => {
+      if (evaluated) {
+        return [];
+      }
+      evaluated = true;
+      const document = Stack.of(policy).resolve(policy.policyDocument) as PolicyDocumentJson;
+      const used = new Set<GeneratedWildcardRule>();
+      for (const finding of iamWildcardFindings(document)) {
+        const rule = rules.find(({ finding: expected }) => (typeof expected === 'string' ? expected === finding : expected.test(finding)));
+        if (rule !== undefined) {
+          used.add(rule);
+          acknowledgeNagFinding(policy, `AwsSolutions-IAM5[${finding}]`, rule.reason);
+        }
+      }
+      return rules
+        .filter((rule) => !used.has(rule))
+        .map((rule) => `wildcard acknowledgement ${String(rule.finding)} matches no AwsSolutions-IAM5 finding of ${policy.node.path}`);
     },
   });
 }

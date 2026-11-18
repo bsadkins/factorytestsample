@@ -61,6 +61,11 @@ export interface CaseInsightsEnvironmentOptions {
   readonly sharedApiLogging?: SharedApiLogging;
 }
 
+/** True when `configs` need the CaseInsightsApiLoggingStack: some environment enables MCP in managed mode. */
+export function sharedApiLoggingOwnerRequired(configs: readonly CaseInsightsConfig[]): boolean {
+  return configs.some((config) => config.enableMcp && config.apiGatewayLogging.mode === 'managed');
+}
+
 /**
  * Adds the shared API Gateway logging owner for environments that deploy to one account and Region.
  * Returns undefined when no configuration enables MCP. Rejects configurations whose shared settings,

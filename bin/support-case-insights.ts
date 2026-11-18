@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { App } from 'aws-cdk-lib';
-import { addCaseInsightsStacks, ConfigValidationError, resolveEnvironmentName } from '../lib';
+import { addCaseInsightsApp, ConfigValidationError } from '../lib';
 
 const app = new App();
 try {
-  addCaseInsightsStacks(app, { env: resolveEnvironmentName(app.node.tryGetContext('env')) });
+  addCaseInsightsApp(app);
 } catch (error) {
   if (error instanceof ConfigValidationError) {
     console.error(error.message);
