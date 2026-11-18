@@ -81,6 +81,12 @@ ACCEPTED: dict[str, tuple[str, str]] = {
         "select",
     ),
     "subquery_in_from": ("SELECT * FROM (SELECT * FROM case_summary) s", "select"),
+    "doubly_parenthesised_subquery": ("SELECT * FROM ((SELECT * FROM case_summary)) s", "select"),
+    "doubly_parenthesised_table": ("SELECT * FROM ((case_summary))", "select"),
+    "doubly_parenthesised_self_join": (
+        "SELECT 1 FROM ((case_summary a JOIN case_summary b ON true))",
+        "select",
+    ),
     "subquery_in_where": (
         "SELECT * FROM case_summary WHERE account_number IN "
         "(SELECT account_number FROM case_summary WHERE severitycode = 'urgent')",
@@ -220,6 +226,38 @@ REJECTED: dict[str, tuple[str, str]] = {
     ),
     "escape_in_parenthesised_join": (
         "SELECT 1 FROM (case_summary a JOIN other_db.t b ON true)",
+        "table_not_allowed",
+    ),
+    "escape_in_doubly_parenthesised_relation": (
+        "SELECT * FROM ((other_db.t))",
+        "table_not_allowed",
+    ),
+    "escape_to_information_schema_in_nested_parentheses": (
+        "SELECT * FROM (((information_schema.tables)))",
+        "table_not_allowed",
+    ),
+    "escape_to_other_catalog_in_nested_parentheses": (
+        "SELECT * FROM ((other_catalog.db.t))",
+        "table_not_allowed",
+    ),
+    "escape_in_doubly_parenthesised_join_relation": (
+        "SELECT * FROM case_summary c JOIN ((other_db.secret)) s ON true",
+        "table_not_allowed",
+    ),
+    "escape_in_doubly_parenthesised_join": (
+        "SELECT * FROM ((case_summary c JOIN other_db.secret s ON true))",
+        "table_not_allowed",
+    ),
+    "escape_in_union_branch_nested_parentheses": (
+        "SELECT * FROM case_summary UNION SELECT * FROM ((other_db.t))",
+        "table_not_allowed",
+    ),
+    "escape_in_cte_nested_parentheses": (
+        "WITH x AS (SELECT * FROM ((other_db.t))) SELECT * FROM x",
+        "table_not_allowed",
+    ),
+    "escape_in_where_subquery_nested_parentheses": (
+        "SELECT * FROM case_summary WHERE x IN (SELECT y FROM ((other_db.t)))",
         "table_not_allowed",
     ),
     "cte_shadowing_with_escape": (

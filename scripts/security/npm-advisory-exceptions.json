@@ -9,11 +9,11 @@
       "reviewBy": "2027-02-13"
     },
     {
-      "advisory": "GHSA-gcqx-w48m-w2h4",
-      "name": "deepmerge",
-      "locations": ["node_modules/deepmerge"],
-      "reason": "No patched deepmerge release exists (4.3.1 is the latest). It is a development-only dependency of jest-config, which merges this repository's own Jest configuration at test time; it never processes untrusted input and is never deployed. Remove when Jest drops deepmerge or a fixed release ships.",
-      "reviewBy": "2027-02-13"
+      "advisory": "GHSA-fc5q-39xc-vjpf",
+      "name": "picomatch",
+      "locations": ["node_modules/anymatch/node_modules/picomatch", "node_modules/picomatch"],
+      "reason": "No patched picomatch release exists (the advisory covers every version through 4.0.7, the latest, and lists no fixed version). Both copies are development-only: Jest (jest-util, jest-haste-map, jest-message-util, anymatch, fdir) and typescript-eslint (tinyglobby) use them to match glob patterns taken from this repository's Jest, ESLint and TypeScript configuration or the developer's own command line. No untrusted glob pattern reaches them and they are never bundled into Lambda assets or deployed. Remove when a fixed picomatch release is available.",
+      "reviewBy": "2027-01-18"
     }
   ]
 }

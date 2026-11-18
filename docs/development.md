@@ -114,7 +114,7 @@ All versions are pinned exactly. npm overrides pin `glob` 14.0.6, `minimatch` 11
 
   Reinstall with `.venv/bin/python -m pip install --require-hashes -r requirements-dev.txt`.
 
-`scripts/security/npm-advisory-exceptions.json` lists the npm advisories accepted because no fixed release is reachable (currently `minimatch` bundled inside `aws-cdk-lib`, and the development-only `deepmerge`). Each entry names the advisory, package and lockfile locations, a specific reason and a `reviewBy` date; expired or unused entries make `npm run security:npm` fail.
+`scripts/security/npm-advisory-exceptions.json` lists the npm advisories accepted because no fixed release is reachable (currently `minimatch` bundled inside `aws-cdk-lib`, and the development-only `picomatch` used by Jest and typescript-eslint). Each entry names the advisory, package and lockfile locations, a specific reason and a `reviewBy` date; expired or unused entries make `npm run security:npm` fail.
 
 ## cdk-nag
 

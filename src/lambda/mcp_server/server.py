@@ -170,7 +170,9 @@ class McpServer:
                 data={"supported": list(SUPPORTED_PROTOCOL_VERSIONS)},
             )
         request_id = message.request_id
-        assert request_id is not None  # noqa: S101 - classify() guarantees requests have an ID
+        if request_id is None:
+            # classify() never produces this; checked explicitly because python -O strips asserts.
+            return protocol_error(400, None, INVALID_REQUEST, "Request has no id", method=label)
         methods: dict[str, Callable[[Message, RequestId], Outcome]] = {
             "initialize": self._initialize,
             "ping": self._ping,

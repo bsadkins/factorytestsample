@@ -387,8 +387,9 @@ class _RelationChecker:
             inner = cursor + 1
             close = self.s.match[cursor]
             first = self.tokens[inner] if inner < close else None
-            if not (_punct(first, "(") or _is(first, *_QUERY_START)):
-                # A parenthesised join: its contents are a relation list of their own.
+            if not _is(first, *_QUERY_START):
+                # A parenthesised relation or join, possibly nested again: its contents are a
+                # relation list of their own. Only a subquery is left to the FROM scan in run().
                 self._relation_list(inner, close)
             return close + 1
         if _is_name(token):

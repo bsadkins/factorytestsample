@@ -23,11 +23,13 @@ from mcp_server.jsonrpc import (
     INVALID_REQUEST,
     METHOD_NOT_FOUND,
     PARSE_ERROR,
+    Message,
 )
-from mcp_server.server import LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
+from mcp_server.server import LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS, McpServer
 from mcp_server.transport import MAX_BODY_BYTES
 from mcp_tools.context import ToolContext
 from mcp_tools.limits import McpLimits
+from mcp_tools.registry import build_registry
 
 EXPECTED_TOOLS = [
     "query_athena",
@@ -486,6 +488,21 @@ def test_invalid_envelopes_are_invalid_requests(
 ) -> None:
     assert_error(harness.post(message), 400, INVALID_REQUEST, echoed_id)
     assert harness.kit.external_calls() == 0
+
+
+def test_request_without_id_is_rejected_explicitly() -> None:
+    # The guard must not rely on assert, which python -O strips.
+    def no_context() -> ToolContext:
+        pytest.fail("no tool context may be built for an id-less request")
+
+    server = McpServer(build_registry(), no_context)
+    message = Message(kind="request", method="ping", request_id=None, params=None, has_params=False)
+    outcome = server.handle(message, None)
+    assert outcome.status == 400
+    assert outcome.kind == "protocol_error"
+    assert outcome.response is not None
+    assert outcome.response["error"]["code"] == INVALID_REQUEST
+    assert "id" not in outcome.response
 
 
 def test_params_must_be_an_object(harness: Harness) -> None:
