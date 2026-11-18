@@ -9,9 +9,9 @@ import {
   CaseInsightsMemberRoleStack,
   CONFIG_DIR,
   ConfigValidationError,
-} from '../lib';
-import { normaliseAssetHashes } from './helpers/assets';
-import { acknowledgedRules, schedulerTrustStatement, synthError, tempOutdir, testApp, trustStatements } from './helpers/cdk';
+} from '../../lib';
+import { normaliseAssetHashes } from '../helpers/assets';
+import { acknowledgedRules, schedulerTrustStatement, synthError, tempOutdir, testApp, trustStatements } from '../helpers/cdk';
 
 describe('Support Case Insights app', () => {
   test('dev configuration adds the namespaced core and member-role stacks in the management account', () => {
@@ -110,7 +110,7 @@ describe('Support Case Insights app', () => {
   test('every cdk-nag acknowledgement is listed here with a specific reason', () => {
     const app = testApp();
     const { config, core: coreStack, analytics, mcp, apiLogging } = addCaseInsightsStacks(app, { env: 'dev' });
-    // Analytics, MCP and shared API logging acknowledgements are listed in their test/stacks/*.test.ts files.
+    // Analytics, MCP and shared API logging acknowledgements are listed in their test/cdk/stacks/*.test.ts files.
     const listedElsewhere = [analytics, mcp, apiLogging].map((stack) => `${stack?.stackName ?? 'missing'}/`);
     const acknowledged = acknowledgedRules(app).filter(({ path: constructPath }) => !listedElsewhere.some((prefix) => constructPath.startsWith(prefix))).map(({ path: constructPath, id, reason }) => ({
       path: constructPath,

@@ -10,9 +10,9 @@ import {
   resourceNames,
   SOURCE_QUEUE_RETENTION_DAYS,
   StageQueue,
-} from '../../lib';
-import { minimalConfig } from '../config/helpers';
-import { acknowledgedRules, nagApp, synthError, testApp, testConfig, testStack } from '../helpers/cdk';
+} from '../../../lib';
+import { minimalConfig } from '../../config/helpers';
+import { acknowledgedRules, nagApp, synthError, testApp, testConfig, testStack } from '../../helpers/cdk';
 
 interface QueueResource {
   Properties: {

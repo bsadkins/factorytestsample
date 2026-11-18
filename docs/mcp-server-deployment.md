@@ -99,7 +99,7 @@ Delete the shared resources deliberately, by hand, only after every MCP environm
 
 In existing mode there is nothing of this solution's to clean up; the setting and role belong to their owner.
 
-None of this has been exercised against a real account. The synthesised templates are checked locally (`test/stacks/api-logging-stack.test.ts`): one `AWS::ApiGateway::Account` and one API Gateway-trusted role in managed mode, none in existing mode or with MCP disabled, the role's trust and permissions, retention, the dependency of the MCP stack, identical dev and prod shared stacks and rejection of inconsistent settings. Delivery of access log records depends on the live account and is part of the deferred checklist.
+None of this has been exercised against a real account. The synthesised templates are checked locally (`test/cdk/stacks/api-logging-stack.test.ts`): one `AWS::ApiGateway::Account` and one API Gateway-trusted role in managed mode, none in existing mode or with MCP disabled, the role's trust and permissions, retention, the dependency of the MCP stack, identical dev and prod shared stacks and rejection of inconsistent settings. Delivery of access log records depends on the live account and is part of the deferred checklist.
 
 ## Tools
 
@@ -301,4 +301,4 @@ An unsigned request, for example with plain `curl`, must receive HTTP `403`.
 .venv/bin/pytest test/scripts/test_mcp_aws_client.py
 ```
 
-These tests prove the bridge's behaviour, not API Gateway IAM authorisation, the resource policy or WAF, which are checked only as synthesised CloudFormation (`test/stacks/mcp-stack.test.ts`) until a live deployment. The deferred live checks are: `aws apigateway get-account` shows the shared role (managed mode) or the configured existing role, and the access log group receives records; a signed `tools/list` from an allowed principal succeeds; unsigned requests, unlisted principals and principals outside the Organization receive `403`; a 32,769-byte body receives `413` from WAF while a 32,768-byte body reaches the function; requests above the per-IP rate receive `429`; and the MCP alarms and dashboard rows show data.
+These tests prove the bridge's behaviour, not API Gateway IAM authorisation, the resource policy or WAF, which are checked only as synthesised CloudFormation (`test/cdk/stacks/mcp-stack.test.ts`) until a live deployment. The deferred live checks are: `aws apigateway get-account` shows the shared role (managed mode) or the configured existing role, and the access log group receives records; a signed `tools/list` from an allowed principal succeeds; unsigned requests, unlisted principals and principals outside the Organization receive `403`; a 32,769-byte body receives `413` from WAF while a 32,768-byte body reaches the function; requests above the per-IP rate receive `429`; and the MCP alarms and dashboard rows show data.

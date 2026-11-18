@@ -10,7 +10,7 @@ import { dataRemovalPolicy, isProduction } from './environment';
 
 /**
  * Fields of a processed record (`common.processed_record.PROCESSED_FIELDS`), in stored order.
- * test/stacks/analytics-stack.test.ts fails if this list and the Python contract drift apart.
+ * test/cdk/stacks/analytics-stack.test.ts fails if this list and the Python contract drift apart.
  */
 export const PROCESSED_RECORD_FIELDS = [
   'caseId',

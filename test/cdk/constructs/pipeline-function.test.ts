@@ -5,9 +5,9 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Code, LayerVersion } from 'aws-cdk-lib/aws-lambda';
 import type { Stack } from 'aws-cdk-lib';
-import { type CaseInsightsConfig, PipelineFunction, type PipelineFunctionProps, SAFE_POWERTOOLS_ENVIRONMENT } from '../../lib';
-import { acknowledgedRules, iamPolicyStatements, nagApp, synthError, testApp, testConfig, testStack } from '../helpers/cdk';
-import { ownedTempDir } from '../helpers/temp-dirs';
+import { type CaseInsightsConfig, PipelineFunction, type PipelineFunctionProps, SAFE_POWERTOOLS_ENVIRONMENT } from '../../../lib';
+import { acknowledgedRules, iamPolicyStatements, nagApp, synthError, testApp, testConfig, testStack } from '../../helpers/cdk';
+import { ownedTempDir } from '../../helpers/temp-dirs';
 
 function handlerDir(): string {
   const dir = ownedTempDir('case-insights-handler-');

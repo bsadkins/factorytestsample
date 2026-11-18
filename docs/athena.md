@@ -99,7 +99,7 @@ Every column has the Glue type `string`. Dates are ISO-8601 text in UTC; parse t
 
 The column `case_summary` has the same name as the table. That is valid SQL; qualify it (`c.case_summary`) if a query becomes hard to read.
 
-The table columns are tested against `common.processed_record.PROCESSED_FIELDS` in `test/stacks/analytics-stack.test.ts`, so the schema and the stored records cannot drift apart unnoticed.
+The table columns are tested against `common.processed_record.PROCESSED_FIELDS` in `test/cdk/stacks/analytics-stack.test.ts`, so the schema and the stored records cannot drift apart unnoticed.
 
 ### Partitions
 
@@ -593,7 +593,7 @@ QuickSight dashboards are optional and are not created by this application. Ther
 
 ## Live verification (deferred)
 
-None of the following has been run. Local evidence is limited to the synthesised Analytics template (Jest assertions and snapshots in `test/stacks/analytics-stack.test.ts`, synth and cdk-nag) and to schema checks of this guide's queries (`test/docs/test_analytics_docs.py`). Each item below is deferred until a real deployment:
+None of the following has been run. Local evidence is limited to the synthesised Analytics template (Jest assertions and snapshots in `test/cdk/stacks/analytics-stack.test.ts`, synth and cdk-nag) and to schema checks of this guide's queries (`test/docs/test_analytics_docs.py`). Each item below is deferred until a real deployment:
 
 - [ ] The Analytics stack deploys and its outputs match the names in this guide.
 - [ ] The crawler adds partitions for real processed records on schedule and when started manually.

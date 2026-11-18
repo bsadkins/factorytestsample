@@ -6,8 +6,8 @@ import {
   CoreStorage,
   IDEMPOTENCY_TABLE_KEY,
   IDEMPOTENCY_TABLE_TTL_ATTRIBUTE,
-} from '../../lib';
-import { nagApp, synthError, tempOutdir, testApp, testConfig, testStack } from '../helpers/cdk';
+} from '../../../lib';
+import { nagApp, synthError, tempOutdir, testApp, testConfig, testStack } from '../../helpers/cdk';
 
 interface BucketResource {
   DeletionPolicy?: string;

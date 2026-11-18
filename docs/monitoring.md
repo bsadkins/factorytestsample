@@ -438,4 +438,4 @@ Not verified, because nothing has been deployed:
 - [ ] `DailyRunCompleted` is 1 for the hour in which a daily run completes, and `MissingDailyRunCompletion` stays OK.
 - [ ] `McpAuthFailures` counts refused requests from the access log.
 
-The alarm inventory is checked locally against the synthesised template by `test/constructs/observability.test.ts`.
+The alarm inventory is checked locally against the synthesised template by `test/cdk/constructs/observability.test.ts`.

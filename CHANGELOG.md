@@ -21,6 +21,7 @@ First version of Support Case Insights. Nothing in this release has been deploye
 - CloudWatch dashboard, 23 alarms (27 with MCP) and the alarm topic `CaseInsights-Alarms-<uniqueId>` with optional email subscription.
 - CSV export (`scripts/generate_csv_insights.py`), dead-letter queue redrive (`scripts/redrive-dlq.sh`) and opt-in reprocessing (`scripts/reprocess-cases.py`).
 - Schema-validated configuration for dev and prod, cdk-nag on every synthesis, local Docker-free Python asset bundling from hash-locked wheels, and the `npm run verify` and `npm run security` commands.
+- Pull request CI (`.github/workflows/ci.yml`) that runs `npm run verify` with Node.js 24.22.3 and Python 3.12.3, hash-locked installs, actions pinned to commit SHAs and no AWS credentials.
 - Documentation set: architecture with diagram, installation, configuration, permissions, security, resources, usage, Athena, CSV export, MCP server, prompts, monitoring, logging, runbook, troubleshooting, development, cost and pipeline guides.
 
 ### Security

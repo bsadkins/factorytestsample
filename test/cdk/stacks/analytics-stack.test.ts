@@ -17,11 +17,11 @@ import {
   REPO_ROOT,
   RESULTS_ACCESS_LOG_PREFIX,
   resourceNames,
-} from '../../lib';
+} from '../../../lib';
 import type { IConstruct } from 'constructs';
-import { type JsonObject, readConfigJson } from '../config/helpers';
-import { normaliseAssetHashes } from '../helpers/assets';
-import { acknowledgedRules, iamPolicyStatements, synthError, tempOutdir, testApp, trustStatements } from '../helpers/cdk';
+import { type JsonObject, readConfigJson } from '../../config/helpers';
+import { normaliseAssetHashes } from '../../helpers/assets';
+import { acknowledgedRules, iamPolicyStatements, synthError, tempOutdir, testApp, trustStatements } from '../../helpers/cdk';
 
 type Env = 'dev' | 'prod';
 

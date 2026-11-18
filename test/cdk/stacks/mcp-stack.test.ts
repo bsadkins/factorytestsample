@@ -20,11 +20,11 @@ import {
   REPO_ROOT,
   resourceNames,
   SAFE_POWERTOOLS_ENVIRONMENT,
-} from '../../lib';
-import { type JsonObject, readConfigJson } from '../config/helpers';
-import { normaliseAssetHashes } from '../helpers/assets';
-import { acknowledgedRules, asArray, iamPolicyStatements, type PolicyStatementJson, synthError, tempOutdir, testApp, trustStatements } from '../helpers/cdk';
-import { ownedTempDir } from '../helpers/temp-dirs';
+} from '../../../lib';
+import { type JsonObject, readConfigJson } from '../../config/helpers';
+import { normaliseAssetHashes } from '../../helpers/assets';
+import { acknowledgedRules, asArray, iamPolicyStatements, type PolicyStatementJson, synthError, tempOutdir, testApp, trustStatements } from '../../helpers/cdk';
+import { ownedTempDir } from '../../helpers/temp-dirs';
 
 type Env = 'dev' | 'prod';
 
@@ -95,7 +95,7 @@ describe('MCP feature flag', () => {
       expect(JSON.stringify(Template.fromStack(producer as Stack).toJSON())).not.toContain(names.mcpStack);
     }
     const assembly = app.synth();
-    // The shared API Gateway logging owner (test/stacks/api-logging-stack.test.ts) deploys first.
+    // The shared API Gateway logging owner (test/cdk/stacks/api-logging-stack.test.ts) deploys first.
     expect(assembly.stacks.map((stack) => stack.stackName).sort()).toEqual(
       [names.coreStack, names.memberRoleStack, names.analyticsStack, names.mcpStack, `CaseInsightsApiLoggingStack-${stacks.config.apiGatewayLogging.sharedId}`].sort(),
     );
@@ -573,6 +573,13 @@ describe.each(['dev', 'prod'] as const)('%s MCP stack', (env) => {
     );
     for (const { reason } of acknowledged) {
       expect(reason.length).toBeGreaterThanOrEqual(40);
+    }
+    // Athena reads and writes S3 with the credentials of the role that starts the query: the MCP function role.
+    const athenaReasons = acknowledged.filter(({ id }) => id.includes('/account_number=*]') || id.includes('/query-results/*]'));
+    expect(athenaReasons).toHaveLength(2);
+    for (const { reason } of athenaReasons) {
+      expect(reason).toContain('MCP function role credentials');
+      expect(reason).not.toMatch(/caller/i);
     }
   });
 

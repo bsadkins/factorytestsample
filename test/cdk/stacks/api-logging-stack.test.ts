@@ -15,10 +15,10 @@ import {
   parseConfig,
   resourceNames,
   sharedApiLoggingNames,
-} from '../../lib';
-import { type JsonObject, readConfigJson } from '../config/helpers';
-import { normaliseAssetHashes } from '../helpers/assets';
-import { acknowledgedRules, asArray, nagApp, type PolicyStatementJson, synthError, tempOutdir, testApp } from '../helpers/cdk';
+} from '../../../lib';
+import { type JsonObject, readConfigJson } from '../../config/helpers';
+import { normaliseAssetHashes } from '../../helpers/assets';
+import { acknowledgedRules, asArray, nagApp, type PolicyStatementJson, synthError, tempOutdir, testApp } from '../../helpers/cdk';
 
 type Env = 'dev' | 'prod';
 

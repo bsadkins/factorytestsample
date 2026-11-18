@@ -2,7 +2,8 @@
 
 `test/fixtures/cross_surface/processed_records.json` holds sixteen complete processed records in
 the stored (mixed-case) field shape with their account numbers; `case_summary_table.json` is the
-Glue table contract that test/cross-surface.test.ts compares with the synthesised Analytics stack.
+Glue table contract that test/cdk/cross-surface.test.ts compares with the synthesised Analytics
+stack.
 The helpers here read the records the way Athena would through that contract, drive the CSV
 exporter's real `main()` and the MCP Lambda handler with REST proxy events. All data is invented.
 """

@@ -13,7 +13,7 @@ import {
   RUN_LOOKBACK_HOURS,
   RUN_MARKERS_PREFIX,
   resourceNames,
-} from '../../lib';
+} from '../../../lib';
 import {
   acknowledgedRules,
   iamPolicyStatements,
@@ -24,7 +24,7 @@ import {
   testApp,
   testConfig,
   trustStatements,
-} from '../helpers/cdk';
+} from '../../helpers/cdk';
 
 function coreTemplate(overrides: Parameters<typeof testConfig>[0] = {}): { core: CaseInsightsCoreStack; template: Template } {
   const config = testConfig(overrides);
@@ -504,5 +504,16 @@ describe('Observability', () => {
         ['Observability/RunCompletionScheduleRole', `AwsSolutions-IAM5[Resource::<${logicalId(core, core.observability.runCompletionFunction.function)}.Arn>:*]`],
       ].sort(),
     );
+  });
+
+  test('the alarm topic encryption acknowledgement states the operational metadata notifications carry', () => {
+    const app = nagApp();
+    const { core } = addCaseInsightsStacks(app, { env: 'dev' });
+    const sns2 = acknowledgedRules(core).filter(({ id }) => id.endsWith('AwsSolutions-SNS2'));
+    expect(sns2.map(({ path: constructPath }) => constructPath)).toEqual([core.observability.alarmTopic.node.path]);
+    const reason = sns2[0]?.reason ?? '';
+    for (const phrase of ['alias/aws/sns', 'customer managed KMS key', 'TLS', 'no case content', 'account ID', 'Region', 'alarm names', 'states', 'metric values', 'resource names']) {
+      expect(reason).toContain(phrase);
+    }
   });
 });

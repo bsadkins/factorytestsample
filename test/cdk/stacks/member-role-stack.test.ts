@@ -5,9 +5,9 @@ import {
   MEMBER_ROLE_SUPPORT_ACTIONS,
   memberRoleTemplate,
   resourceNames,
-} from '../../lib';
-import { normaliseAssetHashes } from '../helpers/assets';
-import { asArray, iamPolicyStatements, testApp } from '../helpers/cdk';
+} from '../../../lib';
+import { normaliseAssetHashes } from '../../helpers/assets';
+import { asArray, iamPolicyStatements, testApp } from '../../helpers/cdk';
 
 interface MemberTemplate {
   Resources: Record<string, { Type: string; Properties: Record<string, unknown> }>;

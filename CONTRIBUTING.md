@@ -56,12 +56,15 @@ Also:
 - update the documentation and the [changelog](CHANGELOG.md) (under `Unreleased`) in the same pull request;
 - write prose in British English and keep AWS product and API names as AWS spells them.
 
+### Continuous integration
+
+Every pull request runs the GitHub Actions workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml). It uses Node.js 24.22.3 (from `.nvmrc`) and Python 3.12.3 on `ubuntu-24.04`, installs the locked dependencies with `npm ci` and `pip install --require-hashes -r requirements-dev.txt`, runs `npm run verify` and fails if verification changed any file in the working tree. It has no AWS credentials or repository secrets, so a change that needs them to pass is not accepted. Run the same commands locally before you push.
 ### Pull requests
 
 1. Open the pull request against `main` and fill in what changed, why, and how you verified it (the commands you ran and their results). Say clearly if anything needs a real AWS deployment to verify and has not been run.
 2. Keep pull requests focused and reasonably small; a reviewer must be able to check every IAM, network and data-handling change.
 3. Respond to review comments with further commits; the maintainer may squash them when merging.
-4. A pull request is merged only after `npm run verify` passes and a maintainer has approved it.
+4. A pull request is merged only after the CI check `npm run verify` passes and a maintainer has approved it.
 
 ## Licensing
 

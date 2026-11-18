@@ -19,6 +19,7 @@ Support Case Insights collects the resolved AWS Support cases of every member ac
 8. [Security](#security)
 9. [FAQ, known limitations and additional considerations](#faq-known-limitations-and-additional-considerations)
 10. [Local verification](#local-verification)
+    - [Continuous integration](#continuous-integration)
 11. [Deferred live verification](#deferred-live-verification)
 12. [Documentation](#documentation)
 13. [Revisions](#revisions)
@@ -280,9 +281,22 @@ More answers are in [troubleshooting](docs/troubleshooting.md).
 
 ## Local verification
 
+These steps work from a fresh clone without AWS credentials, Docker or global packages (Node.js and Python 3.12 only), and never call AWS:
+
 ```bash
-npm run verify
+npm ci
+python3.12 -m venv .venv
+.venv/bin/python -m pip install --require-hashes -r requirements-dev.txt
+npm run verify                                     # lint, type checks, tests, dev and prod synth with cdk-nag
+npx cdk synth -c env=dev --no-lookups --quiet      # one environment, into cdk.out/
+.venv/bin/pytest test/scripts/test_mcp_aws_client.py   # SigV4 bridge against the loopback MCP fixture
+.venv/bin/python scripts/mcp_aws_client.py --help
+.venv/bin/python scripts/generate_csv_insights.py --help
+.venv/bin/python scripts/reprocess-cases.py --help
+scripts/redrive-dlq.sh --help
 ```
+
+The first `npm ci`, `pip install` and synthesis need access to the npm registry and the Python package index. Synthesis bundles the Lambda layer from the hash-locked wheels in `requirements.txt` and caches them in `.cache/pip`; later synths reuse the cache. A missing wheel or a hash mismatch fails synthesis; nothing is compiled on the host and there is no Docker fallback. Assets are content-addressed: synthesising again without changes produces the same templates, and editing a file in `src/templates/` changes only the templates layer asset (its S3 key in the Core template). An ordinary `cdk deploy` uploads the new asset, publishes a new layer version and updates the functions that use it; no manual upload is needed.
 
 | Command | What it runs |
 | --- | --- |
@@ -294,6 +308,10 @@ npm run verify
 | `npm run security` | npm advisory scan of the full lockfile, `pip-audit` of both Python locks, and Bandit |
 
 The tests use invented data and local stand-ins for AWS (moto, botocore stubbers, an SQLite stand-in for Athena and a loopback SigV4 endpoint) and never call AWS. They cover every Lambda handler, the Core pipeline end to end, the recovery scripts, the MCP tools through the real stdio bridge, and the security-critical properties of every synthesised stack. They prove local behaviour and template properties only, not IAM, WAF, Athena or Bedrock behaviour in a live account. See [development](docs/development.md).
+
+### Continuous integration
+
+Every pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on `ubuntu-24.04` with Node.js 24.22.3 (from `.nvmrc`) and Python 3.12.3. It runs `npm ci`, installs `requirements-dev.txt` into `.venv` with `--require-hashes`, runs `npm run verify` and fails if verification changed the working tree. The workflow has read-only repository permissions, uses no AWS credentials or repository secrets, pins every action to a commit SHA and caches `.cache/pip` keyed on the two Python lock files.
 
 ## Deferred live verification
 
@@ -340,7 +358,8 @@ None of the following has been run. Local tests, snapshots, synthesis and cdk-na
 ### Repository layout
 
 ```
-bin/                 CDK app entry point
+.github/workflows/   Pull request CI (ci.yml)
+bin/case-insights.ts CDK app entry point
 lib/config/          Typed configuration, validation and resource names
 lib/constructs/      CDK constructs (storage, queues, roles, functions, analysis, observability, analytics, MCP)
 lib/packaging/       Docker-free Python asset bundling and content hashing
@@ -352,7 +371,8 @@ src/lambda/common/   Shared Python package (Lambda layer)
 src/templates/       Prompt templates (templates layer)
 scripts/             CSV exporter, MCP SigV4 bridge, recovery tools and taxonomy renderer
 docs/                Documentation and the architecture diagram
-test/                Jest and pytest suites and fixtures
+test/cdk/            CDK assertions, cdk-nag and per-stack snapshots (Jest)
+test/                Other Jest and pytest suites, fixtures and test helpers
 ```
 
 ## Revisions

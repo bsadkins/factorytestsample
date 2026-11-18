@@ -15,8 +15,8 @@ import {
   REPO_ROOT,
   SharedLayers,
   TEMPLATES_DIR_ENV,
-} from '../../lib';
-import { testApp } from '../helpers/cdk';
+} from '../../../lib';
+import { testApp } from '../../helpers/cdk';
 
 const ENV = { account: '111111111111', region: 'us-east-1' };
 const createdDirs: string[] = [];
@@ -484,6 +484,6 @@ describe('core stack', () => {
     const template = Template.fromStack(core);
     template.hasResourceProperties('AWS::Lambda::LayerVersion', { LayerName: `case-insights-common-${config.uniqueId}` });
     template.hasResourceProperties('AWS::Lambda::LayerVersion', { LayerName: `case-insights-templates-${config.uniqueId}` });
-    expect(REPO_ROOT).toBe(path.resolve(__dirname, '..', '..'));
+    expect(REPO_ROOT).toBe(path.resolve(__dirname, '..', '..', '..'));
   });
 });

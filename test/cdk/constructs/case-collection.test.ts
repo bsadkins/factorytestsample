@@ -11,8 +11,8 @@ import {
   RUN_ACCOUNT_MARKER_PATTERN,
   RUN_CASE_MARKER_PATTERN,
   TERMINAL_MARKER_PATTERN,
-} from '../../lib';
-import { acknowledgedRules, asArray, iamPolicyStatements, nagApp, synthError, testApp, testConfig } from '../helpers/cdk';
+} from '../../../lib';
+import { acknowledgedRules, asArray, iamPolicyStatements, nagApp, synthError, testApp, testConfig } from '../../helpers/cdk';
 
 function coreTemplate(overrides: Parameters<typeof testConfig>[0] = {}): { core: CaseInsightsCoreStack; template: Template } {
   const config = testConfig(overrides);

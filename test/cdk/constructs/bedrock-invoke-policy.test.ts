@@ -7,8 +7,8 @@ import {
   HAIKU_4_5_GLOBAL_PROFILE,
   SONNET_4_5_GLOBAL_PROFILE,
   SUPPORTED_BEDROCK_MODEL_IDS,
-} from '../../lib';
-import { acknowledgedRules, asArray, iamPolicyStatements, nagApp, synthError, testApp, testConfig, testStack } from '../helpers/cdk';
+} from '../../../lib';
+import { acknowledgedRules, asArray, iamPolicyStatements, nagApp, synthError, testApp, testConfig, testStack } from '../../helpers/cdk';
 
 const config = testConfig();
 const REGION = config.region;

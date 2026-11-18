@@ -1,0 +1,71 @@
+name: CI
+
+# Runs the complete local gate on every pull request. No AWS credentials or secrets are used:
+# tests use local stand-ins for AWS and synthesis runs with --no-lookups.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Exact interpreter the repository is verified with; the Lambda runtime is Python 3.12.
+  PYTHON_VERSION: '3.12.3'
+  # Repository-local pip cache, shared by the development install and wheel-only layer bundling.
+  PIP_CACHE_DIR: .cache/pip
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
+jobs:
+  verify:
+    name: npm run verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js (version from .nvmrc)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Optimisation only: every wheel is still installed with --require-hashes, and a miss
+      # downloads from the package index.
+      - name: Cache pip wheels
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/pip
+          key: pip-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+
+      - name: Install npm dependencies from the lockfile
+        run: npm ci
+
+      - name: Install hash-locked Python development dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --require-hashes -r requirements-dev.txt
+
+      - name: Verify (lint, type checks, tests with coverage, synth with cdk-nag)
+        run: npm run verify
+
+      - name: Check that verification left the working tree unchanged
+        run: |
+          git status --porcelain --untracked-files=all > "$RUNNER_TEMP/changes.txt"
+          if [ -s "$RUNNER_TEMP/changes.txt" ]; then
+            cat "$RUNNER_TEMP/changes.txt"
+            echo "::error::npm run verify changed tracked or unignored files"
+            exit 1
+          fi

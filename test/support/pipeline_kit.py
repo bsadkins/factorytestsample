@@ -12,7 +12,7 @@ moves work between them the way the deployed services would:
   visibility timeout is expired explicitly, and redrive to the queue's dead-letter queue after
   `MAX_RECEIVE_COUNT` receives (moto applies the redrive policy);
 - Standard CaseAnalysis executions run through the state machine definition asserted in
-  `test/constructs/case-analysis.test.ts`: Summary, RCA and Lifecycle through the shared stage
+  `test/cdk/constructs/case-analysis.test.ts`: Summary, RCA and Lifecycle through the shared stage
   function with `{stage, case}`, then UpdateCaseMetadata with `{case}`, each result at `$.<stage>`,
   Retry on the named errors (`taskMaxAttempts` retries) and a States.ALL Catch into HandleFailure
   with `$.error`, after which the execution fails;

@@ -174,7 +174,7 @@ Stage checkpoints are stored in the raw bucket under `account_number=<id>/case_n
 
 Committed records are never analysed again automatically. A change applies to cases analysed after the deployment; existing records keep their old `Model_Id` and `Prompt_Version`, so query by those fields when you compare results (see [Data quality and provenance](athena.md#data-quality-and-provenance)). To analyse existing cases again with the new prompts or model, use the opt-in tool described in [Reprocess committed cases](runbook.md#reprocess-committed-cases).
 
-**Editing a template.** Keep the placeholders of the file exactly as listed in [Templates](#templates). Keep the untrusted-data tags and instructions, and keep the output requirements consistent with the validators: a prompt that asks for anything the validators reject will produce corrections and failures. A template-only change rebuilds only the templates layer asset (`test/packaging/python-assets.test.ts` checks this).
+**Editing a template.** Keep the placeholders of the file exactly as listed in [Templates](#templates). Keep the untrusted-data tags and instructions, and keep the output requirements consistent with the validators: a prompt that asks for anything the validators reject will produce corrections and failures. A template-only change rebuilds only the templates layer asset (`test/cdk/packaging/python-assets.test.ts` checks this).
 
 **Changing the taxonomy.** Edit `src/lambda/common/taxonomy.py`, then regenerate and check the generated blocks in this document and in [athena.md](athena.md#classification-values):
 

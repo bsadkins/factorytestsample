@@ -16,7 +16,7 @@ import {
   queueVisibilityTimeoutSeconds,
   resourceNames,
   STARTER_BATCH_SIZE,
-} from '../../lib';
+} from '../../../lib';
 import {
   acknowledgedRules,
   asArray,
@@ -27,7 +27,7 @@ import {
   testApp,
   testConfig,
   trustStatements,
-} from '../helpers/cdk';
+} from '../../helpers/cdk';
 
 function coreStack(overrides: Parameters<typeof testConfig>[0] = {}): CaseInsightsCoreStack {
   const config = testConfig(overrides);

@@ -1,7 +1,7 @@
 import { Stack } from 'aws-cdk-lib';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
-import { acknowledgeCdkWarning, acknowledgeWildcardResourceFinding } from '../lib/nag';
-import { acknowledgedRules, testApp } from './helpers/cdk';
+import { acknowledgeCdkWarning, acknowledgeWildcardResourceFinding } from '../../lib/nag';
+import { acknowledgedRules, testApp } from '../helpers/cdk';
 
 const REASON = 'A specific written reason that is long enough to be accepted.';
 

@@ -261,12 +261,12 @@ export class McpServer extends Construct {
     acknowledgeWildcardResourceFinding(
       access,
       processedObjects,
-      'Athena reads processed records with the caller credentials; account and case partitions are created at run time, and the role cannot write or delete them.',
+      'Athena reads processed records with the MCP function role credentials, because the function starts the queries; account and case partitions are created at run time, and the role cannot write or delete them.',
     );
     acknowledgeWildcardResourceFinding(
       access,
       resultObjects,
-      'Athena writes and reads query results under the enforced query-results/ prefix of the dedicated results bucket with the caller credentials; result object names are generated per query.',
+      'Athena writes and reads query results under the enforced query-results/ prefix of the dedicated results bucket with the MCP function role credentials, because the function starts the queries; result object names are generated per query.',
     );
     acknowledgeWildcardResourceFinding(
       access,

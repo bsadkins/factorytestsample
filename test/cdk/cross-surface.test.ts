@@ -2,8 +2,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Stack } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
-import { addCaseInsightsStacks, type CaseInsightsAppStacks, REPO_ROOT } from '../lib';
-import { asArray, iamPolicyStatements, testApp } from './helpers/cdk';
+import { addCaseInsightsStacks, type CaseInsightsAppStacks, REPO_ROOT } from '../../lib';
+import { asArray, iamPolicyStatements, testApp } from '../helpers/cdk';
 
 /**
  * The shipped dev app (Analytics and MCP on) against the shared cross-surface fixtures that

@@ -1,8 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { ACCOUNT_LIST_PREFIX, addCaseInsightsStacks, CaseInsightsCoreStack, REPO_ROOT, resourceNames } from '../../lib';
-import { acknowledgedRules, iamPolicyStatements, nagApp, schedulerTrustStatement, synthError, testApp, testConfig, trustStatements } from '../helpers/cdk';
+import { ACCOUNT_LIST_PREFIX, addCaseInsightsStacks, CaseInsightsCoreStack, REPO_ROOT, resourceNames } from '../../../lib';
+import { acknowledgedRules, iamPolicyStatements, nagApp, schedulerTrustStatement, synthError, testApp, testConfig, trustStatements } from '../../helpers/cdk';
 
 function coreTemplate(overrides: Parameters<typeof testConfig>[0] = {}): { core: CaseInsightsCoreStack; template: Template } {
   const config = testConfig(overrides);

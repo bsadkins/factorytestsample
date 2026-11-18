@@ -1,5 +1,5 @@
 {
-  "app": "npx ts-node --prefer-ts-exts bin/support-case-insights.ts",
+  "app": "npx ts-node --prefer-ts-exts bin/case-insights.ts",
   "versionReporting": false,
   "cli-telemetry": false,
   "watch": {

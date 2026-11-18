@@ -18,10 +18,10 @@ import {
   REPO_ROOT,
   resolveAppMode,
   resourceNames,
-} from '../../lib';
-import { type JsonObject, readConfigJson } from '../config/helpers';
-import { normaliseAssetHashes } from '../helpers/assets';
-import { acknowledgedRules, synthError, tempOutdir, testApp } from '../helpers/cdk';
+} from '../../../lib';
+import { type JsonObject, readConfigJson } from '../../config/helpers';
+import { normaliseAssetHashes } from '../../helpers/assets';
+import { acknowledgedRules, synthError, tempOutdir, testApp } from '../../helpers/cdk';
 
 type ConfigFile = 'pipeline' | 'dev' | 'prod';
 const SHIPPED: Record<ConfigFile, string> = { pipeline: 'pipeline.example.json', dev: 'dev.json', prod: 'prod.json' };

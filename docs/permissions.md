@@ -388,7 +388,7 @@ The dev app (Core, MemberRole, Analytics, MCP and the shared logging stack) has 
 | `AwsSolutions-IAM5` (wildcards) | 61 | X-Ray and `organizations:ListAccounts` support no resource-level permissions; member account IDs, run IDs, account IDs and case IDs in S3 keys and execution names are discovered at run time, so keys are scoped to fixed prefixes and file names; CDK Lambda grants include versions (`:*`); Step Functions log delivery actions; Marketplace actions; the API Gateway logging role's log group prefix and `logs:DescribeLogGroups`; `glue:GetTables` for `SHOW TABLES` |
 | `AwsSolutions-L1` (latest runtime) | 11 | Python 3.12 is the approved runtime, because the layer is built from hash-locked cp312 wheels |
 | `AwsSolutions-SQS3` (no dead-letter queue) | 2 | `WorkflowFailures` and `AccountDiscoveryFailures` are terminal queues with no consumer |
-| `AwsSolutions-SNS2` (topic not encrypted) | 1 | CloudWatch alarms can publish to an encrypted topic only with a customer managed KMS key, which the design excludes |
+| `AwsSolutions-SNS2` (topic not encrypted) | 1 | CloudWatch alarms cannot publish to a topic encrypted with `alias/aws/sns`, and the design excludes customer managed KMS keys; the topic enforces TLS, and notifications carry no case content but do carry operational metadata (account ID, Region, alarm names and states, metric values, resource names) |
 | `AwsSolutions-GL1` (crawler log encryption) | 1 | Needs a customer managed KMS key; crawler logs hold only object paths and partition names |
 | `AwsSolutions-IAM4` (AWS managed policy) | 1 | The CDK bucket notification helper uses `AWSLambdaBasicExecutionRole` |
 | `AwsSolutions-APIG2` (request validation) | 1 | The MCP function validates the JSON-RPC envelope, body size and every tool argument |
@@ -396,7 +396,7 @@ The dev app (Core, MemberRole, Analytics, MCP and the shared logging stack) has 
 | `AwsSolutions-COG4` (Cognito authoriser) | 1 | Authentication is SigV4 with `AWS_IAM` authorisation and the resource policy |
 | `@aws-cdk/aws-s3:accessLogsPolicyNotAdded` (CDK warning) | 1 | Log delivery for the results bucket is granted in the Core access-log bucket policy |
 
-The full text of each reason is in the code next to the resource it covers. The construct tests in `test/constructs/` assert the exact acknowledgements each construct makes, and `test/nag.test.ts` tests the acknowledgement helpers.
+The full text of each reason is in the code next to the resource it covers. The construct tests in `test/cdk/constructs/` assert the exact acknowledgements each construct makes, and `test/cdk/nag.test.ts` tests the acknowledgement helpers.
 
 ## Live verification (deferred)
 

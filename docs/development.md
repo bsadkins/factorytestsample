@@ -29,7 +29,7 @@ The npm scripts call the tools in `.venv/bin/` directly, so the virtual environm
 
 | Path | Content |
 | --- | --- |
-| `bin/support-case-insights.ts` | CDK app entry point |
+| `bin/case-insights.ts` | CDK app entry point |
 | `lib/app.ts`, `lib/index.ts` | Builds the environment stacks for `-c env=<env>`; public API used by the optional pipeline |
 | `lib/config/` | Configuration types (`types.ts`), loading and cross-field validation (`load.ts`), JSON Schema validation (`schema-validator.ts`), resource naming (`naming.ts`), API Gateway logging and pipeline settings |
 | `lib/stacks/` | Core, member role, Analytics, MCP, shared API logging and pipeline stacks |
@@ -43,7 +43,8 @@ The npm scripts call the tools in `.venv/bin/` directly, so the virtual environm
 | `src/templates/` | Prompt templates (see [prompts.md](prompts.md)) |
 | `config/` | `schema.json`, `example.json` (every field), `dev.json`, `prod.json` |
 | `scripts/` | Operator tools (`generate_csv_insights.py`, `mcp_aws_client.py`, `redrive-dlq.sh`, `reprocess-cases.py`), `render_taxonomy_docs.py`, `build/bundle_python_layer.py`, `security/` |
-| `test/` | Jest tests (`*.test.ts`) and pytest tests (`test_*.py`); fixtures in `test/fixtures/`, shared Python test helpers in `test/support/` |
+| `test/` | Jest tests (`*.test.ts`) and pytest tests (`test_*.py`): CDK assertions, cdk-nag and per-stack snapshots in `test/cdk/`, configuration tests in `test/config/`, Lambda handler tests in `test/lambda/`; fixtures in `test/fixtures/`, shared TypeScript helpers in `test/helpers/` and Python test helpers in `test/support/` |
+| `.github/workflows/ci.yml` | Pull request CI (see [Continuous integration](#continuous-integration)) |
 
 ## Commands
 
@@ -56,14 +57,14 @@ The npm scripts call the tools in `.venv/bin/` directly, so the virtual environm
 | `npm run verify` | `lint`, `typecheck`, `test` and `synth` in that order |
 | `npm run security` | `security:npm` (`node scripts/security/npm-advisory-scan.cjs`) and `security:py` (`pip-audit --strict` over both lock files, then `bandit` over `src` and `scripts`) |
 
-Every pull request must pass `npm run verify`. CI uses the Node.js version in `.nvmrc` and Python 3.12. Run `npm run security` when dependencies change. To fix formatting, run `.venv/bin/ruff format .`; line length is 100.
+Every pull request must pass `npm run verify`, which [continuous integration](#continuous-integration) runs. Run `npm run security` when dependencies change. To fix formatting, run `.venv/bin/ruff format .`; line length is 100.
 
 ## Tests
 
-**TypeScript.** Jest runs `test/**/*.test.ts` with `ts-jest`, two workers and a 120-second timeout per test. Template snapshots are in `test/__snapshots__/app.test.ts.snap` and `test/stacks/__snapshots__/`. When an infrastructure change is intended, update them with `npx jest -u <test file>` and review the snapshot diff as carefully as the code: it is the record of what CloudFormation will change.
+**TypeScript.** Jest runs `test/**/*.test.ts` with `ts-jest`, two workers and a 120-second timeout per test. Template snapshots are in `test/cdk/__snapshots__/app.test.ts.snap` and `test/cdk/stacks/__snapshots__/`. When an infrastructure change is intended, update them with `npx jest -u <test file>` and review the snapshot diff as carefully as the code: it is the record of what CloudFormation will change.
 
 ```bash
-npx jest test/constructs/observability.test.ts
+npx jest test/cdk/constructs/observability.test.ts
 ```
 
 **Python.** `pytest` uses `src/lambda` and `test/support` as import paths, importlib import mode, strict markers and strict `xfail`. `npm run test:py` measures branch coverage of `src/lambda` and fails below 80 per cent. For a subset, skip coverage:
@@ -74,13 +75,23 @@ npx jest test/constructs/observability.test.ts
 
 Tests never call AWS. Handlers are exercised with `moto` and botocore stubbers; `test/support/` provides kits for the pipeline, workflow, analysis and MCP tests, an SQLite-backed Athena stand-in and a loopback SigV4 server for the bridge. The only test that calls AWS is the opt-in live Bedrock regression in `test/prompts/test_live_bedrock_prompts.py`, skipped unless `CASE_INSIGHTS_LIVE_BEDROCK=1` (see [Testing prompts](prompts.md#testing-prompts)). Local tests are not proof of live behaviour; the live checks for a deployment are listed in the documents for each feature and remain deferred.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request (and on demand through `workflow_dispatch`) on `ubuntu-24.04`:
+
+1. Node.js 24.22.3 from `.nvmrc` and Python 3.12.3 (`PYTHON_VERSION` in the workflow), with every action pinned to a commit SHA.
+2. `npm ci`, then `python -m venv .venv` and `.venv/bin/python -m pip install --require-hashes -r requirements-dev.txt`.
+3. `npm run verify`: lint, type checks, Jest (CDK assertions, cdk-nag and per-stack snapshots), pytest with the 80% aggregate coverage threshold for `src/lambda` (including the prompt fixtures), and dev and prod synthesis with cdk-nag.
+4. A check that verification left the working tree unchanged, so a missing snapshot or a generated file that is not ignored fails the build.
+
+The job has read-only repository permissions and uses no AWS credentials or secrets. `.cache/pip` is cached with a key derived from `requirements.txt` and `requirements-dev.txt`; the cache is only an optimisation, because every wheel is still installed with `--require-hashes` and a miss downloads from the package index. `test/build/test_ci_workflow.py` checks these properties of the workflow. When you change the Node.js or Python version, update `.nvmrc` or `PYTHON_VERSION` together with this guide, [CONTRIBUTING](../CONTRIBUTING.md) and the [README](../README.md#continuous-integration).
 ## Python asset packaging
 
 `lib/packaging/python-assets.ts` builds each handler asset (`lambdaHandlerCode`) and the common layer (`lambdaPackagesCode`, mounted at `/opt/python`) during synthesis; prompt templates go into a separate templates layer at `/opt/templates`. Layer dependencies are installed by `scripts/build/bundle_python_layer.py` with `pip install --only-binary=:all: --require-hashes` for the `manylinux_2_28_x86_64` platform and CPython 3.12, so the result matches the Lambda runtime on any build machine without Docker.
 
 - The first synthesis needs access to the package index; downloaded wheels are cached in `.cache/pip`.
 - `CASE_INSIGHTS_PYTHON` selects a Python 3.12 interpreter other than `.venv/bin/python`.
-- Assets are content-addressed: a template-only change rebuilds only the templates layer, and a change in `src/lambda/common/` rebuilds the common layer (`test/packaging/python-assets.test.ts`).
+- Assets are content-addressed: a template-only change rebuilds only the templates layer, and a change in `src/lambda/common/` rebuilds the common layer (`test/cdk/packaging/python-assets.test.ts`).
 
 ## Dependencies
 
@@ -116,7 +127,7 @@ All versions are pinned exactly. npm overrides pin `glob` 14.0.6, `minimatch` 11
 | `acknowledgeGeneratedPolicyWildcards(policy, rules)` | Wildcards in a policy generated by CDK grants |
 | `acknowledgeCdkWarning(scope, id, reason)` | A CDK annotation warning |
 
-Reasons must be at least 40 characters and explain why the finding is acceptable, not restate it. The tests keep an inventory of every acknowledgement (`test/app.test.ts` for Core, `test/stacks/*.test.ts` for the Analytics, MCP and logging stacks), so a new acknowledgement also needs a test update and a review. See [security.md](security.md) for the accepted exceptions.
+Reasons must be at least 40 characters and explain why the finding is acceptable, not restate it. The tests keep an inventory of every acknowledgement (`test/cdk/app.test.ts` for Core, `test/cdk/stacks/*.test.ts` for the Analytics, MCP and logging stacks), so a new acknowledgement also needs a test update and a review. See [security.md](security.md) for the accepted exceptions.
 
 ## Lambda handler conventions
 
@@ -132,7 +143,7 @@ Every handler follows the same pattern; copy an existing handler rather than sta
 1. Write the handler in `src/lambda/<name>/app.py` following the conventions above, with tests under `test/lambda/`.
 2. Add a `PipelineFunction` construct (`lib/constructs/pipeline-function.ts`). It creates a Python 3.12 x86_64 function with its own role (unless one is passed), its own log group with `logRetentionDays`, JSON logging, active tracing and the safe Powertools environment, which callers cannot override. The function name must include `uniqueId` and be at most 64 characters.
 3. Grant only the permissions the handler needs, scoped to this deployment's resources; see [permissions.md](permissions.md).
-4. Add the function to the `functions` list passed to observability in `lib/stacks/core-stack.ts`. This creates the alarm `LambdaErrors-<constructId>`. Add it to `PIPELINE_FUNCTIONS` in `test/constructs/observability.test.ts`.
+4. Add the function to the `functions` list passed to observability in `lib/stacks/core-stack.ts`. This creates the alarm `LambdaErrors-<constructId>`. Add it to `PIPELINE_FUNCTIONS` in `test/cdk/constructs/observability.test.ts`.
 5. Add a `### LambdaErrors-<constructId>` section to [runbook.md](runbook.md); the test `every alarm has a runbook entry` fails without it.
 6. Add the handler to `HANDLERS` in `test/support/handler_trace_probe.py`; `test/lambda/test_handler_tracing.py` checks that every module that creates a `Tracer` is covered.
 7. Update the snapshots, then [resources.md](resources.md), [monitoring.md](monitoring.md) and [architecture.md](architecture.md).
@@ -167,7 +178,7 @@ Documentation lives in `docs/` and in `README.md`. Some documents are checked by
 
 - `test/docs/test_analytics_docs.py` checks that `docs/athena.md` and `docs/csv_export.md` match the synthesised Analytics resources, the processed-record schema and the exporter's options, that their relative links and those in `README.md` resolve, and that they make no customer managed KMS key claims;
 - `test/build/test_render_taxonomy_docs.py` checks the taxonomy renderer, and `--check` verifies that a document's generated block is current;
-- `test/constructs/observability.test.ts` requires a runbook section for every alarm.
+- `test/cdk/constructs/observability.test.ts` requires a runbook section for every alarm.
 
 ```bash
 .venv/bin/pytest test/docs --no-cov -q

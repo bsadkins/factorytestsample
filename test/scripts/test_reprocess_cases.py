@@ -1034,6 +1034,7 @@ def test_a_record_replaced_during_reprocessing_is_kept(env: Env) -> None:
 
 
 def test_output_keys_match_the_core_stack_outputs(script: ModuleType) -> None:
-    snapshot = (REPO_ROOT / "test" / "__snapshots__" / "app.test.ts.snap").read_text("utf-8")
+    snapshot_file = REPO_ROOT / "test" / "cdk" / "__snapshots__" / "app.test.ts.snap"
+    snapshot = snapshot_file.read_text("utf-8")
     for key in script.CORE_OUTPUTS.values():
         assert snapshot.count(f'\n    "{key}": {{\n') == 2, key  # dev and prod snapshots
