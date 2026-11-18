@@ -1,208 +1,370 @@
 # Support Case Insights
 
-Support Case Insights is an AWS CDK (TypeScript) application that will collect resolved AWS Support cases from every member account of an AWS Organization, summarise and classify them with Amazon Bedrock, and make the results available for analytics and an MCP server.
+Support Case Insights collects the resolved AWS Support cases of every member account in one AWS Organization, summarises and classifies each case with Amazon Bedrock, and makes the results available through Amazon Athena, CSV export and an optional Model Context Protocol (MCP) server for assistants such as Kiro. It is an AWS CDK v2 (TypeScript) application with Python 3.12 Lambda functions, deployed from the management account of the organisation.
 
-## Project status
+> **Status.** Version 0.1.0. Everything in this repository is verified locally (lint, type checks, unit, integration and CDK assertion tests, synthesis with cdk-nag), but nothing has been deployed to AWS yet. The checks that need a real deployment are listed in [Deferred live verification](#deferred-live-verification).
 
-This branch currently contains the project foundation and the shared Python runtime:
+## Table of contents
 
-- typed, schema-validated environment configuration (`config/`) and the optional pipeline configuration schema;
-- the CDK entry point, which validates configuration, registers cdk-nag and synthesises `CaseInsightsCoreStack-<uniqueId>` and `CaseInsightsMemberRoleStack-<uniqueId>`;
-- the core storage and coordination foundation: account-list, raw and processed buckets plus a dedicated access-log bucket, the Powertools idempotency table, the stage queues with their dead-letter queues, and the two execution roles that member accounts trust;
-- the service-managed `CaseInsights-MemberRole-<uniqueId>` StackSet, which deploys the read-only `Support-Case-Analysis-Role-<uniqueId>` to every account under the configured root or OUs;
-- scheduled account discovery (`AccountDiscovery`): an EventBridge Scheduler schedule (default 00:00 UTC) invokes `Lambda-AccountLookup-<uniqueId>`, which pages through Organizations `ListAccounts`, keeps `ACTIVE` member accounts other than the management account and writes `account-lists/<runId>.json`; the S3 notification invokes `Lambda-AccountReader-<uniqueId>`, which validates the list and sends one `{accountId, accountName, runId}` message per account to the active-accounts queue. Scheduled runs take their run ID from the schedule time, so a repeated delivery does not start a second run, and the reader uses Powertools idempotency so duplicate S3 events do not enqueue a run twice. Malformed lists fail visibly and, after retries, land in `CaseInsights-AccountDiscoveryFailures-<uniqueId>`. Writing the account list starts a run; it is not reported as pipeline completion;
-- case collection (`CaseCollection`): `Lambda-CaseRetrieval-<uniqueId>` and `Lambda-CaseAnnotation-<uniqueId>` read resolved cases and their complete conversations through the member role into the raw bucket and queue references for analysis;
-- case analysis and recovery (`CaseAnalysis`): the workflow starter, the Standard `CaseAnalysis-<uniqueId>` state machine, the failure handler and the daily case cleanup, described in [Case analysis and recovery](#case-analysis-and-recovery);
-- observability (`Observability`): the hourly run completion check that emits the daily-completion heartbeat, the alarm topic, the alarms and the operations dashboard, described in [Observability and daily completion](#observability-and-daily-completion);
-- reusable constructs for later pipeline stages: a standard Python function factory (`PipelineFunction`) and the Bedrock model allowlist policy (`BedrockInvokePolicy`);
-- the shared Python package `src/lambda/common/` (taxonomies, prompt rendering, model-output validation, Bedrock, STS, S3, SQS and retry helpers) and the prompt templates in `src/templates/`, packaged as two Lambda layers;
-- the optional Analytics stack (`enableAnalytics`) and the CSV exporter `scripts/generate_csv_insights.py`, described in [Analytics](#analytics);
-- the optional approval-gated CDK pipeline (`-c pipeline=true`), described in [Optional CDK pipeline](#optional-cdk-pipeline);
-- strict TypeScript and Python tooling, exact dependency pins, an npm lockfile and hash-locked Python requirements;
-- local lint, type-check, test, synth and security commands.
+1. [Overview](#overview)
+   - [Architecture](#architecture)
+   - [AWS services](#aws-services)
+   - [Cost](#cost)
+2. [Prerequisites](#prerequisites)
+3. [Deployment](#deployment)
+4. [Deployment validation](#deployment-validation)
+5. [Running the solution](#running-the-solution)
+6. [Updating and reprocessing](#updating-and-reprocessing)
+7. [Cleanup](#cleanup)
+8. [Security](#security)
+9. [FAQ, known limitations and additional considerations](#faq-known-limitations-and-additional-considerations)
+10. [Local verification](#local-verification)
+11. [Deferred live verification](#deferred-live-verification)
+12. [Documentation](#documentation)
+13. [Revisions](#revisions)
+14. [Notices](#notices)
+15. [Licence](#licence)
 
-The full documentation is **not complete yet**. Available guides: [docs/pipeline.md](docs/pipeline.md) (the optional approval-gated CDK pipeline), [docs/athena.md](docs/athena.md) (Athena analytics and optional QuickSight setup), [docs/csv_export.md](docs/csv_export.md) (CSV export for Power BI and Excel), [docs/mcp-server-deployment.md](docs/mcp-server-deployment.md) (the SigV4 stdio bridge `scripts/mcp_aws_client.py` with Kiro and Claude Desktop setup) and [docs/runbook.md](docs/runbook.md), a provisional alarm runbook that also covers dead-letter queue redrive and opt-in reprocessing. Nothing has been deployed to AWS; StackSet instance creation is untested until a real deployment.
+## Overview
 
-## Security foundation
+Support cases record what went wrong in your AWS estate and how it was fixed, but they are spread across every account in the organisation and are hard to analyse together. Support Case Insights:
 
-- Every bucket is private (`BLOCK_ALL`, bucket-owner enforced), versioned, SSE-S3 encrypted and denies requests without TLS 1.2 or later. The account-list, raw and processed buckets write server access logs to a dedicated bucket that does not log to itself. Raw data and account lists expire after `rawRetentionDays`; processed records move to Standard-IA after `operations.storage.processedInfrequentAccessDays` (S3 does not transition objects smaller than 128 KB by default, so small records stay in Standard).
-- Prod retains buckets, the idempotency table and log groups on stack deletion and enables DynamoDB deletion protection. Dev deletes them and empties its buckets first.
-- Queues use SSE-SQS and deny requests without TLS. Each work queue has its own dead-letter queue with the configured receive count, and its visibility timeout is at least six times the consumer timeout. Dead-letter retention (`operations.queues.dlqRetentionDays`, minimum 5) must exceed the 4-day source retention because SQS keeps a message's original enqueue time.
-- The member role trusts only `CaseInsights-CaseRetrieval-<uniqueId>` and `CaseInsights-CaseAnnotation-<uniqueId>` in the management account, with an `aws:PrincipalOrgID` condition, and grants only `support:DescribeCases` and `support:DescribeCommunications`. Those two roles can assume only that role name, in accounts of the configured organization. Service-managed StackSets never deploy to the management account. StackSets trusted access must be enabled before deployment.
-- `BedrockInvokePolicy` allows the configured global inference profile plus its Regional and global foundation-model ARNs (only through that profile), explicitly denies every other model, limits `aws-marketplace:Subscribe` to the approved product IDs (`prod-xdkflymybwmvi` for Claude Haiku 4.5, `prod-mxcfnwvpd6kb4` for Claude Sonnet 4.5) and allows `aws-marketplace:ViewSubscriptions`, which has no resource or condition scoping. IAM cannot complete Anthropic's first-time-use form; that remains an account prerequisite.
-- Each schedule (account lookup, cleanup, run completion) has its own execution role that can invoke only its target function. The roles trust `scheduler.amazonaws.com` only with `aws:SourceAccount` equal to the management account and `aws:SourceArn` equal to the `default` schedule group ARN. Scheduler always sends the schedule group ARN, so a trust policy cannot name an individual schedule.
-- cdk-nag acknowledgements are made with `acknowledgeNagFinding` on the narrowest construct and finding ID, each with a written reason; `test/app.test.ts` lists every Core acknowledgement and `test/stacks/analytics-stack.test.ts` every Analytics acknowledgement.
+- discovers every active member account each day and reads its resolved cases and their complete conversations through a read-only role, `Support-Case-Analysis-Role-<uniqueId>`, which a service-managed StackSet deploys to every account under the configured root or organisational units;
+- makes three focused Amazon Bedrock calls per case: a 600 to 650 character summary, a root cause analysis (RCA) category from a fixed taxonomy of 16, and an operational lifecycle category from a fixed taxonomy of 20, each with a short reason (see [prompts](docs/prompts.md));
+- stores one processed JSON record per case in Amazon S3 and never analyses a committed case again unless you ask it to;
+- optionally catalogues the records in AWS Glue for Athena queries and Amazon QuickSight, exports them to CSV for Power BI or Excel, and serves eight read-only MCP tools over an IAM-authenticated API.
 
-## Case analysis and recovery
+The default model is the global cross-Region inference profile for Claude Haiku 4.5 (`global.anthropic.claude-haiku-4-5-20251001-v1:0`); the only alternative is Claude Sonnet 4.5 (`global.anthropic.claude-sonnet-4-5-20250929-v1:0`).
 
-- **Starting work.** `Lambda-WorkflowStarter-<uniqueId>` consumes the summary queue (batches of 10, partial-batch failure reporting, Powertools idempotency). It never starts a case that has a processed record. Each case attempt gets a stable execution name `<account>-<case>-<runId>-a<attempt>`, and the raw-bucket ownership marker `account_number=<id>/case_number=<displayId>/workflow.json` (written with S3 conditional writes) names the execution that owns the case. A RUNNING execution is left alone, so duplicate deliveries and overlapping runs never create a second active execution. `ExecutionAlreadyExists` is never treated as success: the starter describes the execution and decides. A closed FAILED, TIMED_OUT or ABORTED execution is recovered under the next attempt name, which avoids the 90-day reuse restriction on closed execution names.
-- **Workflow.** `CaseAnalysis-<uniqueId>` is a Standard state machine: Summary → RCA → Lifecycle → UpdateCaseMetadata. State holds references only, and execution data is excluded from its logs. Every task retries Lambda throttling (8 attempts, full jitter, at most about 15 minutes), the stage's remaining Bedrock throttling or transient errors, and S3, network and timeout errors (each `operations.workflow.taskMaxAttempts`). Any other error, or exhausted retries, goes to HandleFailure, which sends one safe failure record (case reference fields, failure type, stage, error type; no case content or error text) to `CaseInsights-WorkflowFailures-<uniqueId>` and then fails the execution. If that send fails, the handler raises and Step Functions retries it. A task that is retried after an uncertain outcome may rarely repeat one inference; stage checkpoints and the processed-record check before each inference keep this rare, but exactly-once inference is not promised.
-- **Bedrock concurrency.** Summary, RCA and Lifecycle run in one function, `Lambda-CaseAnalysisStages-<uniqueId>`, whose reserved concurrency equals `bedrockMaxConcurrency`. Each invocation runs one stage and makes its Bedrock calls one at a time, so concurrent Bedrock requests never exceed the configured value, including caps of 1 or 2. Starter concurrency (`operations.workflow.starterMaxConcurrency`) only limits how fast executions start; it is not a limit on running executions. When more executions are running than the cap allows, Lambda throttles the extra stage invocations and the workflow retries them. With a large backlog and a small cap, some attempts can exhaust that retry budget; they are recorded as failures and a later run retries them.
-- **Failure records and redrive.** The failure queue has no consumer. To retry a recorded case before the next scheduled run, send the message's case reference fields (`accountId`, `caseId`, `displayId`, `runId`, `rawKey`, `communicationsKey`, `communicationsVersionId`, `communicationCount`) to the summary queue with a new `redriveId` (1 to 64 letters, digits or hyphens). The starter then starts the next attempt; the processed record still prevents any rework of a committed case.
-- **Recovery tools.** `scripts/redrive-dlq.sh` moves the messages of one stage dead-letter queue (active accounts, annotation or summary) back to its stage queue after checking the deployment, account, Region and queue pairing, with a preview, `--dry-run` and a confirmation token. `scripts/reprocess-cases.py` is the only way to analyse committed cases again: it selects processed records whose `timeCreated` (or `Case_Retrieval_Date`) falls in an explicit, inclusive range of UTC days, previews them, and after confirmation queues each case under a fresh run ID and removes its processed record and checkpoints with delete markers (no version is deleted). Cases with active work are left alone. Both are described, with permissions and example transcripts, in [Recovery tools](docs/runbook.md#recovery-tools).
-- **Conversations too large to summarise.** Annotation stores the complete conversation but sends a `ConversationTooLarge` record (with `retryable: false`) to the failure queue instead of truncating it. It also writes `terminal-failure.json` with a digest of the conversation, so later runs report the case again only when its content changes; unchanged content is never retried automatically. A manual redrive of an unchanged oversized case fails again in the Summary stage and produces a new failure record; it cannot loop.
-- **Timeouts, aborts and unrecorded failures.** A whole-execution timeout or abort bypasses every task Catch, and HandleFailure can exhaust its own retries, so some closed attempts never record a failure. Before the starter replaces, or cleanup deletes, the ownership marker of a closed FAILED, TIMED_OUT or ABORTED execution, it writes a pending failure-delivery marker `account_number=<id>/case_number=<displayId>/failure-deliveries/<executionName>.json`. Cleanup (daily) and run completion (hourly) send a `WorkflowExecutionClosed` record for each pending marker and then mark it `sent`; HandleFailure marks its own records `sent` too and does not resend a confirmed one. Delivery is at least once: a crash between sending and marking repeats the record with the same `deliveryKey` (the execution name). A failed send or S3 error leaves the marker pending for the next attempt. Markers only stop duplicate records for one execution; they never stop a later run from retrying the case, and cleanup cannot delete them.
-- **Cleanup.** `Lambda-CaseCleanup-<uniqueId>` runs daily (`schedules.cleanup`, default 22:00 UTC) and pages through the raw bucket. It resets a case only when it has no processed record, all of its objects are older than `operations.cleanup.graceHours`, no RUNNING execution belongs to it (a paginated top-level listing; an owner waiting in PENDING_REDRIVE is caught through DescribeExecution) and its ownership marker names a closed or never-started execution. Before deleting anything, cleanup replaces exactly the marker it judged with a reset claim in `workflow.json` (a conditional write), so a starter that took ownership meanwhile wins and keeps the inputs. Starters never overwrite a recent claim; they fail the record and retry. Cleanup then deletes `data.json` and `communications.json`, each conditional on the ETag it checked, and finally its claim, so the next run collects and analyses the case again. If an input changed or a processed record appeared, the claim is released and the inputs stay. A claim left by an interrupted cleanup is completed by a later cleanup, or taken over by a starter, once it is an hour old. Checkpoints and terminal markers are kept. Unknown or failed status checks never lead to a deletion. When its time budget runs out, cleanup saves its position under `cleanup-state/` and the next run resumes there.
+### Architecture
 
-## Observability and daily completion
+![Support Case Insights architecture](docs/images/architecture.png)
 
-- **Telemetry.** Every function uses Powertools structured JSON logging, EMF metrics (namespace `SupportCaseInsights`, `service` dimension only) and active X-Ray tracing, with event, response and error capture disabled. Log groups keep `logRetentionDays` (default 90). The state machine has X-Ray tracing and excludes execution data from its logs. Metrics are counts and durations only, never account or case content.
-- **Run markers.** Case retrieval writes `runs/<runId>/accounts/<accountId>.json` in the raw bucket: `dispatching` with the cases it is about to queue before sending any reference, then `retrieved` once all are queued, or `skipped`. The recorded cases never shrink within a run: a retry, or a retry that loses access, keeps and re-queues every case an earlier attempt recorded. Annotation writes `runs/<runId>/cases/<accountId>/<displayId>.json` for cases whose work ends there (not found, skipped, already processed, too large to summarise); the starter writes it with the owning execution name, or `alreadyProcessed`. These markers are evidence for completion only; SQS and Step Functions still coordinate the work, and no extra coordination service is used.
-- **Daily-completion heartbeat.** `Lambda-RunCompletion-<uniqueId>` runs hourly (`CaseInsights-RunCompletion-<uniqueId>`) and checks every account list written in the last 72 hours. A run is complete only when every listed account has a settled account marker (`retrieved` or `skipped`), every case an account marker lists has a case marker, and every case is terminal: skipped, already processed, too large to summarise, a SUCCEEDED execution, or a closed failed execution whose failure record is confirmed (run completion delivers it itself when missing). Runs with no accounts, or only accounts without cases, complete on the next check. The first check that finds a run complete writes `runs/<runId>/completion.json` (conditional create) and emits `DailyRunCompleted`. Account discovery never emits it.
-- **Alarms.** All alarms notify the SNS topic `CaseInsights-Alarms-<uniqueId>`: errors of every function, CaseAnalysis executions failed, timed out or aborted, any visible message in each dead-letter queue and in the workflow-failure and discovery-failure terminal queues, failure records written (including conversations too large to summarise and reconciled records), failure-delivery errors, cleanup errors, persistent run completion errors, and no `DailyRunCompleted` for 30 hours (missing data counts as breaching). Each alarm has an entry in [docs/runbook.md](docs/runbook.md).
-- **Email notifications.** Set `alarmEmail` to subscribe an address (required in prod). AWS emails a confirmation link after deployment; notifications are delivered only after the recipient confirms. The topic requires TLS but is not encrypted at rest: CloudWatch alarms can publish to an encrypted topic only through a customer managed KMS key, which this solution does not use. Notifications carry alarm names and states, never case content. The topic policy lets `cloudwatch.amazonaws.com` publish only for alarms in the management account named `CaseInsights-<uniqueId>-*`.
-- **Dashboard.** `CaseInsights-<uniqueId>` shows accounts discovered, excluded and skipped; cases retrieved, annotated, processed and failed; Bedrock latency, tokens, throttles and failures; workflow executions and success rate; dead-letter and terminal queue depth; run completion; cleanup and failure-record reconciliation; Lambda errors; and the state of every alarm.
+The full diagram and its source are in [architecture](docs/architecture.md) and [docs/images/architecture.mmd](docs/images/architecture.mmd). In outline:
 
-## Analytics
+```mermaid
+flowchart LR
+  subgraph MEMBER["Member accounts"]
+    ROLE["Support-Case-Analysis-Role-#lt;uniqueId#gt;<br/>(StackSet)"]
+    SUPPORT["AWS Support API"]
+    ROLE --> SUPPORT
+  end
+  subgraph CORE["CaseInsightsCoreStack-#lt;uniqueId#gt;"]
+    SCHED["EventBridge Scheduler"] --> LOOKUP["Account lookup<br/>and reader"]
+    LOOKUP --> SQS1[["SQS stage queues<br/>with DLQs"]]
+    SQS1 --> COLLECT["Case retrieval<br/>and annotation"]
+    COLLECT --> RAW[("S3 raw bucket")]
+    COLLECT --> SFN["Step Functions CaseAnalysis<br/>Summary, RCA, Lifecycle"]
+    SFN --> BEDROCK["Amazon Bedrock<br/>global inference profile"]
+    SFN --> PROC[("S3 processed bucket")]
+    OPS["Dashboard, alarms,<br/>SNS email"]
+  end
+  subgraph ANALYTICS["CaseInsightsAnalyticsStack (optional)"]
+    CRAWLER["Glue crawler"] --> GLUE[("Glue table case_summary")]
+    ATHENA["Athena workgroup"]
+  end
+  subgraph MCP["CaseInsightsMcpStack (optional)"]
+    WAF["AWS WAF"] --> APIGW["API Gateway /v1/mcp<br/>AWS_IAM"] --> MCPFN["MCP function<br/>8 read-only tools"]
+  end
+  COLLECT -->|assume role| ROLE
+  PROC --> CRAWLER
+  ATHENA --> GLUE
+  MCPFN --> ATHENA
+  MCPFN --> BEDROCK
+  CLIENT["Kiro with SigV4 bridge"] --> WAF
+```
 
-- **Stack.** With `enableAnalytics` set (the default in both shipped configurations), `CaseInsightsAnalyticsStack-<uniqueId>` is deployed after Core. It reads the Core processed and access-log buckets through CDK weak cross-stack references (no exports); Core never references it. With the flag off no Glue, Athena or results-bucket resources exist anywhere.
-- **Catalog.** Glue database `case_insights_<uniqueId>` (hyphens become underscores) holds the external table `case_summary` over `s3://<processed bucket>/`, partitioned by `account_number` and `case_number` (`account_number=<id>/case_number=<displayId>/data.json`). It uses the OpenX JSON SerDe with case-sensitive matching: Glue column names are lower case, and each column maps explicitly to its mixed-case JSON key (for example `rca_category` reads `RCA_Category`). Every column is a string; dates stay ISO-8601 text. A Jest test checks the columns against `common.processed_record.PROCESSED_FIELDS`.
-- **Partition refresh.** The crawler `case-insights-partition-crawler-<uniqueId>` runs on `schedules.crawler` (default `cron(0 9 * * ? *)`, 09:00 UTC). It targets the existing table, adds new partitions and only logs schema changes, so newly processed cases become queryable after the next crawl. Run it sooner with the `ManualCrawlerStartCommand` stack output (`aws glue start-crawler --name case-insights-partition-crawler-<uniqueId> --region <region>`). Its role, trusted only by Glue, can read processed records and refresh partitions of this table; it cannot write or delete records.
-- **Workgroup.** `CaseInsights-<uniqueId>` (Athena engine version 3) enforces its configuration: results go to `query-results/` in a dedicated private, versioned, SSE-S3 results bucket (`SSE_S3` result encryption, no KMS key) that expires results after `operations.athena.resultsRetentionDays` (default 30), and each query stops after `operations.athena.bytesScannedCutoffPerQuery` bytes (default 10 GiB, minimum 10 MiB). The results bucket logs to the Core access-log bucket under `athena-results/`.
-- **Queries and QuickSight.** [docs/athena.md](docs/athena.md) documents the table schema and column mappings, crawler delay and manual refresh, analyst permissions, the example query library (RCA distribution, lifecycle categories by service, day-of-week, week-of-month and monthly patterns, severity trends and top accounts) and an optional manual QuickSight setup. QuickSight is not provisioned by this application.
-- **CSV export.** `scripts/generate_csv_insights.py` exports processed records straight from the processed bucket to CSV with boto3 and pandas. It needs only `s3:ListBucket` on the bucket and `s3:GetObject` on `account_number=*`, does not use Athena and does not wait for the crawler. [docs/csv_export.md](docs/csv_export.md) covers permissions, every option, filtering, output, exit codes, scheduling, Power BI and Excel.
+How a case flows through the solution:
+
+1. At 00:00 UTC (configurable) an EventBridge Scheduler schedule invokes `Lambda-AccountLookup-<uniqueId>`, which lists the organisation's active member accounts, excluding the management account, and writes the list to S3.
+2. The S3 event invokes the account reader, which sends one message per account to the active-accounts queue.
+3. `Lambda-CaseRetrieval-<uniqueId>` assumes `Support-Case-Analysis-Role-<uniqueId>` in the member account, lists resolved cases created within `lookbackMonths` that have no processed record, stores their metadata in the raw bucket and queues them. Accounts without a qualifying Support plan or without the role are skipped and counted.
+4. `Lambda-CaseAnnotation-<uniqueId>` reads each case's complete conversation, stores it and queues the case for analysis.
+5. The workflow starter starts one execution of the Standard state machine `CaseAnalysis-<uniqueId>` per case. Its Summary, RCA and Lifecycle steps each call Bedrock once, with concurrency capped at `bedrockMaxConcurrency`, and validate the output; the UpdateCaseMetadata step commits the processed record. Failures are retried, then recorded on a failure queue.
+6. Daily cleanup resets abandoned work so that the next run retries it, and an hourly check emits the `DailyRunCompleted` heartbeat once every account and case of a run is settled.
+7. With Analytics, the 09:00 UTC crawler adds new partitions so that Athena, QuickSight and the MCP tools can query the records. The CSV exporter reads the processed bucket directly.
+8. With MCP, Kiro or another client sends SigV4-signed JSON-RPC requests through the local bridge `scripts/mcp_aws_client.py` to `POST /v1/mcp`, protected by AWS WAF, IAM authorisation and a resource policy, and the MCP function answers from Athena and Bedrock.
+
+Why it is built this way, in brief: SQS queues buffer per-account and per-case work, isolate retries and collect failures in dead-letter queues; Step Functions sequences the three Bedrock calls with explicit retries and failure handling; three separate prompts keep each task focused and let each output be validated on its own; a service-managed StackSet deploys the member role automatically to every current and future account in the targets; and DynamoDB is used only for Powertools idempotency. See [architecture](docs/architecture.md#design-rationale).
+
+### AWS services
+
+| Service | Use |
+| --- | --- |
+| AWS Organizations, AWS CloudFormation StackSets | Account discovery; deployment of the member role to every member account |
+| AWS Support API | Read-only `DescribeCases` and `DescribeCommunications` in member accounts |
+| Amazon EventBridge Scheduler, AWS Lambda, Amazon SQS, AWS Step Functions | Scheduling, processing, buffering and workflow |
+| Amazon Bedrock | Summary and classification (global cross-Region inference) and MCP analysis tools |
+| Amazon S3, Amazon DynamoDB | Raw and processed data, account lists, access logs; Powertools idempotency records |
+| AWS Glue, Amazon Athena | Optional catalogue, partition crawler and SQL queries |
+| Amazon API Gateway, AWS WAF | Optional MCP endpoint |
+| Amazon CloudWatch, AWS X-Ray, Amazon SNS | Logs, metrics, dashboard, alarms, tracing and alarm email |
+| AWS CodePipeline, AWS CodeBuild, AWS CodeConnections | Optional deployment pipeline |
+
+### Cost
+
+You are responsible for the cost of the AWS services used while running this solution. An illustrative scenario (us-east-1, 50 member accounts, 300 newly resolved cases a month, Claude Haiku 4.5, Analytics enabled, light MCP use) comes to roughly **$15 to $25 per month**: about $15 without MCP and about $25 with it. It is an estimate at approximate list prices at the time of writing, not a guarantee.
+
+| Item | Approximate monthly cost in the scenario |
+| --- | --- |
+| AWS WAF web ACL and rules (MCP only, fixed) | $8 |
+| CloudWatch alarms, custom metrics and dashboard | $8 |
+| Amazon Bedrock (three calls per case, plus MCP analysis tools) | $4.50 |
+| AWS Glue crawler (daily) | $3 |
+| SQS, S3, Lambda, Step Functions, DynamoDB, Athena, API Gateway and others | $2 |
+
+The first run backfills up to 12 months of resolved cases, a one-off Bedrock cost of roughly $35 with Haiku or $110 with Sonnet for 3,600 cases. Bedrock cost grows linearly with case volume and conversation length. The optional pipeline adds CodePipeline and CodeBuild charges of a few dollars a month at most. [Cost](docs/cost.md) explains every driver, the controls (`bedrockMaxConcurrency`, `lookbackMonths`, model choice, retention, Athena scan limit, disabling MCP) and how to create an AWS Budgets alert. Prices vary by Region; use the [AWS Pricing Calculator](https://calculator.aws/).
 
 ## Prerequisites
 
-- Node.js 20 or later (`.nvmrc` pins the version used for development, 24.22.3).
-- Python 3.12.
-- No Docker, Finch or AWS credentials are needed for local verification. The pinned CDK CLI is installed as a development dependency; run it with `npx cdk`.
+- **Node.js** 20 LTS from 20.19, 22 from 22.13, or 24 and later (`package.json` engines `^20.19.0 || ^22.13.0 || >=24`; `.nvmrc` pins 24.22.3). The AWS CDK v2 CLI is pinned in `package.json`; run it with `npx cdk`.
+- **Python 3.12** for the Lambda assets, tests and scripts.
+- **AWS CLI v2**, authenticated with credentials for the **management account** of the organisation.
+- **Deployment permissions** as described in [permissions](docs/permissions.md).
+- **A qualifying AWS Support plan** (Business, Enterprise On-Ramp or Enterprise) on each member account whose cases you want; other accounts are skipped.
+- **StackSets trusted access** with AWS Organizations:
 
-## Set up
+  ```bash
+  aws organizations enable-aws-service-access --service-principal member.org.stacksets.cloudformation.amazonaws.com
+  ```
+
+- **Amazon Bedrock model access** to the configured Anthropic model in your Region. Anthropic's first-time use (FTU) form and an AWS Marketplace subscription with a valid payment method may be required; IAM cannot complete them.
+- **Network access** to the npm registry and the Python package index for the first install and synthesis.
+
+Docker and Finch are not used or needed: Python assets are bundled locally from hash-locked wheels. No AWS credentials are needed for local verification. [Installation](docs/installation.md#prerequisites) has the full list.
+
+## Deployment
+
+Run these commands from the repository root. Commands that call AWS were not run during development; see [Deferred live verification](#deferred-live-verification).
 
 ```bash
+# 1. Clone and install
+git clone https://github.com/bsadkins/factorytestsample.git && cd factorytestsample
 npm ci
-python3.12 -m venv .venv
-.venv/bin/python -m pip install --require-hashes -r requirements-dev.txt
+python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements-dev.txt
+
+# 2. Configure
+cp config/example.json config/prod.json
+aws organizations describe-organization --query 'Organization.Id' --output text
+aws sts get-caller-identity --query Account --output text
+# Edit config/prod.json: uniqueId, orgId, managementAccountId, region, memberRoleTargets,
+# enableAnalytics, enableMcp, alarmEmail, bedrockModelId
+
+# 3. Verify locally
+npm run verify
+
+# 4. Bootstrap once
+npx cdk bootstrap aws://<managementAccountId>/<region>
+
+# 5. Review and deploy
+npx cdk diff --all -c env=prod
+npx cdk deploy --all -c env=prod --require-approval broadening
+
+# 6. Confirm SNS email subscription
 ```
 
-## Local commands
+Notes on each step (details in [installation](docs/installation.md)):
+
+1. `python3` must be Python 3.12. Replace `bsadkins` with your GitHub owner if you use a fork.
+2. Every field, its default and allowed values are in [configuration](docs/configuration.md). `cp` replaces the shipped `config/prod.json`, which holds invented values. `config/dev.json` is the dev counterpart (Analytics and MCP enabled); give each environment its own `uniqueId`.
+3. `npm run verify` validates the configuration and runs cdk-nag; any error stops here, before AWS is involved.
+4. Bootstrap once per account and Region, after enabling StackSets trusted access (above) and Bedrock model access. With MCP enabled, first check who owns the account's API Gateway logging role: `aws apigateway get-account --region <region> --query cloudwatchRoleArn --output text` (see [Shared API Gateway logging prerequisite](docs/mcp-server-deployment.md#shared-api-gateway-logging-prerequisite)).
+5. Always use `--all`; the app has several stacks. With MCP in the default managed logging mode the app also deploys `CaseInsightsApiLoggingStack-<sharedId>`, which sets the account- and Region-wide API Gateway CloudWatch role: review that change in the diff, because it affects every REST API in the Region. The StackSet deploys `Support-Case-Analysis-Role-<uniqueId>` to every member account under `memberRoleTargets`, including accounts that join later; no per-member deployment is needed.
+6. AWS emails a confirmation link to `alarmEmail` (required in prod); no alarm is delivered until it is confirmed.
+
+For dev, use the same steps with `config/dev.json` and `-c env=dev`. The optional approval-gated pipeline is described in [pipeline](docs/pipeline.md): before its first run, copy `config/pipeline.example.json` to `config/pipeline.json`, fill it in and **commit `config/pipeline.json`, `config/dev.json` and `config/prod.json` to `main`**, because the pipeline synthesises from the repository.
+
+## Deployment validation
+
+```bash
+aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
+  --query "StackSummaries[?starts_with(StackName,'CaseInsights')].StackName"
+aws cloudformation list-stack-instances --stack-set-name CaseInsights-MemberRole-<uniqueId> \
+  --call-as SELF --query 'Summaries[].[Account,Status]' --output table
+aws lambda invoke --function-name Lambda-AccountLookup-<uniqueId> /dev/stdout
+aws glue start-crawler --name case-insights-partition-crawler-<uniqueId>
+# Athena workgroup CaseInsights-<uniqueId>:
+# SELECT RCA_Category, count(*) FROM case_summary GROUP BY 1 ORDER BY 2 DESC;
+```
+
+Expect every `CaseInsights*` stack of the environment, every stack instance `CURRENT`, an account lookup response with a `runId`, and, once processed records exist and the crawler has run, one row per RCA category in the Athena workgroup `CaseInsights-<uniqueId>` (database `case_insights_<uniqueId>`). The dashboard `CaseInsights-<uniqueId>` shows the run's progress; every dead-letter queue should stay empty. See [installation](docs/installation.md#step-7-validate-the-deployment).
+
+### Connect Kiro
+
+With MCP enabled:
+
+1. Add the IAM role or user ARN you use locally to `mcpAllowedPrincipals` and deploy.
+2. Get the endpoint: `aws cloudformation describe-stacks --stack-name CaseInsightsMcpStack-<uniqueId> --query 'Stacks[0].Outputs'` (output `McpEndpointUrl`).
+3. `cp .kiro/settings/mcp.json.example .kiro/settings/mcp.json`, then set `MCP_SERVER_URL` and `AWS_REGION` in it.
+4. Open the repository in Kiro and confirm that eight tools are listed.
+
+Claude Desktop, awscurl and troubleshooting are covered in [MCP server deployment](docs/mcp-server-deployment.md).
+
+## Running the solution
+
+The daily run starts at 00:00 UTC, cleanup runs at 22:00 UTC and the crawler at 09:00 UTC (all configurable). Start a run at any time with `aws lambda invoke --function-name Lambda-AccountLookup-<uniqueId> --region <region> account-lookup.json`; committed cases are skipped. [Usage](docs/usage.md) explains how to follow a run, where results are stored and how long they are kept.
+
+- **Athena and QuickSight.** Query the table `case_summary` in the workgroup `CaseInsights-<uniqueId>`. [Athena](docs/athena.md) documents the schema, partitions and crawler, and a query library for RCA distribution, lifecycle categories by service, temporal patterns, severity trends and top accounts, plus an optional manual QuickSight set-up.
+- **CSV.** `.venv/bin/python scripts/generate_csv_insights.py` exports processed records for Power BI or Excel without Athena; see [CSV export](docs/csv_export.md).
+- **MCP tools.** Ask questions such as "Which services drive most of our cases?", "What is the top root cause this quarter?", "Do incidents cluster on Mondays?" or "Summarise last month's cases".
+
+| Tool | What it does |
+| --- | --- |
+| `query_athena` | Runs one read-only SQL statement against `case_summary`, with paging and resumable `PENDING` results |
+| `analyze_with_bedrock` | Asks the configured Bedrock model a question about supplied data |
+| `get_case_summary` | RCA category distribution, with filters |
+| `analyze_case_summaries` | Bedrock analysis of the case summaries in a date range |
+| `get_temporal_patterns` | Day-of-week, week-of-month and monthly trend counts, computed inline in one query |
+| `get_rca_analysis` | RCA counts grouped by service, severity, account, month or lifecycle category |
+| `get_lifecycle_analysis` | Lifecycle counts grouped by service, severity, account, month or RCA category |
+| `get_service_trends` | Case counts by service, period and RCA category |
+
+Alarms and their responses are in the [runbook](docs/runbook.md); metrics and the dashboard in [monitoring](docs/monitoring.md); log fields and queries in [logging](docs/logging.md); common problems in [troubleshooting](docs/troubleshooting.md).
+
+## Updating and reprocessing
+
+```bash
+npm run verify && npx cdk deploy --all -c env=prod
+```
+
+Run `npx cdk diff --all -c env=prod` first to review the change. Add accounts by adding their root or OU to `memberRoleTargets`; accounts that join an existing target receive the role automatically.
+
+Committed cases are not analysed again after a prompt, taxonomy or model change. Reprocess a date range explicitly; the script previews the plan and acts only after you confirm its token:
+
+```bash
+.venv/bin/python scripts/reprocess-cases.py --env prod --from <YYYY-MM-DD> --to <YYYY-MM-DD>
+```
+
+To retry messages in a stage dead-letter queue after fixing the cause, use `scripts/redrive-dlq.sh --env <env> --queue <active-accounts|annotation|summary>`. Both tools are described in [Recovery tools](docs/runbook.md#recovery-tools).
+
+## Cleanup
+
+```bash
+npx cdk destroy --all -c env=prod
+```
+
+- **Prod retains its data.** The Core buckets (account-list, raw, processed, access-log), the Athena results bucket, the idempotency table and the log groups remain after `destroy`, because they hold case data. Empty and delete them deliberately when you no longer need them. Dev deletes them. No customer managed KMS key exists, so there is no key to retain or delete.
+- **StackSet instances.** Deleting the MemberRole stack deletes the StackSet after CloudFormation removes its instances and every `Support-Case-Analysis-Role-<uniqueId>`. Confirm with `aws cloudformation describe-stack-set --stack-set-name CaseInsights-MemberRole-<uniqueId>` (expect `StackSetNotFoundException`); if instances remain, delete them with `aws cloudformation delete-stack-instances` and destroy again.
+- **Shared API Gateway logging.** The logging role and account setting outlive every environment. Remove them by hand only after every MCP environment in the account and Region is gone, as described in [Teardown and final clean-up](docs/mcp-server-deployment.md#teardown-and-final-clean-up).
+- **Pipeline and trusted access.** Destroy the pipeline stack and its retained buckets if you used it, and deactivate StackSets trusted access only if nothing else needs it.
+
+The copy-paste teardown, including emptying versioned buckets, is in [resources](docs/resources.md#teardown).
+
+## Security
+
+- **Least privilege.** The member role can only call `support:DescribeCases` and `support:DescribeCommunications` and trusts only the two collector roles of this deployment in the same organisation. Every function has its own role, Bedrock access is limited to the configured inference profile, and every other model is denied. See [permissions](docs/permissions.md).
+- **Encryption.** S3 (SSE-S3), SQS (SSE-SQS), DynamoDB (AWS owned key), CloudWatch Logs (default service-side encryption) and Athena results (`SSE_S3`) use AWS managed or AWS owned encryption; no customer managed KMS key is used. Buckets, queues and the alarm topic deny requests without TLS.
+- **Alarm topic exception.** By explicit user approval, the alarm topic `CaseInsights-Alarms-<uniqueId>` is **not encrypted at rest**. CloudWatch alarms can publish to an encrypted SNS topic only when it uses a customer managed KMS key; the AWS managed key `alias/aws/sns` does not let CloudWatch publish. The topic enforces TLS and only CloudWatch alarms of this deployment may publish. Notifications contain no case content, but they do contain operational metadata (alarm names and descriptions, states, metric values, the account ID, the Region and resource names), which leaves the account through the confirmed email subscriptions. The cdk-nag finding `AwsSolutions-SNS2` is acknowledged for this topic only, with that justification.
+- **Data handling.** Case content goes only to Amazon Bedrock and to storage in your account. Logs, metrics and traces carry no case content. Global cross-Region inference profiles may process requests in any AWS commercial Region; the data stays within AWS and is not sent to external services or telemetry.
+- **MCP endpoint.** SigV4 (`AWS_IAM`) authorisation, a resource policy limited to `mcpAllowedPrincipals` in your organisation, AWS WAF (rate limit, 32 KiB body limit, managed core rules), fixed reserved concurrency of 20 and a SQL guard that accepts one read-only statement against `case_summary` only.
+- **cdk-nag** runs on every synthesis; each of the 81 acknowledgements has a written reason, listed in [security](docs/security.md#cdk-nag).
+
+[Security](docs/security.md) contains the threat model, data classification, shared responsibility model and environment inventory. Report vulnerabilities privately, as described in [CONTRIBUTING](CONTRIBUTING.md#security-issues).
+
+## FAQ, known limitations and additional considerations
+
+- **Which cases are collected?** Resolved cases only, created within the last `lookbackMonths` months (at most 12, the AWS Support API's retention), from member accounts with a qualifying Support plan. The management account's own cases are not collected.
+- **Can one deployment cover several organisations?** No. One deployment serves one organisation, from its management account and one Region.
+- **When do new results appear in Athena?** After the next crawler run (09:00 UTC by default) or a manual `aws glue start-crawler`. The CSV exporter does not wait for the crawler.
+- **Model availability.** Only the two global Anthropic inference profiles are accepted. They must be available and enabled in your Region; the Anthropic FTU form and AWS Marketplace subscription may be needed, and IAM cannot complete them.
+- **Retries are not exactly-once.** After an uncertain outcome, such as a timeout after a request was sent, a stage can rarely invoke Bedrock again for the same case. Stage checkpoints and the processed-record check keep this rare, and a committed processed record stops any further automatic inference; explicit reprocessing is the only exception.
+- **Large conversations.** A conversation too large for the summary prompt is stored in full but not truncated or summarised; it is recorded as a `ConversationTooLarge` failure.
+- **MCP time budget.** Each MCP tool call has a 25-second budget inside API Gateway's 29-second limit. botocore's `read_timeout` bounds each socket read rather than the whole response, so the budget relies on the non-streaming Athena and Bedrock `InvokeModel` responses arriving at once (see `src/lambda/mcp_tools/limits.py`). Long Athena queries return `PENDING`; call `query_athena` again with the `queryExecutionId`. Results are truncated at `maxRows`, page, time or 256 KiB limits and say so.
+- **SQL guard.** `query_athena` accepts one `SELECT` or `WITH ... SELECT` statement (or `SHOW` and `DESCRIBE` of the configured table) that reads only `case_summary`, and rejects comments, stacked statements, data-changing and session keywords, recursive CTEs and qualified function calls. The workgroup also cancels queries that scan more than `operations.athena.bytesScannedCutoffPerQuery`. Full rules: [Read-only SQL rules](docs/mcp-server-deployment.md#read-only-sql-rules).
+- **Local tests are not Athena.** The MCP tools are tested against an SQLite stand-in; SQLite is not Trino, so the Athena SQL dialect and paging are proven only by the deferred live checks.
+- **Alarm email.** Dev ships without `alarmEmail`, so its alarms change state without notifying anyone; prod requires an address. Alarms have no OK actions.
+- **Shared API Gateway logging.** In managed mode the solution owns the account- and Region-wide API Gateway CloudWatch role setting; use existing mode if another team owns it.
+- **Small objects and Standard-IA.** Processed records are usually smaller than 128 KB, so S3 does not transition them to Standard-IA; they stay in S3 Standard.
+
+More answers are in [troubleshooting](docs/troubleshooting.md).
+
+## Local verification
+
+```bash
+npm run verify
+```
 
 | Command | What it runs |
 | --- | --- |
-| `npm run lint` | ESLint (TypeScript and scripts) and Ruff lint/format checks |
-| `npm run typecheck` | `tsc --noEmit` (strict) and mypy (strict) |
-| `npm test` | Jest (config, CDK assertions and snapshot, scanner) and pytest with coverage (80% minimum for `src/lambda`) |
+| `npm run lint` | ESLint and Ruff lint and format checks |
+| `npm run typecheck` | Strict `tsc --noEmit` and mypy |
+| `npm test` | Jest (configuration, CDK assertions and snapshots) and pytest with coverage (80% minimum for `src/lambda`) |
 | `npm run synth` | `cdk synth` for `dev` and `prod` with cdk-nag; any unacknowledged finding fails |
-| `npm run verify` | lint, typecheck, tests and synth |
-| `npm run security` | Full-lockfile npm advisory scan, `pip-audit` of both Python locks, and Bandit |
+| `npm run verify` | All of the above |
+| `npm run security` | npm advisory scan of the full lockfile, `pip-audit` of both Python locks, and Bandit |
 
-Synthesise a single environment with:
+The tests use invented data and local stand-ins for AWS (moto, botocore stubbers, an SQLite stand-in for Athena and a loopback SigV4 endpoint) and never call AWS. They cover every Lambda handler, the Core pipeline end to end, the recovery scripts, the MCP tools through the real stdio bridge, and the security-critical properties of every synthesised stack. They prove local behaviour and template properties only, not IAM, WAF, Athena or Bedrock behaviour in a live account. See [development](docs/development.md).
 
-```bash
-npx cdk synth -c env=dev --no-lookups
-```
+## Deferred live verification
 
-The `env` context is required and must be `dev` or `prod`; the app reads `config/<env>.json`.
+None of the following has been run. Local tests, snapshots, synthesis and cdk-nag are not evidence for them; each needs a real AWS deployment, starting with dev:
 
-### What local verification proves
+- [ ] Clean deployment of the dev configuration with `npx cdk deploy --all -c env=dev`, after bootstrapping and enabling StackSets trusted access.
+- [ ] A second `npx cdk diff --all -c env=dev` with no changes reports no differences.
+- [ ] The member role StackSet instances reach `CURRENT`, and `Support-Case-Analysis-Role-<uniqueId>` exists in the targeted member accounts with the expected trust.
+- [ ] Member accounts with Business, Enterprise On-Ramp or Enterprise Support return cases; accounts without it are skipped as `SubscriptionRequired`.
+- [ ] A manual run processes real cases through Bedrock (model access, FTU and Marketplace subscription in place), writes processed records with valid categories, and leaves every dead-letter and terminal queue empty with no alarms.
+- [ ] `scripts/redrive-dlq.sh` starts a real SQS move task, and `scripts/reprocess-cases.py` reprocesses a test case with only the documented permissions.
+- [ ] The dashboard shows data, the alarm email subscription is confirmed, a test notification arrives, and `DailyRunCompleted` is emitted after a run.
+- [ ] The crawler adds partitions, and the Athena [query library](docs/athena.md#query-library) returns results in the workgroup with SSE-S3 encrypted results.
+- [ ] `aws apigateway get-account` shows the shared logging role (managed mode) or the existing role, the MCP stage deploys and its access log group receives records; destroying dev leaves the role and setting in place.
+- [ ] Kiro connects through the bridge and lists the eight tools, and **each of the eight MCP tools is run once against the real dev Athena workgroup** and returns correct results, including temporal aggregates. The local SQLite fixture adapters are not proof of Trino or Athena execution.
+- [ ] `query_athena` rejects a non-`SELECT` statement; unsigned requests, unlisted principals and principals outside the organisation receive `403`; WAF returns `413` for bodies over 32 KiB and `429` above the per-IP rate.
+- [ ] The optional manual QuickSight set-up works with the enforced workgroup, and a CSV export from the real processed bucket succeeds with only the documented S3 permissions.
+- [ ] The optional pipeline's connection is available, its Build step passes, and prod deploys only after approval (see [pipeline](docs/pipeline.md#deferred-live-verification)).
 
-`npm run verify` runs entirely on the local machine with invented data; it never deploys, bootstraps or calls AWS. Besides the per-handler tests, `test/lambda/test_core_pipeline.py` runs the Core pipeline end to end through the real handlers: scheduled discovery, the account-list S3 notification, the account reader, case retrieval and annotation, the workflow starter, every CaseAnalysis task and the processed-record commit, plus run completion and cleanup. `test/support/pipeline_kit.py` stands in only for the AWS services: moto S3, SQS and DynamoDB, SQS event source mapping semantics (batches, partial-batch failures, visibility timeouts, dead-letter redrive), the state machine's task order, retries and Catch, and paginated synthetic Organizations, Support and Bedrock responses. It covers pagination, excluded and skipped accounts, unresolved and already-processed cases, complete conversations, duplicate deliveries, stage and commit faults, redrive and next-run recovery, opt-in reprocessing of a committed case through `scripts/reprocess-cases.py`, cleanup of abandoned work next to running work, and when the daily-completion heartbeat is emitted.
+## Documentation
 
-The recovery tools are tested through their real entry points with invented data only. `test/scripts/test_redrive_dlq.py` runs `scripts/redrive-dlq.sh` with a stub `aws` command on `PATH` that logs every call: help, invalid options and configuration, credentials of another account, foreign, missing or unpaired queues, dry run, cancellation, token mismatches, an active move task, read and start failures and a failed task, each showing whether a move task was started. `test/scripts/test_reprocess_cases.py` runs `scripts/reprocess-cases.py` against moto versioned S3 and SQS, a stubbed CloudFormation client and the Step Functions stand-in: UTC day boundaries, both date fields, empty ranges, scope, confirmation, changed plans, active and unknown work, rediscovery, partial failures and delete markers. These tests prove local behaviour only, not IAM permissions or real SQS move tasks.
-
-`enableAnalytics` adds the Analytics stack; `enableMcp` (also `true` in `config/dev.json`, and only valid with Analytics) adds the MCP stack, whose alarms and dashboard widgets are added to Core, and, in the default managed `apiGatewayLogging` mode, the shared `CaseInsightsApiLoggingStack-<sharedId>` that owns the account/Region API Gateway CloudWatch role setting REST access logs need (see [Shared API Gateway logging prerequisite](docs/mcp-server-deployment.md#shared-api-gateway-logging-prerequisite)). `test/stacks/api-logging-stack.test.ts` checks managed and existing mode, MCP disabled, identical dev and prod shared stacks, a pipeline-style root stack shared by two stages with exactly one `AWS::ApiGateway::Account`, and rejection of inconsistent settings. `test/stacks/analytics-stack.test.ts` synthesises Analytics on and MCP off, and Analytics off; `test/stacks/mcp-stack.test.ts` synthesises the dev MCP stack, prod with MCP enabled and both environments with MCP off, and runs the packaged MCP function with the Core layer for `initialize` and `tools/list`.
-
-The cross-surface tests run one set of synthetic processed records (`test/fixtures/cross_surface/`) through every consumer. `test/integration/test_cross_surface_records.py` checks the records against the Glue table contract and the OpenX column mapping, and runs `scripts/generate_csv_insights.py` against moto S3 with several listing pages, field preservation, spreadsheet formula escaping and each filter. `test/integration/test_cross_surface_mcp.py` calls the MCP handler for all eight tools and compares the results with counts worked out by hand from the fixture (including Monday, week-of-month and monthly buckets, service trends and filtered distributions), and checks unsafe SQL, out-of-scope arguments, the 32 KiB body cap, Athena timeouts, failures and throttling, and unknown tools. `test/integration/test_cross_surface_bridge.py` sends every tool call through the real stdio bridge to a loopback HTTPS endpoint that verifies the SigV4 signature, and expects the same results as direct calls. `test/cross-surface.test.ts` checks that the synthesised dev Glue table matches the same contract and that the MCP function's environment and permissions are scoped to that database and workgroup. Athena is replaced by a SQLite stand-in and API Gateway by the loopback endpoint, so these tests prove local behaviour and template properties only, not real Athena SQL, IAM authorisation or WAF.
-
-### Deferred live verification
-
-None of the following has been run. Local tests, snapshots, synth and cdk-nag results are not evidence for them; each needs a real AWS deployment:
-
-- [ ] Clean deployment of the dev configuration (`npx cdk deploy -c env=dev`) after bootstrapping and enabling StackSets trusted access.
-- [ ] A second deployment with no changes reports no differences (`npx cdk diff -c env=dev`).
-- [ ] The member-role StackSet reaches `CURRENT` and `Support-Case-Analysis-Role-<uniqueId>` exists in the targeted member accounts with the expected trust.
-- [ ] Member accounts with Business, Enterprise On-Ramp or Enterprise Support return cases; accounts without that entitlement are skipped as `SubscriptionRequired`.
-- [ ] A scheduled or manual run processes real cases through Bedrock (model access and Marketplace subscription in place) and writes processed records.
-- [ ] Every dead-letter queue and the terminal failure queues stay empty after a normal run.
-- [ ] `scripts/redrive-dlq.sh` starts a real SQS move task back to the stage queue, and `scripts/reprocess-cases.py` resolves the Core stack outputs and reprocesses a test case with only the documented permissions.
-- [ ] The dashboard shows data, the alarms are in the expected state and the alarm email subscription is confirmed; `DailyRunCompleted` arrives after a run.
-- [ ] The crawler adds partitions for real processed records, and Athena queries in `CaseInsights-<uniqueId>` (including the [query library](docs/athena.md#query-library)) return them with results encrypted in the results bucket.
-- [ ] The MCP endpoint answers signed requests from an allowed principal in the Organization, refuses unsigned requests, unlisted principals and principals outside the Organization with `403`, and WAF returns `413` for bodies over 32 KiB and `429` above the per-IP rate (see [MCP server deployment](docs/mcp-server-deployment.md#infrastructure-and-security-controls)).
-- [ ] The optional manual QuickSight setup works with the enforced workgroup, and a CSV export from the real processed bucket succeeds with only the documented S3 permissions.
-- [ ] MCP client connectivity, including Kiro, and rejection of unsigned requests with HTTP 403 (once the MCP server exists).
-- [ ] In a clean account, `npx cdk deploy --all -c env=dev` creates `CaseInsightsApiLoggingStack-<sharedId>`, `aws apigateway get-account` shows its role, the MCP stage deploys and its access log group receives records; destroying dev leaves the role and setting in place for prod. In existing mode, the stage deploys against the pre-configured role.
-
-## Configuration
-
-`config/schema.json` is the published contract for `config/<env>.json`. The loader in `lib/config/` validates each file against it, applies its defaults, then checks the cross-field rules listed in the schema `$comment`. Synthesis stops with a list of problems if anything is invalid.
-
-| File | Purpose |
+| Document | Contents |
 | --- | --- |
-| `config/example.json` | Template listing every field explicitly (copy it to create your own prod configuration) |
-| `config/dev.json` | Fictitious dev configuration; Analytics and MCP enabled |
-| `config/prod.json` | Fictitious prod configuration with an alarm email |
-| `config/pipeline.schema.json`, `config/pipeline.example.json` | Optional CDK Pipelines settings, validated separately |
+| [Architecture](docs/architecture.md) | Diagram, data flow, stacks and components, design rationale and data schema |
+| [Installation](docs/installation.md) | Prerequisites, every configuration field, one-time set-up, deployment, validation, Kiro, QuickSight, pipeline, update and removal |
+| [Configuration](docs/configuration.md) | Type, default, allowed values and effect of every field; validation errors; dev and prod examples; environment variables |
+| [Permissions](docs/permissions.md) | Deployer, every runtime role and its justification, member role trust, analyst, CSV and MCP permissions |
+| [Security](docs/security.md) | Shared responsibility, data classification, encryption and the SNS exception, threat model, Bedrock inference, retry limitations, cdk-nag acknowledgements |
+| [Resources](docs/resources.md) | Every stack and resource, names, dependencies, retention and teardown |
+| [Usage](docs/usage.md) | Schedules, manual runs, dashboard, Athena, QuickSight, CSV and Kiro |
+| [Athena](docs/athena.md) | Table schema, partitions, crawler, query library and QuickSight |
+| [CSV export](docs/csv_export.md) | Permissions, options, scheduling, Power BI and Excel |
+| [MCP server deployment](docs/mcp-server-deployment.md) | The eight tools, SQL rules and limits, shared API logging, SigV4 bridge, Kiro, Claude Desktop, awscurl and troubleshooting |
+| [Prompts](docs/prompts.md) | Templates, full taxonomies and definitions, validation, versioning, customisation and reprocessing |
+| [Monitoring](docs/monitoring.md) | Every metric, alarm and threshold, dashboard, X-Ray, SNS and production guidance |
+| [Logging](docs/logging.md) | Log groups, retention, safe structured fields, messages by stage and Logs Insights queries |
+| [Runbook](docs/runbook.md) | Diagnosis and repair for every alarm, redrive and reprocessing |
+| [Troubleshooting](docs/troubleshooting.md) | Installation, StackSet, AccessDenied, SubscriptionRequired, missing data, Athena, Bedrock, MCP and performance problems |
+| [Development](docs/development.md) | Set-up, layout, tests, linting, cdk-nag, adding a Lambda function or MCP tool |
+| [Cost](docs/cost.md) | Cost per service, scaling, illustrative scenario, controls and AWS Budgets |
+| [Pipeline](docs/pipeline.md) | Optional approval-gated CDK pipeline |
+| [Contributing](CONTRIBUTING.md), [Code of Conduct](CODE_OF_CONDUCT.md), [Changelog](CHANGELOG.md), [Licence](LICENSE) | Project policies and history |
 
-Key fields and defaults: `uniqueId`, `orgId`, `managementAccountId`, `region` (`us-east-1`), `environment` (`dev` or `prod`), `enableAnalytics`, `enableMcp`, `memberRoleTargets` (root or OU IDs), `bedrockModelId` (`global.anthropic.claude-haiku-4-5-20251001-v1:0`; the only alternative is `global.anthropic.claude-sonnet-4-5-20250929-v1:0`), `bedrockMaxTokens` (1000), `bedrockMaxConcurrency` (5), `lookbackMonths` (12), `rawRetentionDays` (90), `logRetentionDays` (90), `alarmEmail`, `mcpAllowedPrincipals`, `apiGatewayLogging` (`mode` `managed` or `existing`, shared namespace `sharedId` and, in existing mode only, `existingRoleArn`) and `schedules` (account lookup `cron(0 0 * * ? *)`, cleanup `cron(0 22 * * ? *)`, crawler `cron(0 9 * * ? *)`, all UTC). The `operations` object holds bounded queue, function, workflow, cleanup, storage, Athena and MCP limits; the MCP function's reserved concurrency is fixed at 20 and `operations.mcp.reservedConcurrency` accepts no other value, while the stage throttles and WAF rate limit stay configurable.
-
-Rules enforced before synthesis include:
-
-- `alarmEmail` is required in prod;
-- `enableMcp` requires `enableAnalytics` and at least one MCP principal;
-- only the two global Bedrock inference profiles above are accepted;
-- queue visibility timeouts are at least six consumer timeouts, cleanup grace exceeds the workflow timeout, and raw retention exceeds cleanup grace;
-- `apiGatewayLogging.existingRoleArn` is required in existing mode, rejected in managed mode and must be a role in `managementAccountId`; dev and prod in the same account and Region must use identical `apiGatewayLogging` settings, so they share one owner of the account-wide setting;
-- unknown fields are rejected.
-
-The pipeline configuration requires an existing CodeConnections ARN in the pipeline account and the `main` branch. Dev and prod must use different `uniqueId` values in the same organization, management account and Region as the pipeline, and the same `apiGatewayLogging` settings.
-
-## Optional CDK pipeline
-
-Standalone `npx cdk deploy --all -c env=<env>` stays the default. `-c pipeline=true` (without `env`) instead synthesises `CaseInsightsPipelineStack`, a CDK Pipelines app in the management account: source from `main` through an existing CodeConnections connection, a Build step that runs `npm run verify` and synthesises the pipeline, self-mutation, the shared API Gateway logging stack when needed, dev, then a manual `PromoteToProd` approval before prod. It reads `config/pipeline.json` (copy `config/pipeline.example.json`) plus `config/dev.json` and `config/prod.json`. Bootstrapping, authorising the connection and the first deployment are left to an administrator, and the approval does not protect against people who can write to `main`. See [docs/pipeline.md](docs/pipeline.md).
-
-## Python Lambda packaging
-
-Lambda code is packaged locally during `cdk synth`; Docker, Finch and manual uploads are not used. CDK uploads the assets on deploy.
-
-| Layer | Contents | Mounted at |
-| --- | --- | --- |
-| `case-insights-common-<uniqueId>` | Every package in `requirements.txt` plus `src/lambda/common/` | `/opt/python` (import `common`) |
-| `case-insights-templates-<uniqueId>` | `src/templates/*.txt` | `/opt/templates` |
-
-- `scripts/build/bundle_python_layer.py` installs the runtime lock with `pip --require-hashes --only-binary=:all:` for CPython 3.12 on Linux x86_64 (`manylinux_2_28_x86_64`). A missing wheel, an unhashed requirement or a hash mismatch fails synthesis; nothing is compiled on the host and there is no Docker fallback.
-- Synthesis runs the bundler with `.venv/bin/python` (override with `CASE_INSIGHTS_PYTHON`). Downloaded wheels are cached in the ignored, repository-local `.cache/pip`; the first synth needs access to the package index.
-- Asset hashes are computed from file contents: the shared layer from `src/lambda/common/`, `requirements.txt` and the bundler; the templates layer from the template files. Editing only a template changes only the templates layer, and `npx cdk deploy` publishes a new layer version.
-- `common.templates.prompt_version()` returns a digest of the templates and taxonomies, recorded as `Prompt_Version`. The stage function and `Lambda-UpdateCaseMetadata-<uniqueId>` both attach the templates layer, because every commit recomputes it.
-
-### Prompts and taxonomies
-
-- `src/lambda/common/taxonomy.py` is the only place RCA and lifecycle categories and their definitions are written. Templates insert them through the `{categories}` placeholder, and `python scripts/render_taxonomy_docs.py` renders them as Markdown (`--check FILE` / `--write FILE` keep a marked documentation block in sync).
-- Prompt regression fixtures live in `test/fixtures/prompts/` and run with the normal test suite. A regression against the real Bedrock API is opt-in and never runs by default:
-
-  ```bash
-  CASE_INSIGHTS_LIVE_BEDROCK=1 .venv/bin/pytest test/prompts/test_live_bedrock_prompts.py --no-cov
-  ```
-
-  It needs AWS credentials allowed to invoke the configured global inference profile (`CASE_INSIGHTS_LIVE_MODEL_ID`, `CASE_INSIGHTS_LIVE_REGION`) and sends only the invented fixtures.
-
-## Dependencies and locks
-
-- npm packages are pinned exactly in `package.json` and locked in `package-lock.json`. `overrides` move transitive `glob`, `minimatch` and `test-exclude` to patched releases.
-- `requirements.txt` (Lambda layer) and `requirements-dev.txt` (development tools) are fully hash-locked. Regenerate them from the `.in` files with the `uv pip compile` commands at the top of each `.in` file. The runtime lock resolves for Python 3.12 on Linux x86_64 and contains only wheels.
-- `scripts/security/npm-advisory-scan.cjs` replaces `npm audit`, which stalls in some environments. It posts every locked package name and version to the npm bulk advisory endpoint and fails on any finding unless an entry in `scripts/security/npm-advisory-exceptions.json` accepts it with a specific reason and review date. Two advisories are accepted at present: `minimatch` bundled inside `aws-cdk-lib` (no fixed release) and `deepmerge` used only by Jest (no fixed release). Scan errors never count as a clean result.
-
-## Repository layout
+### Repository layout
 
 ```
 bin/                 CDK app entry point
 lib/config/          Typed configuration, validation and resource names
-lib/constructs/      CDK constructs (storage, queues, roles, function factory, Bedrock policy, layers, pipeline stages)
+lib/constructs/      CDK constructs (storage, queues, roles, functions, analysis, observability, analytics, MCP)
 lib/packaging/       Docker-free Python asset bundling and content hashing
-lib/stacks/          CDK stacks (including the optional pipeline stack)
-lib/stages/          CDK Pipelines stages (shared API Gateway logging, one environment)
-lib/nag.ts           cdk-nag registration
-docs/                Operations documentation (pipeline, Athena and CSV export guides, provisional alarm and recovery runbook)
+lib/stacks/          CDK stacks, including the shared API logging and optional pipeline stacks
+lib/stages/          CDK Pipelines stages
 config/              Schemas and environment configuration
-src/lambda/<name>/   One directory per Lambda handler (app.py)
-src/lambda/common/   Shared Python Lambda package (shared layer, /opt/python/common)
-src/templates/       Prompt templates (templates layer, /opt/templates)
-scripts/             CSV exporter (generate_csv_insights.py), recovery tools (redrive-dlq.sh, reprocess-cases.py) and taxonomy documentation renderer
-scripts/build/       Wheel-only layer bundler
-scripts/security/    Dependency advisory scanner
-test/                Jest and pytest suites; prompt fixtures in test/fixtures/prompts, cross-surface fixtures in test/fixtures/cross_surface
+src/lambda/<name>/   One directory per Lambda handler
+src/lambda/common/   Shared Python package (Lambda layer)
+src/templates/       Prompt templates (templates layer)
+scripts/             CSV exporter, MCP SigV4 bridge, recovery tools and taxonomy renderer
+docs/                Documentation and the architecture diagram
+test/                Jest and pytest suites and fixtures
 ```
+
+## Revisions
+
+Changes are recorded in the [changelog](CHANGELOG.md). The current version is 0.1.0.
+
+## Notices
+
+Customers are responsible for making their own independent assessment of the information in this repository. This repository: (a) is for informational purposes only, (b) represents current practices, which are subject to change without notice, and (c) does not create any commitments or assurances from AWS and its affiliates, suppliers or licensors. AWS products or services are provided "as is" without warranties, representations or conditions of any kind, whether express or implied. The responsibilities and liabilities of AWS to its customers are controlled by AWS agreements, and this repository is not part of, nor does it modify, any agreement between AWS and its customers.
+
+Amazon Bedrock model output is generated text. Review summaries and classifications before relying on them for decisions.
 
 ## Licence
 
-See [LICENSE](LICENSE).
+This project is licensed under the MIT No Attribution licence (MIT-0); see [LICENSE](LICENSE). Copyright (c) 2026 bsadkins. Contributions are welcome under the same licence; see [CONTRIBUTING](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).

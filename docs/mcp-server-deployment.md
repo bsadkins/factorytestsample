@@ -40,7 +40,7 @@ REST API access logs can only be delivered after the account's API Gateway setti
 | `sharedId` | `shared` | Namespace of the shared stack, independent of `uniqueId` so that dev and prod share one owner. The shipped examples use `scishared`. Same rules as `uniqueId`. |
 | `existingRoleArn` | none | Required in `existing` mode and rejected in `managed` mode: the IAM role in `managementAccountId` that is already set as the CloudWatch role ARN in `region`. |
 
-Every environment deployed to the same account and Region must use identical `apiGatewayLogging` settings. When the app synthesises one environment it also reads the other `config/<env>.json`, if present, and stops with an error when the two disagree; the optional pipeline's stage validation applies the same rule. The setting only matters when `enableMcp` is true: with MCP disabled no shared stack, role or account setting is added.
+Every environment deployed to the same account and Region must use identical `apiGatewayLogging` settings. When the app synthesises one environment it also reads the other `config/<env>.json`, if present, and stops with an error when the two disagree; the optional pipeline's stage validation applies the same rule. The check compares the files whether or not MCP is enabled, so keep the block identical in every environment file. The setting has an effect only when `enableMcp` is true: with MCP disabled no shared stack, role or account setting is added.
 
 ### Managed mode
 
@@ -65,7 +65,7 @@ aws apigateway get-account --region <region> --query cloudwatchRoleArn --output 
 - A role that `CaseInsightsApiLoggingStack-<sharedId>` created (compare with its `ApiGatewayCloudWatchRoleArn` output): managed mode is already in place.
 - Any other role, for example one owned by another application, a platform team or a landing zone: do not take it over. Use existing mode with that ARN, and ask its owner to allow writes to `/aws/apigateway/CaseInsights-Mcp-*`.
 
-Then review `npx cdk diff -c env=<env>` before deploying. An added or changed `AWS::ApiGateway::Account` in `CaseInsightsApiLoggingStack-<sharedId>` is an account- and Region-wide change that affects every REST API there, including APIs that are not part of this solution. If other REST APIs in the Region also need the setting for their logs, use a broader role that they share, in existing mode, rather than the solution-scoped managed role.
+Then review `npx cdk diff --all -c env=<env>` before deploying. An added or changed `AWS::ApiGateway::Account` in `CaseInsightsApiLoggingStack-<sharedId>` is an account- and Region-wide change that affects every REST API there, including APIs that are not part of this solution. If other REST APIs in the Region also need the setting for their logs, use a broader role that they share, in existing mode, rather than the solution-scoped managed role.
 
 ### Existing-role mode
 
@@ -100,6 +100,87 @@ Delete the shared resources deliberately, by hand, only after every MCP environm
 In existing mode there is nothing of this solution's to clean up; the setting and role belong to their owner.
 
 None of this has been exercised against a real account. The synthesised templates are checked locally (`test/stacks/api-logging-stack.test.ts`): one `AWS::ApiGateway::Account` and one API Gateway-trusted role in managed mode, none in existing mode or with MCP disabled, the role's trust and permissions, retention, the dependency of the MCP stack, identical dev and prod shared stacks and rejection of inconsistent settings. Delivery of access log records depends on the live account and is part of the deferred checklist.
+
+## Tools
+
+The server offers exactly eight tools, listed by `tools/list` in this order. All are annotated `readOnlyHint: true`, `destructiveHint: false` and `openWorldHint: false`; `analyze_with_bedrock` and `analyze_case_summaries` are also `idempotentHint: false` because a model can answer the same question differently. Nothing a tool does writes to the processed data, the Glue Data Catalog or AWS Support: Athena tools run queries in the fixed workgroup `CaseInsights-<uniqueId>` against the database `case_insights_<uniqueId>`, and Bedrock tools invoke only the configured `bedrockModelId`. Every input schema is closed (`additionalProperties: false`), so an unknown or misspelt argument is rejected before any AWS call.
+
+### Common filters
+
+Most tools accept the same optional filters. They are passed to Athena as `?` execution parameters, never inserted into SQL text.
+
+| Argument | Format |
+| --- | --- |
+| `accountId` | 12 digits |
+| `startDate`, `endDate` | `YYYY-MM-DD`, UTC calendar days on the case creation time (`timeCreated`); `endDate` is inclusive. Between 2000-01-01 and 2099-12-31, `endDate` not before `startDate`, at most 36,600 days apart |
+| `serviceCode` | AWS Support service code such as `amazon-dynamodb`: lower-case letters, digits and hyphens, 1 to 128 characters |
+| `severityCode` | `low`, `normal`, `high`, `urgent` or `critical` |
+| `rcaCategory` | One RCA label or `Unclassified` (see [prompts.md](prompts.md)) |
+| `lifecycleCategory` | One lifecycle label or `Unclassified` |
+
+### Tool reference
+
+| Tool | Calls | Arguments (in addition to the filters shown) | Returns |
+| --- | --- | --- | --- |
+| `query_athena` | Athena | Either `sql` (1 to 8,000 characters, one read-only statement) or `queryExecutionId` (a UUID returned earlier), never both; `nextToken` (requires `queryExecutionId`); `maxRows` 1 to 1,000, default 100 | `status` `SUCCEEDED` with `columns`, `rows`, `rowCount`, `truncated`, `truncationReason`, `nextToken`, `dataScannedBytes` and `engineExecutionTimeMillis`; or `status` `PENDING` with the `queryExecutionId` to call again |
+| `analyze_with_bedrock` | Bedrock | `question` (required, 1 to 2,000 characters); `data` (up to 60,000 characters, for example rows from another tool) | `analysis`, `modelId`, `usage` (`inputTokens`, `outputTokens`), `stopReason`, `outputTruncated` |
+| `get_case_summary` | Athena | All filters except `rcaCategory` | The RCA distribution: every category and `Unclassified` with `cases` and `percentOfCases`, plus `totalCases` and the applied `filters`. It does not look up individual cases |
+| `analyze_case_summaries` | Athena, then Bedrock | `startDate` and `endDate` (required), the other filters, `maxCases` 1 to 200 (default 100), optional `question` (1 to 2,000 characters) | `status` `ANALYSED` with the analysis, or `NO_CASES`; `matchingCases`, `casesAnalysed` and `selectionTruncated`. The most recent matching cases are sent with case number, account, creation time, service, severity, subject, categories and summary, but not the requester identity |
+| `get_temporal_patterns` | Athena | All filters; `dimensions`: one to three distinct values of `dayOfWeek`, `weekOfMonth`, `monthly` (default all three) | Case counts by ISO day of week (1 is Monday), by week of month (days 1-7, 8-14, 15-21, 22-28, 29-31) and by month (`yyyy-MM`, with months without cases filled with zero), all in UTC |
+| `get_rca_analysis` | Athena | All filters except `rcaCategory`; `groupBy` `service` (default), `severity`, `account`, `month` or `lifecycleCategory`; `limit` 1 to 50 groups (default 10) | RCA counts per group, with `otherGroups`, `otherGroupCases` and `truncated` for the groups beyond the limit |
+| `get_lifecycle_analysis` | Athena | All filters except `lifecycleCategory`; `groupBy` `service` (default), `severity`, `account`, `month` or `rcaCategory`; `limit` 1 to 50 (default 10) | Lifecycle counts per group, with the same overflow fields |
+| `get_service_trends` | Athena | All filters; `granularity` `month` (default), `week` (periods start on Monday) or `day`; `topServices` 1 to 50 (default 10) | Case counts per service, period and RCA category for the services with most cases, with `totalServices` and `truncated` |
+
+Typical questions: "Which services drive most of our cases?" (`get_service_trends`, or `get_rca_analysis` grouped by service), "What were the top root causes this quarter?" (`get_case_summary` with `startDate` and `endDate`), "Do more cases start on Mondays?" (`get_temporal_patterns` with `dayOfWeek`) and "Summarise last month's cases" (`analyze_case_summaries`).
+
+The Bedrock tools send the question and data with a system prompt that marks the content inside `<data>` or `<cases>` tags as data, not instructions. Treat their output as untrusted model text, and remember that each call incurs model charges.
+
+### Read-only SQL rules
+
+`query_athena` checks the SQL before it is sent to Athena, and the fixed workgroup and the function's IAM role (Analytics workgroup, case summary table and processed records only) still limit what a statement could reach. The statement must be:
+
+- exactly one statement, with at most one trailing semicolon, no comments (`--` or `/* */`), no `?` placeholders, no backticks, no non-ASCII characters outside string literals, no `U&` escapes and no empty quoted identifiers;
+- `SELECT` or `WITH ... SELECT` (optionally in parentheses), or one of `SHOW TABLES [FROM|IN <database>]`, `SHOW COLUMNS FROM|IN <table> [FROM|IN <database>]`, `SHOW PARTITIONS <table>` and `DESCRIBE [EXTENDED|FORMATTED] <table> [<column>]` for the configured database and table;
+- free of data-changing and session keywords in queries (for example `INSERT`, `CREATE`, `DROP`, `UNLOAD`, `MSCK`, `SET`, `PREPARE`, `EXECUTE` and `CALL`), recursive CTEs and qualified function calls;
+- reading only `case_summary`, `<database>.case_summary`, `awsdatacatalog.<database>.case_summary` or a CTE defined in scope, in every `FROM` and `JOIN`, including subqueries, CTE bodies and comma joins (`UNNEST` and `LATERAL` are allowed in parentheses);
+- at most 4,000 tokens and 32 levels of nesting.
+
+A rejected statement returns `INVALID_ARGUMENTS` with `errors[{path: "sql", message, reason}]`. `reason` is a stable code such as `stacked_statement`, `comment`, `forbidden_keyword`, `table_not_allowed`, `statement_not_allowed`, `recursive_cte`, `qualified_function` or `too_complex`; the message never repeats the SQL.
+
+The workgroup enforces its own settings (`EnforceWorkGroupConfiguration`): results go to its results bucket with SSE-S3, and a query that scans more than `operations.athena.bytesScannedCutoffPerQuery` (default 10 GiB) is cancelled. See [Workgroup and query results](athena.md#workgroup-and-query-results).
+
+### Limits and time budget
+
+- **Request budget.** Each `tools/call` has 25 seconds, less if the Lambda function has less time left (minus one second), inside the function's 28-second timeout and API Gateway's 29-second limit. SDK retries are off; the tools make their own bounded attempts, and each Athena or Bedrock call gets a connect and read timeout chosen to end before the deadline (`src/lambda/mcp_tools/limits.py`). If a response did not arrive in time, API Gateway returns `504`.
+- **Time budget limitation.** botocore applies `read_timeout` to each socket read, not to the whole response. The 25-second budget therefore relies on the Athena APIs and the non-streaming Bedrock `InvokeModel` API sending their response at once, as they do; a response trickling in over many small reads could outlast the budget, in which case the function's 28-second timeout and API Gateway's 29-second limit still end the request.
+- **`query_athena` paging.** A query still running when its budget ends returns `PENDING`; call again with `queryExecutionId`. Results are cut at `maxRows`, a page limit or the time budget (`truncationReason` `rowLimit`, `pageLimit` or `timeLimit`, each with a `nextToken`), or at the 256 KiB response limit (`responseSizeLimit`, no token: lower `maxRows` or select fewer columns). A resumed query must belong to the same workgroup, database and catalogue and pass the SQL rules again, otherwise `QUERY_NOT_FOUND`. Non-finite doubles are returned as the strings `"NaN"`, `"Infinity"` and `"-Infinity"`.
+- **Fixed-query tools.** Results are limited to 5,000 rows and 1 MiB. A query still running at the budget is stopped and returns `QUERY_TIMEOUT`; results that cannot be read in time return `TIME_BUDGET_EXCEEDED`. Both are retryable; narrowing the date range usually helps.
+- **`analyze_case_summaries`.** Athena may use up to 10 seconds, and the tool keeps at least 5.5 seconds for Bedrock. The rendered prompt is limited to 200,000 characters (`ANALYSIS_INPUT_TOO_LARGE`; lower `maxCases`).
+- **Concurrency.** The function's reserved concurrency is 20, and the stage throttling and WAF rate rule described above apply.
+
+### Tool errors
+
+Argument errors, rejected SQL and controlled Athena or Bedrock failures are returned as a tool result with `isError: true` and `structuredContent.error` containing `code`, `message`, `retryable` and, where useful, `details`, so the client's model can correct the call. An unknown tool name is a JSON-RPC protocol error (`-32602`, `data.code` `UNKNOWN_TOOL`); anything unexpected is HTTP `500` with JSON-RPC error `-32603` and no detail. Messages never contain SQL, argument values, case content, prompts or model replies.
+
+| Code | Meaning | Retryable |
+| --- | --- | --- |
+| `INVALID_ARGUMENTS` | Arguments failed the schema, or the SQL was rejected | No |
+| `QUERY_FAILED` | Athena reported the query as failed; `details.athenaReason` (up to 500 characters) explains why and is returned to the caller but never logged | No |
+| `QUERY_CANCELLED` | The query was cancelled, for example by the workgroup's bytes-scanned cutoff; `details.athenaReason` explains why | No |
+| `QUERY_TIMEOUT` | A fixed query did not finish within the budget and was stopped | Yes |
+| `QUERY_NOT_FOUND` | The `queryExecutionId` is unknown or belongs to another workgroup, database or catalogue | No |
+| `INVALID_NEXT_TOKEN` | The `nextToken` does not belong to the query | No |
+| `ATHENA_THROTTLED`, `BEDROCK_THROTTLED` | The service throttled the request | Yes |
+| `ATHENA_ERROR` | Another Athena error, including a call timeout | Timeouts and transient errors only |
+| `BEDROCK_ERROR` | Another Bedrock error, for example access denied | No |
+| `BEDROCK_UNAVAILABLE` | Bedrock could not be reached or timed out | Yes |
+| `BEDROCK_RESPONSE_INVALID` | The model's reply could not be read | No |
+| `TIME_BUDGET_EXCEEDED` | Too little of the request budget was left to finish | Yes |
+| `ANALYSIS_INPUT_TOO_LARGE` | The selected cases exceed the prompt limit | No |
+
+### Verification status
+
+The tools are tested locally against an SQLite-backed stand-in for Athena, botocore stubbers for Bedrock and a fake clock (`test/support/mcp_kit.py`, `test/lambda/mcp/`), and through the bridge and the cross-surface fixtures (`test/integration/test_cross_surface_mcp.py`). SQLite is not Trino, so the SQL dialect, Athena paging and real latency are not proven by these tests. Running each tool against a deployed dev environment is part of the deferred live checks.
 ## Finding the endpoint URL
 
 ```bash
@@ -126,8 +207,8 @@ The bridge reads one JSON-RPC message per line from stdin, POSTs it to `MCP_SERV
 | `AWS_REGION` | `--region` | Region in an `execute-api` host name, then the profile's Region. A value that contradicts the host name is rejected. |
 | `AWS_PROFILE` | `--profile` | Default credential provider chain. |
 | `AWS_CA_BUNDLE` | `--ca-bundle` | botocore's bundled certificate authorities. TLS verification cannot be disabled. |
-| | `--timeout` | 30 seconds for connecting and for reading each response (1–120). |
-| | `--max-concurrency` | 4 requests forwarded at once (1–16), so a long Athena query does not block `ping`. |
+| | `--timeout` | 30 seconds for connecting and for reading each response (1 to 120). |
+| | `--max-concurrency` | 4 requests forwarded at once (1 to 16), so a long Athena query does not block `ping`. |
 | | `--verbose` | Off. Adds one stderr line per message with its method, HTTP status and duration. |
 
 Stdout carries MCP protocol messages only. Diagnostics go to stderr and never include credentials, signatures, request or response bodies, SQL, tool arguments or case content. When a request cannot be completed, the bridge answers it with a JSON-RPC error that keeps the request's `id`:

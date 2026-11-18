@@ -2,10 +2,10 @@
   "name": "support-case-insights",
   "version": "0.1.0",
   "description": "Support Case Insights: AWS CDK application that collects resolved AWS Support cases across an AWS Organization and enriches them with Amazon Bedrock.",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT-0",
   "private": true,
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^20.19.0 || ^22.13.0 || >=24"
   },
   "scripts": {
     "cdk": "cdk",

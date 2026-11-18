@@ -1,6 +1,6 @@
 # Alarm runbook
 
-> **Provisional.** This runbook lists every alarm the core stack creates, with first diagnosis and repair steps, and the [recovery tools](#recovery-tools) for dead-letter queue redrive and opt-in reprocessing. The full operations documentation set will extend it; the alarm inventory here is checked against the synthesised alarms by `test/constructs/observability.test.ts`.
+This runbook lists every alarm the application creates (23 without MCP, 27 with MCP, all in the Core stack), with first diagnosis and repair steps, and the [recovery tools](#recovery-tools) for dead-letter queue redrive and opt-in reprocessing. The alarm inventory here is checked against the synthesised alarms by `test/constructs/observability.test.ts` and `test/stacks/mcp-stack.test.ts`. Thresholds, metrics and the dashboard are described in [Monitoring](monitoring.md), log fields and Logs Insights queries in [Logging](logging.md), and symptoms that do not raise an alarm in [Troubleshooting](troubleshooting.md).
 
 All alarms are named `CaseInsights-<uniqueId>-<purpose>` and notify the SNS topic `CaseInsights-Alarms-<uniqueId>`. When `alarmEmail` is set (it is required in prod), AWS sends a confirmation email to that address after deployment; nothing is delivered until the recipient selects the confirmation link. The dashboard `CaseInsights-<uniqueId>` shows every metric referenced below and the state of every alarm.
 
@@ -104,7 +104,7 @@ Annotated case references the workflow starter could not start. Fix the cause an
 
 - Delivery is at least once: a record can appear twice with the same `deliveryKey` (the execution name) after a crash or an unconfirmed marker update. Treat records with the same `deliveryKey` as one failure.
 - `ConversationTooLarge` (`retryable: false`) is not retried automatically while the conversation is unchanged.
-- Other failures are retried by the next scheduled run. To retry sooner, send the record's case reference fields to the summary queue with a new `redriveId` (see the README section *Failure records and redrive*).
+- Other failures are retried by the next scheduled run. To retry sooner, send the record's case reference fields (`accountId`, `caseId`, `displayId`, `runId`, `rawKey`, `communicationsKey`, `communicationsVersionId`, `communicationCount`) to `CaseInsights-CaseSummary-<uniqueId>` with a new `redriveId` (1 to 64 letters, digits or hyphens). The workflow starter then starts the next attempt; the processed record still prevents any rework of a committed case.
 - After handling a record, delete it from the queue so the alarm returns to OK. A growing backlog with `WorkflowExecutionsTimedOut` usually means the Bedrock concurrency cap is too small for the volume.
 
 ### QueueMessages-AccountDiscoveryFailures
