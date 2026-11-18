@@ -28,6 +28,8 @@ cache_dir = ".mypy_cache"
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
+# pytest's default norecursedirs skips any directory named "build", which would drop test/build.
+norecursedirs = [".*", "__pycache__", "node_modules", "cdk.out"]
 pythonpath = ["src/lambda", "test/support"]
 addopts = ["--strict-markers", "--strict-config", "--import-mode=importlib"]
 markers = [
