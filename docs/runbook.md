@@ -46,7 +46,7 @@ For every function: check the function's log group (`/aws/lambda/<function name>
 
 ### LambdaErrors-WorkflowStarter
 
-`Lambda-WorkflowStarter-<uniqueId>` could not start or describe executions. Check `states:StartExecution` throttling, the ownership markers (`workflow.json`) and the idempotency table. `CaseResetInProgressError` means Case Cleanup is resetting the case; the record is retried and starts once the reset finishes or its claim is an hour old. Messages are retried and land in the summary dead-letter queue when their receive count is exhausted.
+`Lambda-WorkflowStarter-<uniqueId>` could not start or describe executions. Check `states:StartExecution` throttling, the ownership markers (`workflow.json`) and the idempotency table. `CaseResetInProgressError` means Case Cleanup or [the reprocess script](#reprocess-committed-cases) holds a reset claim on the case; the record is retried and starts once the reset finishes or its claim is an hour old. Each such retry uses up one receive, so with `operations.queues.maxReceiveCount` 1 the reference goes to the summary dead-letter queue instead (see [QueueMessages-SummaryDLQ](#queuemessages-summarydlq)). Messages are retried and land in the summary dead-letter queue when their receive count is exhausted.
 
 ### LambdaErrors-AnalysisStages
 
@@ -96,7 +96,7 @@ Case references for which annotation failed repeatedly. Fix the cause and redriv
 
 ### QueueMessages-SummaryDLQ
 
-Annotated case references the workflow starter could not start. Fix the cause and redrive to `CaseInsights-CaseSummary-<uniqueId>` with `scripts/redrive-dlq.sh --env <env> --queue summary`. Committed cases among them are answered as already processed.
+Annotated case references the workflow starter could not start. Fix the cause and redrive to `CaseInsights-CaseSummary-<uniqueId>` with `scripts/redrive-dlq.sh --env <env> --queue summary`. Committed cases among them are answered as already processed. A reference that the starter failed while a reset claim was held (`CaseResetInProgressError`) can be redriven once the claim is released; if a reprocess run has already queued its own reference for that case, the redriven one is a harmless duplicate and never starts a second execution.
 
 ### QueueMessages-WorkflowFailures
 
@@ -126,7 +126,7 @@ These procedures change the deployment itself. Each one edits `config/<env>.json
    aws organizations list-organizational-units-for-parent --parent-id <parent-id> \
      --query 'OrganizationalUnits[].[Id,Name]' --output table
    aws organizations list-accounts-for-parent --parent-id <ou-id> \
-     --query 'Accounts[].[Id,Name,Status]' --output table
+     --query 'Accounts[].[Id,Name,State]' --output table
    ```
 
 2. Check the prerequisites in the new accounts. Each account needs a Business, Enterprise On-Ramp or Enterprise Support plan; accounts without one are skipped and counted under `AccountsSkippedSubscriptionRequired`. No service control policy may deny `iam:CreateRole` to the StackSet (needed to create the role) or `sts:AssumeRole` and the AWS Support API to the member role (see [Accounts skipped: AccessDenied](troubleshooting.md#accounts-skipped-accessdenied)).
@@ -148,8 +148,8 @@ These procedures change the deployment itself. Each one edits `config/<env>.json
      --query 'Summaries[].[Account,Status,StackInstanceStatus.DetailedStatus]' --output table
    ```
 
-   The StackSet tolerates failures in up to 10% of accounts, so the stack deployment can succeed while some instances fail. If an instance is `OUTDATED` or `FAILED`, follow the StackSet steps in [Recover from a failed deployment or update](#recover-from-a-failed-deployment-or-update).
-6. After the next daily run, check that `AccountsSkippedAccessDenied` does not count the new accounts. Their first run collects up to `lookbackMonths` of resolved cases. A large OU therefore causes a one-off backlog and Bedrock cost, like the first backfill (see [cost](cost.md#illustrative-monthly-scenario)).
+   The StackSet tolerates failures in up to 10% of accounts, so the stack deployment can succeed while some instances fail. If an instance is not `CURRENT`, or a new account has no instance at all, follow the StackSet steps in [Recover from a failed deployment or update](#recover-from-a-failed-deployment-or-update), which compare the expected accounts with the existing instances.
+6. After the next daily run, check that the new accounts were retrieved, not skipped: the [skipped accounts query](logging.md#5-skipped-accounts-by-reason) on the Case Retrieval log group lists each skipped `account_id` with its reason, which the aggregate `AccountsSkippedAccessDenied` metric cannot show per account. Their first run collects up to `lookbackMonths` of resolved cases. A large OU therefore causes a one-off backlog and Bedrock cost, like the first backfill (see [cost](cost.md#illustrative-monthly-scenario)).
 
 To add a single account, move it into a targeted OU in AWS Organizations. The member role is created there automatically. An account outside every target is never collected.
 
@@ -209,16 +209,24 @@ To go back, set the previous `bedrockModelId` and deploy again. Cases committed 
 
 CloudFormation rolls a failed update back to the previous version of the stack, so the previous application normally keeps running. Committed cases and processed records are not affected by a rollback.
 
-1. Find the failing stack and the first failed resource. The `npx cdk deploy` output names the stack; use its full name, for example `CaseInsightsCoreStack-<uniqueId>`:
+1. Find the failing stack, the failed operation and the first resource that failed in it. The `npx cdk deploy` output names the stack; use its full name, for example `CaseInsightsCoreStack-<uniqueId>`. Do this before you retry, continue a rollback or deploy again, because each of those starts a new operation. Stack events cover the stack's whole history, newest first, so a failure from an earlier deployment can appear next to the current one; isolate the failed operation first:
 
    ```bash
    aws cloudformation describe-stacks --region <region> --stack-name <stack-name> \
      --query 'Stacks[0].[StackStatus,StackStatusReason]' --output text
-   aws cloudformation describe-stack-events --region <region> --stack-name <stack-name> --max-items 100 \
-     --query "StackEvents[?ends_with(ResourceStatus, 'FAILED')].[Timestamp,LogicalResourceId,ResourceStatusReason]" --output table
+   aws cloudformation describe-stack-events --region <region> --stack-name <stack-name> --max-items 1 \
+     --query 'StackEvents[0].[Timestamp,LogicalResourceId,ResourceStatus,ClientRequestToken]' --output text
    ```
 
-   The oldest failed event is the cause; the later ones are usually cancelled resources. [Troubleshooting](troubleshooting.md#deployment) lists the common causes.
+   The newest event is the final status of the failed operation (for example `UPDATE_ROLLBACK_COMPLETE` on the stack itself), and its last field is that operation's client request token. CloudFormation gives every event of an operation, including its automatic rollback, the same token: `npx cdk deploy` uses `exec<uuid>`, the console `Console-<operation>-<uuid>`. List only that operation's failures, oldest first, replacing `<client-request-token>` with the token:
+
+   ```bash
+   aws cloudformation describe-stack-events --region <region> --stack-name <stack-name> \
+     --query "sort_by(StackEvents[?ClientRequestToken=='<client-request-token>' && ends_with(ResourceStatus, 'FAILED')], &Timestamp)[].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]" \
+     --output table
+   ```
+
+   The first row is the first resource failure of the operation and normally the cause; later rows are usually resources that CloudFormation cancelled or could not roll back because of it. Use `--output table` (or `json`) as shown: with `--output text`, the AWS CLI applies `--query` to each page of events separately, so the sorting would not cover the whole operation. If the token is `None`, the operation was started without one. Then find where it began instead: list the stack's own events with `aws cloudformation describe-stack-events --region <region> --stack-name <stack-name> --query "StackEvents[?LogicalResourceId=='<stack-name>'].[Timestamp,ResourceStatus,ResourceStatusReason]" --output table`. The newest `CREATE_IN_PROGRESS` or `UPDATE_IN_PROGRESS` row with the reason `User Initiated` is the start of the failed operation, and only failures with a later timestamp belong to it. [Troubleshooting](troubleshooting.md#deployment) lists the common causes.
 2. Act on the stack status:
 
    | Status | Meaning | Action |
@@ -239,13 +247,55 @@ CloudFormation rolls a failed update back to the previous version of the stack, 
      --query "Summaries[?Status!='SUCCEEDED'].[Account,Status,StatusReason]" --output table
    ```
 
-   Typical causes are a service control policy that denies `iam:CreateRole`, or a role with the same name created by hand. After fixing the cause, apply the current template to the affected OU again. This command does not change the template:
+   Typical causes are a service control policy that denies `iam:CreateRole`, or a role with the same name created by hand. Fix the cause first. The repair then depends on whether each expected account already has a stack instance, because `update-stack-instances` works only on instances that exist. A failed rollout can leave both kinds: instances that exist but are `OUTDATED`, and accounts that never received one, for example when failures in other accounts exceeded the failure tolerance and CloudFormation cancelled the remaining accounts before creating their instances.
+
+   Compare the accounts each target should cover with the accounts that have an instance. `<target-id>` is an OU ID (`ou-...`) or the root ID (`r-...`) from `memberRoleTargets`. `list-accounts-for-parent` returns only the accounts directly in that parent, so repeat it for each child OU of an OU target (`aws organizations list-organizational-units-for-parent --parent-id <ou-id>`) and append to the same file; for a root target, use `aws organizations list-accounts --query "Accounts[?State=='ACTIVE'].Id" --output text` instead. The management account never receives an instance, so it is removed:
 
    ```bash
-   aws cloudformation update-stack-instances --region <region> \
+   : > expected-accounts.txt
+   aws organizations list-accounts-for-parent --parent-id <target-id> \
+     --query "Accounts[?State=='ACTIVE'].Id" --output text | tr '\t' '\n' >> expected-accounts.txt
+   aws cloudformation list-stack-instances --region <region> \
      --stack-set-name CaseInsights-MemberRole-<uniqueId> --call-as SELF \
-     --deployment-targets OrganizationalUnitIds=<ou-id> --regions <region>
+     --query 'Summaries[].Account' --output text | tr '\t' '\n' | sort -u > instance-accounts.txt
+   sort -u expected-accounts.txt | grep -vx '<managementAccountId>' > expected-sorted.txt
+   comm -23 expected-sorted.txt instance-accounts.txt
+   aws cloudformation list-stack-instances --region <region> \
+     --stack-set-name CaseInsights-MemberRole-<uniqueId> --call-as SELF \
+     --query "Summaries[?Status!='CURRENT'].[Account,Region,Status,StackInstanceStatus.DetailedStatus,StatusReason]" --output table
    ```
+
+   `comm` prints the accounts that have **no instance**; the last command lists the **existing instances that are not `CURRENT`**. Repair each group for its own accounts, in the deployment Region only, with the StackSet's own operation preferences (failure tolerance 10%, at most 25% of accounts at once). Neither command changes the template or the targets declared in `CaseInsightsMemberRoleStack-<uniqueId>`. Use only targets that are already in `memberRoleTargets`; to add a new OU, follow [Collect from a new organisational unit or account](#collect-from-a-new-organisational-unit-or-account) instead. `AccountFilterType` `INTERSECTION` limits the operation to the listed accounts within that target, so other accounts in the OU are not touched. List the accounts as JSON strings, for example `"111111111111","222222222222"`.
+
+   - Accounts with no instance: create the missing instances.
+
+     ```bash
+     aws cloudformation create-stack-instances --region <region> \
+       --stack-set-name CaseInsights-MemberRole-<uniqueId> --call-as SELF \
+       --deployment-targets '{"OrganizationalUnitIds":["<target-id>"],"Accounts":["<account-id>"],"AccountFilterType":"INTERSECTION"}' \
+       --regions <region> \
+       --operation-preferences ConcurrencyMode=SOFT_FAILURE_TOLERANCE,FailureTolerancePercentage=10,MaxConcurrentPercentage=25
+     ```
+
+   - Existing instances that are `OUTDATED`: apply the current template to them again.
+
+     ```bash
+     aws cloudformation update-stack-instances --region <region> \
+       --stack-set-name CaseInsights-MemberRole-<uniqueId> --call-as SELF \
+       --deployment-targets '{"OrganizationalUnitIds":["<target-id>"],"Accounts":["<account-id>"],"AccountFilterType":"INTERSECTION"}' \
+       --regions <region> \
+       --operation-preferences ConcurrencyMode=SOFT_FAILURE_TOLERANCE,FailureTolerancePercentage=10,MaxConcurrentPercentage=25
+     ```
+
+   Each command prints an `OperationId`. The StackSet uses managed execution, so an operation that conflicts with one still running waits in the queue (`QUEUED`). Follow it until it is `SUCCEEDED`, then run the comparison again: `comm` must print nothing and every instance must be `CURRENT`:
+
+   ```bash
+   aws cloudformation describe-stack-set-operation --region <region> \
+     --stack-set-name CaseInsights-MemberRole-<uniqueId> --operation-id <operation-id> --call-as SELF \
+     --query 'StackSetOperation.[Action,Status,StatusReason]' --output text
+   ```
+
+   If it is `FAILED`, list its per-account results with `list-stack-set-operation-results` as above, fix the cause and repeat the repair for the accounts that still need it. An `INOPERABLE` instance is left over from a failed deletion and cannot be updated; delete it for that account and Region with `delete-stack-instances`, then create it again as a missing instance.
 
 4. **Pipeline.** A failed `Build` stage deploys nothing. Fix it with a new commit on `main`, which starts a new release. A failed `Dev` or `Prod` stage leaves that environment in one of the states above. Recover the stack first, then retry the failed actions of the same release:
 
@@ -267,7 +317,7 @@ Two scripts change pipeline state on purpose. Both check that they target the ri
 | A record on the workflow failure queue to retry before the next scheduled run | Send its case reference with a new `redriveId` to the summary queue (see [QueueMessages-WorkflowFailures](#queuemessages-workflowfailures)) |
 | A discovery failure | Invoke account lookup (see [QueueMessages-AccountDiscoveryFailures](#queuemessages-accountdiscoveryfailures)) |
 | Committed cases to analyse again, for example after a prompt or model change | `scripts/reprocess-cases.py` (see also [Change the Bedrock model](#change-the-bedrock-model)) |
-| A deployment or update that failed or left StackSet instances `OUTDATED` | [Recover from a failed deployment or update](#recover-from-a-failed-deployment-or-update) |
+| A deployment or update that failed, left StackSet instances `OUTDATED` or left accounts without an instance | [Recover from a failed deployment or update](#recover-from-a-failed-deployment-or-update) |
 
 Redrive and the failure-record retry never analyse a committed case again: the starter, every stage and case retrieval answer a reference to a case with a processed record as already processed. Reprocessing is the only deliberate exception.
 

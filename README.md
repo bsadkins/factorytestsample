@@ -177,21 +177,53 @@ For dev, use the same steps with `config/dev.json` and `-c env=dev`. The optiona
 
 ## Deployment validation
 
-Replace `<region>` with the `region` of `config/<env>.json`. Every regional command names it, so the result does not depend on your AWS CLI profile's default Region.
+Replace `<region>` and `<uniqueId>` with the values from `config/<env>.json`. Every regional command names the Region, so the result does not depend on your AWS CLI profile's default Region. Processing is asynchronous: the account lookup returns once it has written the account list, and cases are analysed afterwards, so run the steps in order in one shell and wait where indicated. Expected results, the zero-case path and failures are explained in [installation](docs/installation.md#step-7-validate-the-deployment).
 
 ```bash
+# 1. Stacks and member role instances
 aws cloudformation list-stacks --region <region> --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
   --query "StackSummaries[?starts_with(StackName,'CaseInsights')].StackName"
 aws cloudformation list-stack-instances --region <region> --stack-set-name CaseInsights-MemberRole-<uniqueId> \
   --call-as SELF --query 'Summaries[].[Account,Status]' --output table
-aws lambda invoke --region <region> --function-name Lambda-AccountLookup-<uniqueId> /dev/stdout
+
+# 2. Start a run and note its runId
+aws lambda invoke --region <region> --function-name Lambda-AccountLookup-<uniqueId> account-lookup.json
+cat account-lookup.json
+
+# 3. Wait for processing: repeat hourly until the completion marker exists, then read its counts
+RAW_BUCKET=$(aws cloudformation describe-stacks --region <region> --stack-name CaseInsightsCoreStack-<uniqueId> \
+  --query "Stacks[0].Outputs[?OutputKey=='RawBucketName'].OutputValue" --output text)
+aws s3 cp --region <region> "s3://$RAW_BUCKET/runs/<runId>/completion.json" -
+
+# 4. Only when counts.casesProcessed is above 0: crawl, wait, and check that the crawl SUCCEEDED
 aws glue start-crawler --region <region> --name case-insights-partition-crawler-<uniqueId>
-# Athena workgroup CaseInsights-<uniqueId>:
-# SELECT RCA_Category, count(*) FROM case_summary GROUP BY 1 ORDER BY 2 DESC;
+sleep 60
+while [ "$(aws glue get-crawler --region <region> --name case-insights-partition-crawler-<uniqueId> \
+    --query 'Crawler.State' --output text)" != READY ]; do sleep 30; done
+aws glue get-crawler --region <region> --name case-insights-partition-crawler-<uniqueId> \
+  --query 'Crawler.LastCrawl.[Status,StartTime,ErrorMessage]' --output text
+
+# 5. Query Athena, wait for a final state, and read results only after SUCCEEDED
+DATABASE=$(aws cloudformation describe-stacks --region <region> --stack-name CaseInsightsAnalyticsStack-<uniqueId> \
+  --query "Stacks[0].Outputs[?OutputKey=='GlueDatabaseName'].OutputValue" --output text)
+QUERY_ID=$(aws athena start-query-execution --region <region> --work-group CaseInsights-<uniqueId> \
+  --query-execution-context Database="$DATABASE" \
+  --query-string 'SELECT rca_category, count(*) AS cases FROM case_summary GROUP BY 1 ORDER BY 2 DESC' \
+  --query QueryExecutionId --output text)
+STATE=QUEUED
+while [ "$STATE" = QUEUED ] || [ "$STATE" = RUNNING ]; do
+  sleep 5
+  STATE=$(aws athena get-query-execution --region <region> --query-execution-id "$QUERY_ID" \
+    --query 'QueryExecution.Status.State' --output text) || break
+done
+aws athena get-query-execution --region <region> --query-execution-id "$QUERY_ID" \
+  --query 'QueryExecution.Status.[State,StateChangeReason]' --output text
+if [ "$STATE" = SUCCEEDED ]; then
+  aws athena get-query-results --region <region> --query-execution-id "$QUERY_ID" --output table
+fi
 ```
 
-Expect every `CaseInsights*` stack of the environment, every stack instance `CURRENT`, an account lookup response with a `runId`, and, once processed records exist and the crawler has run, one row per RCA category in the Athena workgroup `CaseInsights-<uniqueId>` (database `case_insights_<uniqueId>`). The dashboard `CaseInsights-<uniqueId>` shows the run's progress; every dead-letter queue should stay empty. See [installation](docs/installation.md#step-7-validate-the-deployment).
-
+Expect every `CaseInsights*` stack of the environment and every stack instance `CURRENT`, then an account lookup response with a `runId`. The copy in step 3 fails with `404` until Run Completion (hourly) has seen every account and case of the run reach a final outcome; the marker's `counts` then show `casesProcessed`. If `casesProcessed` is 0, the run committed no records (no resolved cases in the lookback window, or every account skipped): skip steps 4 and 5 and repeat from step 2 after a later run. Otherwise the crawl must report `SUCCEEDED` with a `StartTime` after your `start-crawler` call, and the query must reach `SUCCEEDED` with one row per RCA category in the workgroup `CaseInsights-<uniqueId>`. The dashboard `CaseInsights-<uniqueId>` shows the run's progress; every dead-letter queue should stay empty.
 ### Connect Kiro
 
 With MCP enabled:
@@ -320,7 +352,7 @@ Every pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) o
 None of the following has been run. Local tests, snapshots, synthesis and cdk-nag are not evidence for them; each needs a real AWS deployment, starting with dev:
 
 - [ ] Clean deployment of the dev configuration with `npx cdk deploy --all -c env=dev`, after bootstrapping and enabling StackSets trusted access.
-- [ ] A second `npx cdk diff --all -c env=dev` with no changes reports no differences.
+- [ ] With no changes, a second `npx cdk diff --all -c env=dev` reports no differences and a second `npx cdk deploy --all -c env=dev` completes without changing any stack.
 - [ ] The member role StackSet instances reach `CURRENT`, and `Support-Case-Analysis-Role-<uniqueId>` exists in the targeted member accounts with the expected trust.
 - [ ] Member accounts with Business, Enterprise On-Ramp or Enterprise Support return cases; accounts without it are skipped as `SubscriptionRequired`.
 - [ ] A manual run processes real cases through Bedrock (model access, FTU and Marketplace subscription in place), writes processed records with valid categories, and leaves every dead-letter and terminal queue empty with no alarms.
@@ -328,7 +360,7 @@ None of the following has been run. Local tests, snapshots, synthesis and cdk-na
 - [ ] `scripts/redrive-dlq.sh` starts a real SQS move task, and `scripts/reprocess-cases.py` reprocesses a test case with only the documented permissions.
 - [ ] The dashboard shows data, the alarm email subscription is confirmed, a test notification arrives, and `DailyRunCompleted` is emitted after a run.
 - [ ] The crawler adds partitions, and the Athena [query library](docs/athena.md#query-library) returns results in the workgroup with SSE-S3 encrypted results.
-- [ ] `aws apigateway get-account` shows the shared logging role (managed mode) or the existing role, the MCP stage deploys and its access log group receives records; destroying dev leaves the role and setting in place.
+- [ ] `aws apigateway get-account --region <region> --query cloudwatchRoleArn --output text` shows the shared logging role (managed mode) or the existing role, the MCP stage deploys and its access log group receives records; destroying dev leaves the role and setting in place.
 - [ ] Kiro connects through the bridge and lists the eight tools, and **each of the eight MCP tools is run once against the real dev Athena workgroup** and returns correct results, including temporal aggregates. The local SQLite fixture adapters are not proof of Trino or Athena execution.
 - [ ] `query_athena` rejects a non-`SELECT` statement; unsigned requests, unlisted principals and principals outside the organisation receive `403`; WAF returns `413` for bodies over 32 KiB and `429` above the per-IP rate.
 - [ ] The optional manual QuickSight set-up works with the enforced workgroup, and a CSV export from the real processed bucket succeeds with only the documented S3 permissions.

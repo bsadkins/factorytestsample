@@ -11,7 +11,10 @@ import re
 from collections.abc import Iterator
 from pathlib import Path
 
+import botocore.session
 import pytest
+from botocore import xform_name
+from botocore.session import Session
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCS = sorted([REPO_ROOT / "README.md", *(REPO_ROOT / "docs").glob("*.md")])
@@ -101,6 +104,8 @@ def test_installation_documents_the_programmatic_anthropic_first_use_path() -> N
         "Upper bound on the scan cost",
         "a few dollars a month at most",
         "add a few dollars at most",
+        "still costs up to about",
+        "can scan up to about the cutoff",
     ],
 )
 def test_cost_guidance_makes_no_hard_ceiling_claims(phrase: str) -> None:
@@ -175,3 +180,179 @@ def test_relative_links_and_anchors_resolve() -> None:
                         f"{document.relative_to(REPO_ROOT).as_posix()}:{number}: {target}"
                     )
     assert broken == []
+
+
+BOTOCORE_SERVICE = {"s3api": "s3"}
+# AWS CLI options that every command accepts, and the pagination options of paginated operations.
+GLOBAL_OPTIONS = frozenset(
+    {
+        "region",
+        "profile",
+        "output",
+        "query",
+        "no-paginate",
+        "no-cli-pager",
+        "debug",
+        "endpoint-url",
+        "cli-binary-format",
+        "cli-input-json",
+        "generate-cli-skeleton",
+        "color",
+    }
+)
+PAGINATION_OPTIONS = frozenset({"max-items", "starting-token", "page-size"})
+# High-level AWS CLI commands that are not API operations.
+CUSTOM_COMMANDS = frozenset(
+    {("s3", "cp"), ("s3", "ls"), ("s3", "rm"), ("s3", "sync"), ("s3", "rb"), ("sso", "login")}
+)
+QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
+
+
+def documented_options(text: str) -> list[str]:
+    """Option names of one command, ignoring quoted values and anything after the command ends."""
+    bare = QUOTED.sub("''", text)
+    bare = re.split(r"\s(?:\||;|&&|>|2>)|\)|\|\||\s#", bare, maxsplit=1)[0]
+    return re.findall(r"(?<![\w-])--([a-z0-9-]+)", bare)
+
+
+def operation_options(session: Session, service: str, operation: str) -> set[str] | None:
+    """CLI options of one operation from its botocore model, or None for an unknown operation.
+
+    For paginated operations the CLI hides the API's token and limit parameters and offers
+    --max-items, --starting-token and --page-size instead.
+    """
+    name = BOTOCORE_SERVICE.get(service, service)
+    model = session.get_service_model(name)
+    operations = {xform_name(op, "-"): op for op in model.operation_names}
+    if operation not in operations:
+        return None
+    shape = model.operation_model(operations[operation]).input_shape
+    members = dict(shape.members) if shape is not None else {}
+    options = set(GLOBAL_OPTIONS)
+    options.update(xform_name(member, "-") for member in members)
+    options.update(
+        f"no-{xform_name(member, '-')}"
+        for member, member_shape in members.items()
+        if member_shape.type_name == "boolean"
+    )
+    try:
+        paginator = session.get_paginator_model(name).get_paginator(operations[operation])
+    except ValueError:
+        return options
+    for key in ("input_token", "limit_key"):
+        values = paginator.get(key) or []
+        options.difference_update(
+            xform_name(value, "-") for value in ([values] if isinstance(values, str) else values)
+        )
+    return options | PAGINATION_OPTIONS
+
+
+def test_documented_aws_cli_options_exist_in_the_botocore_models() -> None:
+    session = botocore.session.get_session()
+    problems = []
+    for doc, line, service, operation, text in all_commands():
+        if (service, operation) in CUSTOM_COMMANDS:
+            continue
+        options = operation_options(session, service, operation)
+        if options is None:
+            problems.append(f"{doc}:{line}: unknown operation aws {service} {operation}")
+            continue
+        problems.extend(
+            f"{doc}:{line}: aws {service} {operation} --{option}"
+            for option in documented_options(text)
+            if option not in options
+        )
+    assert problems == []
+
+
+def section(document: str, heading: str) -> str:
+    """The text of one Markdown section, up to the next heading of the same or a higher level.
+
+    Lines inside fenced code blocks, such as shell comments, are never headings.
+    """
+    lines = (REPO_ROOT / document).read_text(encoding="utf-8").splitlines()
+    start = lines.index(heading)
+    level = len(heading) - len(heading.lstrip("#"))
+    end = len(lines)
+    in_fence = False
+    for index in range(start + 1, len(lines)):
+        if FENCE.match(lines[index]):
+            in_fence = not in_fence
+        elif not in_fence and re.match(rf"#{{1,{level}}} ", lines[index]):
+            end = index
+            break
+    return "\n".join(lines[start:end])
+
+
+def test_first_use_form_is_read_from_a_quoted_absolute_path() -> None:
+    text = (REPO_ROOT / "docs" / "installation.md").read_text(encoding="utf-8")
+    assert re.search(r'^\s*FTU_FORM="\$HOME/[^"\s]+\.json"$', text, re.MULTILINE)
+    assert '--form-data "fileb://$FTU_FORM"' in text
+    assert re.findall(r"fileb://(?!\$FTU_FORM\"|`)\S*", text) == []
+
+
+@pytest.mark.parametrize(
+    ("document", "heading"),
+    [
+        ("docs/installation.md", "## Step 7: Validate the deployment"),
+        ("README.md", "## Deployment validation"),
+    ],
+)
+def test_validation_waits_for_processing_and_a_successful_crawl(
+    document: str, heading: str
+) -> None:
+    text = section(document, heading)
+    completion = text.index("runs/<runId>/completion.json")
+    crawl = text.index("aws glue start-crawler")
+    assert completion < crawl
+    assert "casesProcessed" in text[:crawl]
+    assert "LastCrawl" in text[crawl:]
+    assert "SUCCEEDED" in text[crawl:]
+
+
+@pytest.mark.parametrize(
+    ("document", "heading"),
+    [
+        ("docs/installation.md", "## Step 7: Validate the deployment"),
+        ("README.md", "## Deployment validation"),
+        ("docs/athena.md", "## Running queries"),
+    ],
+)
+def test_athena_results_are_read_only_after_the_query_succeeded(
+    document: str, heading: str
+) -> None:
+    text = section(document, heading)
+    start = text.index("aws athena start-query-execution")
+    poll = text.index("aws athena get-query-execution", start)
+    results = text.index("aws athena get-query-results", poll)
+    assert re.search(r"QUEUED.*RUNNING", text[poll - 200 : results], re.DOTALL)
+    assert '[ "$STATE" = SUCCEEDED ]' in text[poll:results]
+
+
+def test_failed_deployment_diagnosis_is_scoped_to_the_failed_operation() -> None:
+    text = section("docs/runbook.md", "### Recover from a failed deployment or update")
+    assert "The oldest failed event is the cause" not in text
+    assert "ClientRequestToken=='<client-request-token>'" in text
+    assert "sort_by(" in text
+
+
+def test_stackset_recovery_creates_missing_instances() -> None:
+    text = section("docs/runbook.md", "### Recover from a failed deployment or update")
+    create = [
+        command
+        for _, _, _, operation, command in all_commands()
+        if operation == "create-stack-instances"
+    ]
+    assert "aws cloudformation create-stack-instances" in text
+    assert "aws cloudformation update-stack-instances" in text
+    assert create
+    for command in create:
+        assert "--operation-preferences" in command
+        assert "AccountFilterType" in command
+        assert "--regions <region>" in command
+
+
+def test_organizations_listings_use_the_account_state_field() -> None:
+    for doc, line, service, _operation, text in all_commands():
+        if service == "organizations":
+            assert not re.search(r"\bStatus\b", text), f"{doc}:{line}"

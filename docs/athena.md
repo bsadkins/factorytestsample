@@ -184,10 +184,10 @@ aws glue get-crawler --name case-insights-partition-crawler-<uniqueId> --region 
   --query 'Crawler.LastCrawl.[Status,ErrorMessage,StartTime]' --output text
 ```
 
-The state moves from `RUNNING` through `STOPPING` back to `READY`. Starting a crawler that is already running fails with `CrawlerRunningException`; wait for `READY`. The crawler logs to the `/aws-glue/crawlers` CloudWatch log group, in a stream named after the crawler. To confirm partitions exist:
+The state moves from `RUNNING` through `STOPPING` back to `READY`. Once it is `READY`, the last command must show `SUCCEEDED` with a `StartTime` later than your `start-crawler` call; only then are the records committed before that time visible. Starting a crawler that is already running fails with `CrawlerRunningException`; wait for `READY` and start it again if the running crawl may have begun before the records you want were committed. The crawler logs to the `/aws-glue/crawlers` CloudWatch log group, in a stream named after the crawler. To confirm partitions exist (`<database-name>` is the `GlueDatabaseName` output of the Analytics stack: `case_insights_` followed by `uniqueId` with hyphens replaced by underscores):
 
 ```bash
-aws glue get-partitions --database-name case_insights_<uniqueId> --table-name case_summary \
+aws glue get-partitions --database-name <database-name> --table-name case_summary \
   --region <region> --max-items 5 --query 'Partitions[].Values'
 ```
 
@@ -284,20 +284,30 @@ The policy grants no write or delete access to processed records and no Glue cha
 
 In the Athena console, choose the workgroup `CaseInsights-<uniqueId>`, the data source `AwsDataCatalog` and the database `case_insights_<uniqueId>`, then run a query from the library. The examples refer to the table as `case_summary`, so they rely on that database being selected.
 
-From the AWS CLI:
+From the AWS CLI, look up the database name (the `GlueDatabaseName` output of the Analytics stack, which is `case_insights_` followed by `uniqueId` with hyphens replaced by underscores), start the query, wait until it leaves `QUEUED` and `RUNNING`, and read the results only when it `SUCCEEDED`:
 
 ```bash
+DATABASE=$(aws cloudformation describe-stacks --region <region> --stack-name CaseInsightsAnalyticsStack-<uniqueId> \
+  --query "Stacks[0].Outputs[?OutputKey=='GlueDatabaseName'].OutputValue" --output text)
 QUERY_ID=$(aws athena start-query-execution --region <region> \
   --work-group CaseInsights-<uniqueId> \
-  --query-execution-context Database=case_insights_<uniqueId> \
+  --query-execution-context Database="$DATABASE" \
   --query-string "SELECT rca_category, count(*) AS cases FROM case_summary GROUP BY 1 ORDER BY 2 DESC" \
   --query 'QueryExecutionId' --output text)
+STATE=QUEUED
+while [ "$STATE" = QUEUED ] || [ "$STATE" = RUNNING ]; do
+  sleep 5
+  STATE=$(aws athena get-query-execution --region <region> --query-execution-id "$QUERY_ID" \
+    --query 'QueryExecution.Status.State' --output text) || break
+done
 aws athena get-query-execution --region <region> --query-execution-id "$QUERY_ID" \
   --query 'QueryExecution.[Status.State,Status.StateChangeReason,Statistics.DataScannedInBytes]' --output text
-aws athena get-query-results --region <region> --query-execution-id "$QUERY_ID" --output table
+if [ "$STATE" = SUCCEEDED ]; then
+  aws athena get-query-results --region <region> --query-execution-id "$QUERY_ID" --output table
+fi
 ```
 
-No `--result-configuration` is needed; the workgroup supplies and enforces it.
+`start-query-execution` returns the query ID straight away, while the query is still `QUEUED` or `RUNNING`; results exist only after `SUCCEEDED`. `FAILED` or `CANCELLED` (for example by the scan cutoff) prints the reason instead of results; see [Troubleshooting](#troubleshooting). A successful query with only the header row means that no partitions are visible yet: processed records appear only after they are committed and a crawl that started afterwards has succeeded (see [Making new records visible](#making-new-records-visible)). No `--result-configuration` is needed; the workgroup supplies and enforces it.
 
 ## Query library
 

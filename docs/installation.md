@@ -122,7 +122,13 @@ These steps need an administrator of the management account. None of them is per
 2. **Enable Amazon Bedrock model access.** Both supported models (Claude Haiku 4.5 and Claude Sonnet 4.5) require the Anthropic first-time use (FTU) form, which is submitted once per account, or once in the organisation's management account for every account in the organisation, and covers all commercial Regions except opt-in Regions, where it must be submitted again. The account also needs a valid payment method for the AWS Marketplace subscription that Amazon Bedrock creates on the first invocation, and the principal making that first invocation needs `aws-marketplace:Subscribe`, `aws-marketplace:Unsubscribe` and `aws-marketplace:ViewSubscriptions`. The stacks cannot complete either step; until both are done, analysis fails with access errors (see [troubleshooting](troubleshooting.md)). Submit the form in one of two ways:
 
    - **Console.** In the Amazon Bedrock console in `region`, open the model catalogue entry for the configured Anthropic model and complete the form when it is requested.
-   - **CLI or API.** Call `PutUseCaseForModelAccess` with the form answers. Your organisation supplies the answers; this repository does not provide them. Write them to a JSON file outside the repository, using the fields of the official form (`intendedUsers` is `"0"` for internal, `"1"` for external or `"2"` for both):
+   - **CLI or API.** Call `PutUseCaseForModelAccess` with the form answers. Your organisation supplies the answers; this repository does not provide them. Keep them outside the repository: first choose the file's absolute path in the shell you will submit from (the example uses your home directory; any absolute path works):
+
+     ```bash
+     FTU_FORM="$HOME/bedrock-ftu-form.json"
+     ```
+
+     Write the answers to that file, using the fields of the official form (`intendedUsers` is `"0"` for internal, `"1"` for external or `"2"` for both):
 
      ```json
      {
@@ -135,14 +141,17 @@ These steps need an administrator of the management account. None of them is per
      }
      ```
 
-     Then submit it and read it back with AWS CLI 2.27.42 or later (`fileb://` sends the file as the binary form data, so no manual Base64 encoding is needed):
+     Then, in the same shell, check that the file is there, submit it and read it back with AWS CLI 2.27.42 or later. `fileb://` sends the file as the binary form data, so no manual Base64 encoding is needed. The path is absolute and quoted, so it works from the repository root or any other directory, and with spaces in the path:
 
      ```bash
-     aws bedrock put-use-case-for-model-access --region <region> --form-data fileb://ftu-form.json
+     ls -l -- "$FTU_FORM"
+     aws bedrock put-use-case-for-model-access --region <region> --form-data "fileb://$FTU_FORM"
      aws bedrock get-use-case-for-model-access --region <region>
      ```
 
-     The caller needs `bedrock:PutUseCaseForModelAccess` (and `bedrock:GetUseCaseForModelAccess` to read it back), the official guide attaches the `AmazonBedrockFullAccess` managed policy for these steps. The agreement can stay pending for a while after a successful submission, during which invocations still return `AccessDeniedException`; AWS sends an email when it is ready. The field list, limits and the `GetFoundationModelAvailability` status check are in [Manage model access using SDK and CLI](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html#model-access-modify) and the [`PutUseCaseForModelAccess` API reference](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_PutUseCaseForModelAccess.html). Delete the form file afterwards if your organisation treats the answers as internal.
+     If you open a new shell, set `FTU_FORM` again first.
+
+     The caller needs `bedrock:PutUseCaseForModelAccess` (and `bedrock:GetUseCaseForModelAccess` to read it back), the official guide attaches the `AmazonBedrockFullAccess` managed policy for these steps. The agreement can stay pending for a while after a successful submission, during which invocations still return `AccessDeniedException`; AWS sends an email when it is ready. The field list, limits and the `GetFoundationModelAvailability` status check are in [Manage model access using SDK and CLI](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html#model-access-modify) and the [`PutUseCaseForModelAccess` API reference](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_PutUseCaseForModelAccess.html). Delete the form file afterwards (`rm -- "$FTU_FORM"`) if your organisation treats the answers as internal.
 
    Neither path has been exercised during development; it is listed in [Deferred live verification](#deferred-live-verification). Global inference profiles can route requests to any AWS commercial Region; see [security](security.md#amazon-bedrock-and-global-cross-region-inference). The official overview is [Access Amazon Bedrock foundation models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html).
 
@@ -189,35 +198,82 @@ aws sns list-subscriptions-by-topic --region <region> \
 
 ## Step 7: Validate the deployment
 
-```bash
-aws cloudformation list-stacks --region <region> --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
-  --query "StackSummaries[?starts_with(StackName,'CaseInsights')].StackName"
-aws cloudformation list-stack-instances --region <region> --stack-set-name CaseInsights-MemberRole-<uniqueId> \
-  --call-as SELF --query 'Summaries[].[Account,Status]' --output table
-aws lambda invoke --region <region> --function-name Lambda-AccountLookup-<uniqueId> /dev/stdout
-aws glue start-crawler --region <region> --name case-insights-partition-crawler-<uniqueId>
-# Athena workgroup CaseInsights-<uniqueId>:
-# SELECT RCA_Category, count(*) FROM case_summary GROUP BY 1 ORDER BY 2 DESC;
-```
+The pipeline is asynchronous: the account lookup returns as soon as it has written the account list, and cases are retrieved, annotated and analysed afterwards through the queues and Step Functions. Run the checks below in order and wait where a step says so; a crawl or query started before processed records exist proves nothing. Replace `<region>` and `<uniqueId>` with the values from `config/<env>.json`. Every regional command names the Region, so the result does not depend on your AWS CLI profile's default Region. Run the steps in one shell, because later steps use the variables set by earlier ones.
 
-What to expect:
-
-1. Every stack of the environment is listed (`CaseInsightsCoreStack-<uniqueId>`, `CaseInsightsMemberRoleStack-<uniqueId>` and, when enabled, the Analytics, MCP and shared API logging stacks).
-2. Every targeted member account has a stack instance with status `CURRENT`. `OUTDATED` with a failure reason usually means trusted access or the target IDs are wrong; see [troubleshooting](troubleshooting.md).
-3. The account lookup invocation returns `runId`, `accountListKey`, `accountsSelected` and `created`, and starts a run. Follow it on the dashboard `CaseInsights-<uniqueId>` as described in [usage](usage.md#following-progress). The run is complete when `DailyRunCompleted` appears.
-4. Once processed records exist, the crawler adds their partitions (it takes a few minutes; check with `aws glue get-crawler --region <region> --name case-insights-partition-crawler-<uniqueId> --query 'Crawler.State'`).
-5. The Athena query returns one row per RCA category. Run it in the Athena console with workgroup `CaseInsights-<uniqueId>` and database `case_insights_<uniqueId>` (hyphens in `uniqueId` become underscores), or from the CLI:
+1. **Stacks and member role instances.**
 
    ```bash
-   aws athena start-query-execution --region <region> --work-group CaseInsights-<uniqueId> \
-     --query-execution-context Database=case_insights_<uniqueId> \
-     --query-string 'SELECT RCA_Category, count(*) FROM case_summary GROUP BY 1 ORDER BY 2 DESC' \
-     --query QueryExecutionId --output text
-   aws athena get-query-results --region <region> --query-execution-id <query-execution-id> --output table
+   aws cloudformation list-stacks --region <region> --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
+     --query "StackSummaries[?starts_with(StackName,'CaseInsights')].StackName"
+   aws cloudformation list-stack-instances --region <region> --stack-set-name CaseInsights-MemberRole-<uniqueId> \
+     --call-as SELF --query 'Summaries[].[Account,Status]' --output table
    ```
 
-6. Every dead-letter queue and terminal queue is empty, and no alarm is in `ALARM` (see [monitoring](monitoring.md)).
+   Every stack of the environment is listed (`CaseInsightsCoreStack-<uniqueId>`, `CaseInsightsMemberRoleStack-<uniqueId>` and, when enabled, the Analytics, MCP and shared API logging stacks). Every targeted member account has a stack instance with status `CURRENT`. `OUTDATED` with a failure reason usually means trusted access or the target IDs are wrong, and an account with no instance at all needs the StackSet steps in [Recover from a failed deployment or update](runbook.md#recover-from-a-failed-deployment-or-update); see also [troubleshooting](troubleshooting.md).
 
+2. **Start a run.**
+
+   ```bash
+   aws lambda invoke --region <region> --function-name Lambda-AccountLookup-<uniqueId> account-lookup.json
+   cat account-lookup.json
+   ```
+
+   The response contains `runId`, `accountListKey`, `accountsSelected` and `created`. Note the `runId` (of the form `YYYYMMDDTHHMMSSZ-<8 hex digits>`) for the next step. Follow the run on the dashboard `CaseInsights-<uniqueId>` as described in [usage](usage.md#following-progress).
+
+3. **Wait until the run has finished processing.** Run Completion checks every hour and, once every account and case of the run has reached a final outcome, writes `runs/<runId>/completion.json` to the raw bucket and emits `DailyRunCompleted`. Look up the bucket, then read the marker:
+
+   ```bash
+   RAW_BUCKET=$(aws cloudformation describe-stacks --region <region> --stack-name CaseInsightsCoreStack-<uniqueId> \
+     --query "Stacks[0].Outputs[?OutputKey=='RawBucketName'].OutputValue" --output text)
+   aws s3 cp --region <region> "s3://$RAW_BUCKET/runs/<runId>/completion.json" -
+   ```
+
+   Until the run is complete, the copy fails with a `404` (`Not Found` or `does not exist`); repeat it after the next hourly check. A first run with a backlog of cases can take several hours, because Bedrock calls are limited to `bedrockMaxConcurrency` at a time. If it fails with `403`, your credentials need `s3:GetObject` on `runs/*` in the raw bucket (and `s3:ListBucket` on the bucket, so that S3 reports a missing marker as `404`). The marker's `counts` say what happened:
+
+   - `casesProcessed` greater than 0: processed records exist (it counts succeeded analyses and cases that were already committed). Continue with step 4.
+   - `casesProcessed` is 0 (for example `accountsSelected`, `accounts` or `cases` is 0, or every account was skipped): this run committed no records, so there is nothing for Glue or Athena to show yet. This is the expected result for an organisation with no resolved cases in the lookback window, or whose member accounts lack a supported Support plan (`accountsSkipped`; see [SubscriptionRequired](troubleshooting.md#accounts-skipped-subscriptionrequired) and [AccessDenied](troubleshooting.md#accounts-skipped-accessdenied)). Skip steps 4 and 5, complete step 6, and repeat steps 2 to 5 after a later run reports `casesProcessed` above 0.
+   - `casesFailed` greater than 0: some analyses failed. Follow [QueueMessages-WorkflowFailures](runbook.md#queuemessages-workflowfailures); the records that did succeed can still be validated with steps 4 and 5.
+
+   If no marker appears within 30 hours, the `MissingDailyRunCompletion` alarm fires; follow [Daily completion](runbook.md#daily-completion).
+
+4. **Crawl the new partitions and wait for the crawl to succeed** (only when `enableAnalytics` is `true`). Start the crawler only now, after processed records exist:
+
+   ```bash
+   aws glue start-crawler --region <region> --name case-insights-partition-crawler-<uniqueId>
+   sleep 60
+   while [ "$(aws glue get-crawler --region <region> --name case-insights-partition-crawler-<uniqueId> \
+       --query 'Crawler.State' --output text)" != READY ]; do sleep 30; done
+   aws glue get-crawler --region <region> --name case-insights-partition-crawler-<uniqueId> \
+     --query 'Crawler.LastCrawl.[Status,StartTime,ErrorMessage]' --output text
+   ```
+
+   The state moves from `RUNNING` through `STOPPING` back to `READY`, usually within a few minutes. The last command must show `SUCCEEDED` with a `StartTime` later than your `start-crawler` call. If `start-crawler` fails with `CrawlerRunningException`, a scheduled crawl is running and may have started before the records existed: wait for `READY` with the loop, then run all the commands again. `FAILED` or `CANCELLED` gives the reason in `ErrorMessage` and the `/aws-glue/crawlers` log group; see [Athena troubleshooting](athena.md#troubleshooting). If a command in the loop keeps failing (for example with an access error), the loop keeps waiting: stop it with Ctrl+C and fix the error.
+
+5. **Query Athena and wait for the query to succeed.** The database name is the `GlueDatabaseName` output of the Analytics stack (`case_insights_` followed by `uniqueId` with hyphens replaced by underscores):
+
+   ```bash
+   DATABASE=$(aws cloudformation describe-stacks --region <region> --stack-name CaseInsightsAnalyticsStack-<uniqueId> \
+     --query "Stacks[0].Outputs[?OutputKey=='GlueDatabaseName'].OutputValue" --output text)
+   QUERY_ID=$(aws athena start-query-execution --region <region> --work-group CaseInsights-<uniqueId> \
+     --query-execution-context Database="$DATABASE" \
+     --query-string 'SELECT rca_category, count(*) AS cases FROM case_summary GROUP BY 1 ORDER BY 2 DESC' \
+     --query QueryExecutionId --output text)
+   STATE=QUEUED
+   while [ "$STATE" = QUEUED ] || [ "$STATE" = RUNNING ]; do
+     sleep 5
+     STATE=$(aws athena get-query-execution --region <region> --query-execution-id "$QUERY_ID" \
+       --query 'QueryExecution.Status.State' --output text) || break
+   done
+   aws athena get-query-execution --region <region> --query-execution-id "$QUERY_ID" \
+     --query 'QueryExecution.Status.[State,StateChangeReason]' --output text
+   if [ "$STATE" = SUCCEEDED ]; then
+     aws athena get-query-results --region <region> --query-execution-id "$QUERY_ID" --output table
+   fi
+   ```
+
+   `start-query-execution` returns only a query ID while the query is still `QUEUED` or `RUNNING`, so the loop waits for a final state before any results are read. With `SUCCEEDED`, the results table has a header row and then one row per RCA category, with counts that add up to the processed records the crawl made visible. A header row alone means no partitions are visible: check that step 4 reported `SUCCEEDED` after step 3 reported `casesProcessed` above 0. `FAILED` or `CANCELLED` prints the reason (for example a missing database or table, or Lake Formation permissions); see [Athena troubleshooting](athena.md#troubleshooting). The same query also runs in the Athena console with workgroup `CaseInsights-<uniqueId>` and the database from `GlueDatabaseName`.
+
+6. **Queues and alarms.** Every dead-letter queue and terminal queue is empty, and no alarm is in `ALARM` (see [monitoring](monitoring.md)).
 ## Dev and prod
 
 The repository ships `config/dev.json` (`uniqueId` `scidev`, Analytics and MCP enabled, no alarm email) and `config/prod.json` (`uniqueId` `sciprod`, Analytics enabled, MCP disabled, alarm email required). Both use invented IDs that you must replace. They can be deployed to the same management account and Region because every name carries the `uniqueId`, including the member role. Recommended practice:
