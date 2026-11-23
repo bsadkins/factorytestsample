@@ -432,14 +432,15 @@ def create_clients(profile: str | None, region: str) -> Clients:
     """AWS clients in the deployment's Region from the standard credential provider chain."""
     session = boto3.Session(profile_name=profile, region_name=region)
     config = Config(retries={"mode": "standard", "max_attempts": 5})
-    # Never retry a conditional delete automatically: if S3 applied it and the response was
-    # lost, the retry's 404/412 would otherwise look like proof that nothing was removed.
-    s3_config = Config(retries={"mode": "standard", "total_max_attempts": 1})
+    # Never retry a conditional delete or a send automatically: if S3 or SQS applied the
+    # request and the response was lost, the retry's answer (a 404/412 delete, a refused send)
+    # would otherwise look like proof that nothing happened.
+    single_attempt = Config(retries={"mode": "standard", "total_max_attempts": 1})
     return Clients(
         sts=session.client("sts", config=config),
         cloudformation=session.client("cloudformation", config=config),
-        s3=session.client("s3", config=s3_config),
-        sqs=session.client("sqs", config=config),
+        s3=session.client("s3", config=single_attempt),
+        sqs=session.client("sqs", config=single_attempt),
         sfn=session.client("stepfunctions", config=config),
     )
 

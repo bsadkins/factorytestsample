@@ -24,7 +24,6 @@ from typing import Any
 
 import boto3
 import pytest
-from botocore.config import Config
 from botocore.exceptions import ClientError, ReadTimeoutError
 from botocore.stub import Stubber
 from common.case_refs import SummaryRef, communications_key
@@ -313,12 +312,9 @@ def env(
 ) -> Iterator[Env]:
     del aws_env
     with mock_aws():
-        s3 = boto3.client(
-            "s3",
-            region_name=REGION,
-            config=Config(retries={"mode": "standard", "total_max_attempts": 1}),
-        )
-        sqs = boto3.client("sqs", region_name=REGION)
+        # The CLI's own S3 and SQS clients, so its retry configuration is the one exercised.
+        production = script.create_clients(None, REGION)
+        s3, sqs = production.s3, production.sqs
         for bucket in (RAW, PROCESSED):
             s3.create_bucket(Bucket=bucket)
             s3.put_bucket_versioning(Bucket=bucket, VersioningConfiguration={"Status": "Enabled"})
@@ -370,13 +366,16 @@ def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
 # --- help and option validation ----------------------------------------------------------------
 
 
-def test_real_s3_client_disables_automatic_retries_for_conditional_deletes(
+def test_real_s3_and_sqs_clients_never_retry_writes_whose_outcome_can_be_ambiguous(
     script: ModuleType, aws_env: None
 ) -> None:
     del aws_env
     clients = script.create_clients(None, REGION)
-    assert clients.s3.meta.config.retries == {"mode": "standard", "total_max_attempts": 1}
-    assert clients.sqs.meta.config.retries["total_max_attempts"] == 6
+    single = {"mode": "standard", "total_max_attempts": 1}
+    assert clients.s3.meta.config.retries == single
+    assert clients.sqs.meta.config.retries == single
+    for client in (clients.sts, clients.cloudformation, clients.sfn):
+        assert client.meta.config.retries["total_max_attempts"] == 6
 
 
 def test_help_defines_date_field_timezone_bounds_versions_and_identity() -> None:
@@ -1764,6 +1763,162 @@ def test_an_accepted_follow_up_with_a_lost_acknowledgement_is_unconfirmed(
     assert "processed record" in line
     assert "before resending" in line
     assert "follow-up reference was not sent" not in line
+
+
+def _access_denied() -> ClientError:
+    return ClientError(
+        {
+            "Error": {"Code": "AccessDenied", "Message": "synthetic"},
+            "ResponseMetadata": {"HTTPStatusCode": 403},  # type: ignore[typeddict-item]
+        },
+        "SendMessage",
+    )
+
+
+def _is_follow_up(params: dict[str, Any]) -> bool:
+    return str(json.loads(params["MessageBody"])["redriveId"]).endswith("-f")
+
+
+def _is_first_reference(params: dict[str, Any]) -> bool:
+    return not _is_follow_up(params)
+
+
+def _answer_sends(
+    env: Env,
+    matches: Callable[[dict[str, Any]], bool],
+    attempts: list[str],
+    *,
+    accepted: Callable[[], None] | None,
+) -> None:
+    """Answer each attempt of the matching SendMessage before moto sees it.
+
+    With `accepted` None, SQS refuses the first attempt with AccessDenied. Otherwise SQS
+    accepts the message (applied through an independent client), `accepted` runs, and the
+    response is lost. Any SDK retry is refused with AccessDenied.
+    """
+    pending: list[dict[str, Any]] = []
+    operator = boto3.client("sqs", region_name=REGION)
+
+    def capture(params: dict[str, Any], **_: Any) -> None:  # noqa: ANN401
+        pending.append(dict(params))
+
+    def answer(request: Any, **_: Any) -> None:  # noqa: ANN401
+        # Raising stops the event before moto's own before-send handler applies the request.
+        if not pending:
+            # Client params are provided once per call: this is an SDK retry of the last one.
+            attempts.append("retry")
+            raise _access_denied()
+        params = pending.pop()
+        if not matches(params):
+            return
+        attempts.append("first")
+        if accepted is None:
+            raise _access_denied()
+        operator.send_message(**params)
+        accepted()
+        raise ReadTimeoutError(endpoint_url=request.url)
+
+    env.sqs.meta.events.register("provide-client-params.sqs.SendMessage", capture)
+    env.sqs.meta.events.register_first("before-send.sqs.SendMessage", answer)
+
+
+@pytest.mark.usefixtures("starter_clock")
+def test_an_accepted_follow_up_whose_retry_would_be_refused_is_still_unconfirmed(
+    env: Env,
+) -> None:
+    seeded = env.seed("7403")
+    _one_receive_redrive_policy(env)
+    window = ("--from", "2026-01-01", "--to", "2026-12-31", "--delay-seconds", "0")
+    token = env.token(*window)
+    outcomes: list[str] = []
+    attempts: list[str] = []
+
+    def consume_first_copy(**_: Any) -> None:  # noqa: ANN401
+        if not outcomes:
+            _poll_starter(env, outcomes)  # the first copy is answered as already processed
+
+    env.sqs.meta.events.register("after-call.sqs.SendMessage", consume_first_copy)
+    # The follow-up really starts the execution, but its acknowledgement is lost.
+    _answer_sends(env, _is_follow_up, attempts, accepted=lambda: _poll_starter(env, outcomes))
+
+    code, out, _ = env.run(*window, "--confirm", token)
+
+    assert outcomes == ["alreadyProcessed", "started"]
+    assert len(env.sfn.started()) == 1
+    assert env.removed(PROCESSED, seeded.key)
+    assert code == 1
+    line = _report_line(out, "7403")
+    assert line.startswith("failed ")
+    assert "UNCONFIRMED delivery of the follow-up reference (ReadTimeoutError)" in line
+    assert "Check the CaseAnalysis execution and processed record before resending" in line
+    assert "not sent" not in line
+    printed = json.loads(line.split("to the summary queue: ", 1)[1])
+    assert _is_follow_up({"MessageBody": json.dumps(printed)})
+    assert attempts == ["first"], "an unacknowledged send must not be retried automatically"
+
+
+def test_an_accepted_summary_reference_whose_retry_would_be_refused_changes_nothing(
+    env: Env,
+) -> None:
+    seeded = env.seed("7404")
+    window = ("--from", "2026-01-01", "--to", "2026-12-31")
+    token = env.token(*window)
+    attempts: list[str] = []
+    _answer_sends(env, _is_first_reference, attempts, accepted=lambda: None)
+
+    code, out, _ = env.run(*window, "--confirm", token)
+
+    assert code == 1
+    line = _report_line(out, "7404")
+    assert line.startswith("failed ")
+    assert "UNCONFIRMED delivery of the summary reference (ReadTimeoutError)" in line
+    assert "no checkpoints or processed record were removed" in line
+    assert "before resending this same message" in line
+    assert "not sent" not in line
+    assert env.unchanged(seeded)
+    for stage in STAGES:
+        assert _kinds(env, checkpoint_key(MEMBER_A, "7404", stage)) == ["version"]
+    deleted = [p["Key"] for name, p in env.calls if name == "DeleteObject"]
+    assert [key for key in deleted if not key.endswith("/workflow.json")] == []
+    assert attempts == ["first"], "an unacknowledged send must not be retried automatically"
+
+
+@pytest.mark.parametrize(
+    ("matches", "report"),
+    [
+        (_is_first_reference, "summary reference not sent (AccessDenied); nothing changed"),
+        (_is_follow_up, "record removed but the follow-up reference was not sent (AccessDenied)"),
+    ],
+    ids=["summary-reference", "follow-up"],
+)
+def test_a_send_refused_on_its_only_attempt_is_reported_as_not_sent(
+    env: Env, matches: Callable[[dict[str, Any]], bool], report: str
+) -> None:
+    seeded = env.seed("7405")
+    window = ("--from", "2026-01-01", "--to", "2026-12-31", "--delay-seconds", "0")
+    token = env.token(*window)
+    attempts: list[str] = []
+    _answer_sends(env, matches, attempts, accepted=None)
+
+    code, out, _ = env.run(*window, "--confirm", token)
+
+    assert attempts == ["first"]
+    assert code == 1
+    line = _report_line(out, "7405")
+    assert line.startswith("failed ")
+    assert report in line
+    assert "UNCONFIRMED" not in line
+    if matches is _is_follow_up:
+        assert env.removed(PROCESSED, seeded.key)
+        printed = json.loads(line.split("send this message to the summary queue: ", 1)[1])
+        assert _is_follow_up({"MessageBody": json.dumps(printed)})
+    else:
+        assert env.unchanged(seeded)
+    # Only the summary reference that was accepted before the refusal reached the queue.
+    queued = env.sqs.receive_message(QueueUrl=env.queue_url, MaxNumberOfMessages=10)
+    bodies = [json.loads(m["Body"]) for m in queued.get("Messages", [])]
+    assert all(not str(b["redriveId"]).endswith("-f") for b in bodies)
+    assert len(bodies) == (1 if matches is _is_follow_up else 0)
 
 
 def test_output_keys_match_the_core_stack_outputs(script: ModuleType) -> None:
