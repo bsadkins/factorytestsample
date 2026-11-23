@@ -179,51 +179,118 @@ For dev, use the same steps with `config/dev.json` and `-c env=dev`. The optiona
 
 Replace `<region>` and `<uniqueId>` with the values from `config/<env>.json`. Every regional command names the Region, so the result does not depend on your AWS CLI profile's default Region. Processing is asynchronous: the account lookup returns once it has written the account list, and cases are analysed afterwards, so run the steps in order in one shell and wait where indicated. Expected results, the zero-case path and failures are explained in [installation](docs/installation.md#step-7-validate-the-deployment).
 
+Copy each step separately, in order, in the same shell. The stop conditions are executable: do not paste a later step after an earlier one stops.
+
+**1. Check the stacks and member role instances.**
+
 ```bash
-# 1. Stacks and member role instances
 aws cloudformation list-stacks --region <region> --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
   --query "StackSummaries[?starts_with(StackName,'CaseInsights')].StackName"
 aws cloudformation list-stack-instances --region <region> --stack-set-name CaseInsights-MemberRole-<uniqueId> \
   --call-as SELF --query 'Summaries[].[Account,Status]' --output table
+```
 
-# 2. Start a run and note its runId
+Expect every `CaseInsights*` stack of the environment and every stack instance `CURRENT`.
+
+**2. Start a run and note its `runId`.**
+
+```bash
 aws lambda invoke --region <region> --function-name Lambda-AccountLookup-<uniqueId> account-lookup.json
 cat account-lookup.json
+```
 
-# 3. Wait for processing: repeat hourly until the completion marker exists, then read its counts
+The response contains the `runId` used below. The dashboard `CaseInsights-<uniqueId>` shows the run's progress.
+
+**3. Wait for processing and require at least one processed case.**
+
+```bash
 RAW_BUCKET=$(aws cloudformation describe-stacks --region <region> --stack-name CaseInsightsCoreStack-<uniqueId> \
-  --query "Stacks[0].Outputs[?OutputKey=='RawBucketName'].OutputValue" --output text)
-aws s3 cp --region <region> "s3://$RAW_BUCKET/runs/<runId>/completion.json" -
+  --query "Stacks[0].Outputs[?OutputKey=='RawBucketName'].OutputValue" --output text) || {
+  printf 'STOP: could not find the raw bucket.\n' >&2; exit 1;
+}
+COMPLETION=$(aws s3 cp --region <region> "s3://$RAW_BUCKET/runs/<runId>/completion.json" -) || {
+  printf 'STOP: the completion marker is not available; retry this step after the next hourly check.\n' >&2
+  exit 1
+}
+printf '%s\n' "$COMPLETION"
+CASES_PROCESSED=$(printf '%s\n' "$COMPLETION" | python3 -c \
+  'import json, sys; print(json.load(sys.stdin)["counts"]["casesProcessed"])') || {
+  printf 'STOP: the completion marker has no readable casesProcessed count.\n' >&2; exit 1;
+}
+case "$CASES_PROCESSED" in
+  ''|*[!0-9]*) printf 'STOP: casesProcessed is not a non-negative integer.\n' >&2; exit 1 ;;
+esac
+if [ "$CASES_PROCESSED" -eq 0 ]; then
+  printf 'STOP: no cases were processed; skip Glue and Athena and start a later run from step 2.\n'
+  exit 0
+fi
+```
 
-# 4. Only when counts.casesProcessed is above 0: crawl, wait, and check that the crawl SUCCEEDED
-aws glue start-crawler --region <region> --name case-insights-partition-crawler-<uniqueId>
+The copy fails with `404` until Run Completion (hourly) has seen every account and case reach a final outcome. A zero count is an expected result when there are no resolved cases in the lookback window or every account was skipped; the commands stop before Glue and Athena in that case.
+
+**4. Crawl the new partitions and require a successful crawl** (only when `enableAnalytics` is `true`).
+
+```bash
+aws glue start-crawler --region <region> --name case-insights-partition-crawler-<uniqueId> || {
+  printf 'STOP: could not start the crawler; do not query Athena yet.\n' >&2; exit 1;
+}
 sleep 60
-while [ "$(aws glue get-crawler --region <region> --name case-insights-partition-crawler-<uniqueId> \
-    --query 'Crawler.State' --output text)" != READY ]; do sleep 30; done
+while :; do
+  CRAWLER_STATE=$(aws glue get-crawler --region <region> \
+    --name case-insights-partition-crawler-<uniqueId> \
+    --query 'Crawler.State' --output text) || {
+    printf 'STOP: could not read crawler state.\n' >&2; exit 1;
+  }
+  [ "$CRAWLER_STATE" = READY ] && break
+  sleep 30
+done
+CRAWL_STATUS=$(aws glue get-crawler --region <region> \
+  --name case-insights-partition-crawler-<uniqueId> \
+  --query 'Crawler.LastCrawl.Status' --output text) || {
+  printf 'STOP: could not read the crawl result.\n' >&2; exit 1;
+}
 aws glue get-crawler --region <region> --name case-insights-partition-crawler-<uniqueId> \
   --query 'Crawler.LastCrawl.[Status,StartTime,ErrorMessage]' --output text
+if [ "$CRAWL_STATUS" != SUCCEEDED ]; then
+  printf 'STOP: the crawl did not succeed; do not query Athena yet.\n' >&2
+  exit 1
+fi
+```
 
-# 5. Query Athena, wait for a final state, and read results only after SUCCEEDED
+Continue only after `SUCCEEDED`, with a `StartTime` later than the `start-crawler` call. For `FAILED` or `CANCELLED`, use the printed `ErrorMessage` and [Athena troubleshooting](docs/athena.md#troubleshooting).
+
+**5. Query Athena and require a successful query before reading results.**
+
+```bash
 DATABASE=$(aws cloudformation describe-stacks --region <region> --stack-name CaseInsightsAnalyticsStack-<uniqueId> \
-  --query "Stacks[0].Outputs[?OutputKey=='GlueDatabaseName'].OutputValue" --output text)
+  --query "Stacks[0].Outputs[?OutputKey=='GlueDatabaseName'].OutputValue" --output text) || {
+  printf 'STOP: could not find the Analytics database.\n' >&2; exit 1;
+}
 QUERY_ID=$(aws athena start-query-execution --region <region> --work-group CaseInsights-<uniqueId> \
   --query-execution-context Database="$DATABASE" \
   --query-string 'SELECT rca_category, count(*) AS cases FROM case_summary GROUP BY 1 ORDER BY 2 DESC' \
-  --query QueryExecutionId --output text)
+  --query QueryExecutionId --output text) || {
+  printf 'STOP: could not start the Athena query.\n' >&2; exit 1;
+}
 STATE=QUEUED
 while [ "$STATE" = QUEUED ] || [ "$STATE" = RUNNING ]; do
   sleep 5
   STATE=$(aws athena get-query-execution --region <region> --query-execution-id "$QUERY_ID" \
-    --query 'QueryExecution.Status.State' --output text) || break
+    --query 'QueryExecution.Status.State' --output text) || {
+    printf 'STOP: could not read the Athena query state.\n' >&2; exit 1;
+  }
 done
 aws athena get-query-execution --region <region> --query-execution-id "$QUERY_ID" \
   --query 'QueryExecution.Status.[State,StateChangeReason]' --output text
-if [ "$STATE" = SUCCEEDED ]; then
-  aws athena get-query-results --region <region> --query-execution-id "$QUERY_ID" --output table
+if [ "$STATE" != SUCCEEDED ]; then
+  printf 'STOP: the Athena query did not succeed; results are unavailable.\n' >&2
+  exit 1
 fi
+aws athena get-query-results --region <region> --query-execution-id "$QUERY_ID" --output table
 ```
 
-Expect every `CaseInsights*` stack of the environment and every stack instance `CURRENT`, then an account lookup response with a `runId`. The copy in step 3 fails with `404` until Run Completion (hourly) has seen every account and case of the run reach a final outcome; the marker's `counts` then show `casesProcessed`. If `casesProcessed` is 0, the run committed no records (no resolved cases in the lookback window, or every account skipped): skip steps 4 and 5 and repeat from step 2 after a later run. Otherwise the crawl must report `SUCCEEDED` with a `StartTime` after your `start-crawler` call, and the query must reach `SUCCEEDED` with one row per RCA category in the workgroup `CaseInsights-<uniqueId>`. The dashboard `CaseInsights-<uniqueId>` shows the run's progress; every dead-letter queue should stay empty.
+A successful query returns one row per RCA category. For `FAILED` or `CANCELLED`, use the printed reason and [Athena troubleshooting](docs/athena.md#troubleshooting). Every dead-letter queue should stay empty.
+
 ### Connect Kiro
 
 With MCP enabled:

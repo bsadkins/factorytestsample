@@ -7,7 +7,11 @@ regional AWS CLI calls must name the deployment Region rather than rely on the p
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -339,7 +343,7 @@ def test_athena_results_are_read_only_after_the_query_succeeded(
     poll = text.index("aws athena get-query-execution", start)
     results = text.index("aws athena get-query-results", poll)
     assert re.search(r"QUEUED.*RUNNING", text[poll - 200 : results], re.DOTALL)
-    assert '[ "$STATE" = SUCCEEDED ]' in text[poll:results]
+    assert re.search(r'\[ "\$STATE" (?:=|!=) SUCCEEDED \]', text[poll:results])
 
 
 def test_failed_deployment_diagnosis_is_scoped_to_the_failed_operation() -> None:
@@ -369,3 +373,132 @@ def test_organizations_listings_use_the_account_state_field() -> None:
     for doc, line, service, _operation, text in all_commands():
         if service == "organizations":
             assert not re.search(r"\bStatus\b", text), f"{doc}:{line}"
+
+
+def readme_validation_script() -> str:
+    """Return every README validation command block as one paste-able shell script."""
+    text = section("README.md", "## Deployment validation")
+    blocks = re.findall(r"```bash\n(.*?)```", text, re.DOTALL)
+    assert blocks
+    return (
+        "\n".join(blocks)
+        .replace("<region>", "us-east-1")
+        .replace("<uniqueId>", "testid")
+        .replace("<runId>", "run-123")
+    )
+
+
+def run_readme_validation(
+    tmp_path: Path, scenario: str
+) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
+    """Execute the README commands against a local fake AWS CLI, never real credentials."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    call_log = tmp_path / "aws-calls.jsonl"
+    fake_aws = bin_dir / "aws"
+    fake_aws.write_text(
+        f"""#!{sys.executable}
+import json
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+with Path(os.environ["AWS_CALL_LOG"]).open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps(args) + chr(10))
+scenario = os.environ["FAKE_AWS_SCENARIO"]
+operation = " ".join(args[:2])
+query = args[args.index("--query") + 1] if "--query" in args else ""
+if operation == "lambda invoke":
+    Path(args[-1]).write_text('{{"runId": "run-123"}}', encoding="utf-8")
+    print('{{"StatusCode": 202}}')
+elif operation == "cloudformation describe-stacks":
+    print("raw-bucket" if "RawBucketName" in query else "case_insights_testid")
+elif operation == "s3 cp":
+    if scenario == "missing-marker":
+        print("404 Not Found", file=sys.stderr)
+        sys.exit(1)
+    count = 0 if scenario == "zero-cases" else 1
+    print(json.dumps({{"counts": {{"casesProcessed": count}}}}))
+elif operation == "glue get-crawler":
+    if query == "Crawler.State":
+        print("READY")
+    else:
+        print("FAILED" if scenario == "failed-crawl" else "SUCCEEDED")
+elif operation == "athena start-query-execution":
+    print("query-123")
+elif operation == "athena get-query-execution":
+    print("FAILED" if scenario == "failed-query" else "SUCCEEDED")
+elif operation == "athena get-query-results":
+    print("rca_category | cases")
+""",
+        encoding="utf-8",
+    )
+    fake_aws.chmod(0o755)
+    fake_sleep = bin_dir / "sleep"
+    fake_sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        PATH=f"{bin_dir}{os.pathsep}{env['PATH']}",
+        AWS_CALL_LOG=str(call_log),
+        FAKE_AWS_SCENARIO=scenario,
+    )
+    result = subprocess.run(  # noqa: S603 - execute the repository documentation under test
+        ["bash", "-c", readme_validation_script()],  # noqa: S607
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    calls = (
+        [json.loads(line) for line in call_log.read_text(encoding="utf-8").splitlines()]
+        if call_log.exists()
+        else []
+    )
+    return result, calls
+
+
+def operations(calls: list[list[str]]) -> set[str]:
+    return {" ".join(call[:2]) for call in calls}
+
+
+@pytest.mark.parametrize("scenario", ["missing-marker", "zero-cases"])
+def test_readme_validation_stops_before_crawler_without_processed_cases(
+    tmp_path: Path, scenario: str
+) -> None:
+    result, calls = run_readme_validation(tmp_path, scenario)
+    called = operations(calls)
+    assert "glue start-crawler" not in called
+    assert "athena start-query-execution" not in called
+    if scenario == "missing-marker":
+        assert result.returncode != 0
+
+
+def test_readme_validation_stops_before_athena_after_a_failed_crawl(tmp_path: Path) -> None:
+    result, calls = run_readme_validation(tmp_path, "failed-crawl")
+    called = operations(calls)
+    assert "glue start-crawler" in called
+    assert "athena start-query-execution" not in called
+    assert result.returncode != 0
+
+
+def test_readme_validation_stops_before_results_after_a_failed_query(tmp_path: Path) -> None:
+    result, calls = run_readme_validation(tmp_path, "failed-query")
+    called = operations(calls)
+    assert "athena start-query-execution" in called
+    assert "athena get-query-results" not in called
+    assert result.returncode != 0
+
+
+def test_readme_validation_completes_the_success_path(tmp_path: Path) -> None:
+    result, calls = run_readme_validation(tmp_path, "success")
+    called = operations(calls)
+    assert result.returncode == 0, result.stderr
+    assert {
+        "glue start-crawler",
+        "athena start-query-execution",
+        "athena get-query-results",
+    } <= called
