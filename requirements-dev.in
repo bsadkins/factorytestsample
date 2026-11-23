@@ -1,0 +1,21 @@
+# Local development, test, lint, type-check and security tooling.
+# Runtime versions are constrained to the Lambda lock so tests exercise the shipped versions.
+# Compile the hashed lock with:
+#   .venv/bin/uv pip compile requirements-dev.in --constraint requirements.txt --generate-hashes \
+#     --python-version 3.12 --python-platform x86_64-manylinux_2_28 --no-header --output-file requirements-dev.txt
+-r requirements.in
+bandit==1.9.4
+coverage==7.17.3
+jsonschema==4.26.0
+moto[dynamodb,s3,sqs,stepfunctions]==5.2.5
+mypy==2.4.1
+pandas==3.1.1
+pandas-stubs==3.1.0.261029
+pip==26.3
+pip-audit==2.10.1
+pytest==9.2.0
+pytest-cov==7.1.0
+ruff==0.17.5
+types-boto3[athena,bedrock-runtime,cloudwatch,dynamodb,glue,organizations,s3,sqs,stepfunctions,sts,support]==1.44.2
+types-jsonschema==4.26.0.20261006
+uv==0.13.8

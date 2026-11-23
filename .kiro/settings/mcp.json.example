@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "support-case-insights": {
+      "command": ".venv/bin/python",
+      "args": ["scripts/mcp_aws_client.py"],
+      "env": {
+        "MCP_SERVER_URL": "https://<api-id>.execute-api.us-east-1.amazonaws.com/v1/mcp",
+        "AWS_REGION": "us-east-1"
+      },
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}

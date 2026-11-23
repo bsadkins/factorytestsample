@@ -1,0 +1,27 @@
+{
+  "$schema": "./schema.json",
+  "uniqueId": "scidev",
+  "orgId": "o-exampleorg1",
+  "managementAccountId": "111111111111",
+  "region": "us-east-1",
+  "environment": "dev",
+  "enableAnalytics": true,
+  "enableMcp": true,
+  "memberRoleTargets": ["r-ab12"],
+  "bedrockModelId": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "bedrockMaxTokens": 1000,
+  "bedrockMaxConcurrency": 2,
+  "lookbackMonths": 12,
+  "rawRetentionDays": 30,
+  "logRetentionDays": 30,
+  "mcpAllowedPrincipals": ["arn:aws:iam::111111111111:role/CaseInsightsAnalyst"],
+  "apiGatewayLogging": {
+    "mode": "managed",
+    "sharedId": "scishared"
+  },
+  "schedules": {
+    "accountLookup": "cron(0 0 * * ? *)",
+    "cleanup": "cron(0 22 * * ? *)",
+    "crawler": "cron(0 9 * * ? *)"
+  }
+}

@@ -1,0 +1,234 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { type CfnElement, aws_s3 as s3 } from 'aws-cdk-lib';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
+import type { IConstruct } from 'constructs';
+import {
+  addCaseInsightsStacks,
+  CaseInsightsCoreStack,
+  CaseInsightsMemberRoleStack,
+  ConfigValidationError,
+} from '../../lib';
+import { normaliseAssetHashes } from '../helpers/assets';
+import { acknowledgedRules, schedulerTrustStatement, synthError, testApp, trustStatements } from '../helpers/cdk';
+import { FIXTURE_CONFIG_DIR, fixtureConfigDir } from '../config/helpers';
+
+describe('Support Case Insights app', () => {
+  test('dev configuration adds the namespaced core and member-role stacks in the management account', () => {
+    const app = testApp();
+    const { config, core, memberRole } = addCaseInsightsStacks(app, { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
+
+    expect(core).toBeInstanceOf(CaseInsightsCoreStack);
+    expect(core.stackName).toBe(`CaseInsightsCoreStack-${config.uniqueId}`);
+    expect(core.account).toBe(config.managementAccountId);
+    expect(core.region).toBe(config.region);
+    expect(core.config).toBe(config);
+    expect(memberRole).toBeInstanceOf(CaseInsightsMemberRoleStack);
+    expect(memberRole.stackName).toBe(`CaseInsightsMemberRoleStack-${config.uniqueId}`);
+    expect(memberRole.account).toBe(config.managementAccountId);
+    expect(app.node.children.filter((child) => child instanceof CaseInsightsCoreStack)).toHaveLength(1);
+    expect(app.node.children.filter((child) => child instanceof CaseInsightsMemberRoleStack)).toHaveLength(1);
+  });
+
+  test.each(['dev', 'prod'] as const)('%s configuration synthesises with cdk-nag enforcing and no findings left', (env) => {
+    const app = testApp();
+    const { config, core, memberRole, analytics, mcp, apiLogging } = addCaseInsightsStacks(app, { env, configDir: FIXTURE_CONFIG_DIR });
+    // cdk-nag is registered by addCaseInsightsStacks, so an unacknowledged finding makes synth throw
+    // (proved by 'cdk-nag findings fail synthesis'). A passing synth writes a report with no plugin
+    // entries at all, so the report cannot be the evidence on its own.
+    let assembly: ReturnType<typeof app.synth> | undefined;
+    expect(() => {
+      assembly = app.synth();
+    }).not.toThrow();
+    if (assembly === undefined) {
+      throw new Error('synthesis produced no cloud assembly');
+    }
+    const report = JSON.parse(fs.readFileSync(path.join(assembly.directory, 'validation-report.json'), 'utf8')) as {
+      title: string;
+      pluginReports: { pluginName: string; conclusion: string }[];
+    };
+    expect(report.title).toBe('Validation Report');
+    expect(report.pluginReports.filter((plugin) => plugin.conclusion !== 'success')).toEqual([]);
+    expect(analytics).toBeDefined();
+    // Both fixtures enable Analytics; only dev enables MCP.
+    expect(mcp !== undefined).toBe(env === 'dev');
+    // The shared API Gateway logging stack exists only with MCP in managed mode.
+    expect(apiLogging !== undefined).toBe(env === 'dev');
+    for (const stack of [core, memberRole, analytics, mcp, apiLogging]) {
+      if (stack !== undefined) {
+        Annotations.fromStack(stack).hasNoError('*', Match.anyValue());
+      }
+    }
+    expect(assembly.stacks.map((stack) => stack.stackName).sort()).toEqual(
+      [
+        `CaseInsightsCoreStack-${config.uniqueId}`,
+        `CaseInsightsMemberRoleStack-${config.uniqueId}`,
+        `CaseInsightsAnalyticsStack-${config.uniqueId}`,
+        ...(env === 'dev' ? [`CaseInsightsMcpStack-${config.uniqueId}`, `CaseInsightsApiLoggingStack-${config.apiGatewayLogging.sharedId}`] : []),
+      ].sort(),
+    );
+  });
+
+  test.each(['dev', 'prod'] as const)('%s schedules run in the default group, each through its own role trusted only in that group', (env) => {
+    const { core } = addCaseInsightsStacks(testApp(), { env, configDir: FIXTURE_CONFIG_DIR });
+    const template = Template.fromStack(core);
+    const schedules = Object.values(template.findResources('AWS::Scheduler::Schedule')).map(
+      (schedule) => schedule.Properties as { GroupName?: string; Target: { RoleArn: { 'Fn::GetAtt': [string, string] } } },
+    );
+    expect(schedules).toHaveLength(3);
+    for (const schedule of schedules) {
+      expect(schedule.GroupName).toBeUndefined();
+    }
+    const scheduleRoles = schedules.map((schedule) => schedule.Target.RoleArn['Fn::GetAtt'][0]);
+    expect(new Set(scheduleRoles).size).toBe(schedules.length);
+    const schedulerTrusted = Object.entries(template.findResources('AWS::IAM::Role'))
+      .filter(([, role]) => JSON.stringify(role.Properties).includes('scheduler.amazonaws.com'))
+      .map(([id]) => id);
+    expect(schedulerTrusted.sort()).toEqual([...scheduleRoles].sort());
+    for (const roleId of scheduleRoles) {
+      expect(trustStatements(template, roleId)).toEqual([schedulerTrustStatement(core.config)]);
+    }
+  });
+
+  test('core stack outputs the exact targets the reprocess script checks against its deployment', () => {
+    const { core } = addCaseInsightsStacks(testApp(), { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
+    const template = Template.fromStack(core);
+    const ref = (resource: IConstruct): string => core.getLogicalId(resource.node.defaultChild as CfnElement);
+    expect(template.findOutputs('*')).toMatchObject({
+      RawBucketName: { Value: { Ref: ref(core.storage.rawBucket) } },
+      ProcessedBucketName: { Value: { Ref: ref(core.storage.processedBucket) } },
+      CaseAnalysisStateMachineArn: { Value: { Ref: ref(core.caseAnalysis.stateMachine) } },
+      CaseSummaryQueueUrl: { Value: { Ref: ref(core.queues.summary.queue) } },
+    });
+  });
+
+  test.each(['dev', 'prod'] as const)('%s core stack template snapshot', (env) => {
+    const { core } = addCaseInsightsStacks(testApp(), { env, configDir: FIXTURE_CONFIG_DIR });
+    expect(normaliseAssetHashes(Template.fromStack(core).toJSON())).toMatchSnapshot();
+  });
+
+  test('Core-only (Analytics and MCP disabled) core stack template snapshot', () => {
+    const configDir = fixtureConfigDir({ dev: { enableAnalytics: false, enableMcp: false } });
+    const { core, analytics, mcp } = addCaseInsightsStacks(testApp(), { env: 'dev', configDir });
+    expect(analytics).toBeUndefined();
+    expect(mcp).toBeUndefined();
+    const template = normaliseAssetHashes(Template.fromStack(core).toJSON());
+    // The Analytics results bucket's log-delivery grant on the Core access-log bucket exists only with Analytics.
+    expect(JSON.stringify(template)).not.toContain('AllowAthenaResultsAccessLogs');
+    const withAnalytics = JSON.stringify(Template.fromStack(addCaseInsightsStacks(testApp(), { env: 'prod', configDir: FIXTURE_CONFIG_DIR }).core).toJSON());
+    expect(withAnalytics).toContain('AllowAthenaResultsAccessLogs');
+    expect(template).toMatchSnapshot();
+  });
+
+  test('every cdk-nag acknowledgement is listed here with a specific reason', () => {
+    const app = testApp();
+    const { config, core: coreStack, analytics, mcp, apiLogging } = addCaseInsightsStacks(app, { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
+    // Analytics, MCP and shared API logging acknowledgements are listed in their test/cdk/stacks/*.test.ts files.
+    const listedElsewhere = [analytics, mcp, apiLogging].map((stack) => `${stack?.stackName ?? 'missing'}/`);
+    const acknowledged = acknowledgedRules(app).filter(({ path: constructPath }) => !listedElsewhere.some((prefix) => constructPath.startsWith(prefix))).map(({ path: constructPath, id, reason }) => ({
+      path: constructPath,
+      id: id.replace(/^.*::(?=AwsSolutions-)/, ''),
+      reason,
+    }));
+    const core = `CaseInsightsCoreStack-${config.uniqueId}`;
+    const memberRoleFinding = `AwsSolutions-IAM5[Resource::arn:aws:iam::*:role/Support-Case-Analysis-Role-${config.uniqueId}]`;
+    const accountListsFinding = `AwsSolutions-IAM5[Resource::<${coreStack.getLogicalId(coreStack.storage.accountListBucket.node.defaultChild as never)}.Arn>/account-lists/*]`;
+    const lookupVersionsFinding = `AwsSolutions-IAM5[Resource::<${coreStack.getLogicalId(coreStack.accountDiscovery.lookupFunction.function.node.defaultChild as never)}.Arn>:*]`;
+    const rawObjectsFinding = `AwsSolutions-IAM5[Resource::<${coreStack.getLogicalId(coreStack.storage.rawBucket.node.defaultChild as never)}.Arn>/account_number=*]`;
+    const idOf = (construct: { node: { defaultChild?: unknown } }): string => coreStack.getLogicalId(construct.node.defaultChild as never);
+    const rawFinding = (pattern: string): string => `AwsSolutions-IAM5[Resource::<${idOf(coreStack.storage.rawBucket)}.Arn>/${pattern}]`;
+    const processedFinding = `AwsSolutions-IAM5[Resource::<${idOf(coreStack.storage.processedBucket)}.Arn>/account_number=*]`;
+    const executionsFinding = `AwsSolutions-IAM5[Resource::arn:aws:states:${config.region}:${config.managementAccountId}:execution:CaseAnalysis-${config.uniqueId}:*]`;
+    const analysis = coreStack.caseAnalysis;
+    const versionsFinding = (fn: { function: { node: { defaultChild?: unknown } } }): string => `AwsSolutions-IAM5[Resource::<${idOf(fn.function)}.Arn>:*]`;
+    const analysisFunctionAcks = ['AnalysisStages', 'UpdateCaseMetadata', 'HandleFailure', 'WorkflowStarter', 'CaseCleanup'].flatMap((id) => [
+      [`${core}/CaseAnalysis/${id}/TelemetryPolicy`, 'AwsSolutions-IAM5[Resource::*]'],
+      [`${core}/CaseAnalysis/${id}/Function`, 'AwsSolutions-L1'],
+    ]);
+    const notificationsHandler = coreStack.node.children.find((child) => child.node.id.startsWith('BucketNotificationsHandler'));
+    expect(acknowledged.map(({ path: constructPath, id }) => [constructPath, id]).sort()).toEqual(
+      [
+        [`${core}/MemberAccess/CaseAnnotationRoleMemberRoleAccess`, memberRoleFinding],
+        [`${core}/MemberAccess/CaseRetrievalRoleMemberRoleAccess`, memberRoleFinding],
+        [`${core}/Queues/WorkflowFailures`, 'AwsSolutions-SQS3'],
+        [`${core}/Queues/AccountDiscoveryFailures`, 'AwsSolutions-SQS3'],
+        [`${core}/AccountDiscovery/AccountLookup/TelemetryPolicy`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/AccountDiscovery/AccountLookup/Function`, 'AwsSolutions-L1'],
+        [`${core}/AccountDiscovery/AccountReader/TelemetryPolicy`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/AccountDiscovery/AccountReader/Function`, 'AwsSolutions-L1'],
+        [`${core}/AccountDiscovery/AccountLookupAccess`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/AccountDiscovery/AccountLookupAccess`, accountListsFinding],
+        [`${core}/AccountDiscovery/AccountReaderAccess`, accountListsFinding],
+        [`${core}/AccountDiscovery/AccountLookupScheduleRole`, lookupVersionsFinding],
+        [`${core}/CaseCollection/CaseRetrieval/TelemetryPolicy`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/CaseCollection/CaseRetrieval/Function`, 'AwsSolutions-L1'],
+        [`${core}/CaseCollection/CaseRetrievalAccess`, rawObjectsFinding],
+        [`${core}/CaseCollection/CaseRetrievalAccess`, rawFinding('runs/*/accounts/*')],
+        [`${core}/CaseCollection/CaseAnnotation/TelemetryPolicy`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/CaseCollection/CaseAnnotation/Function`, 'AwsSolutions-L1'],
+        [`${core}/CaseCollection/CaseAnnotationAccess`, rawObjectsFinding],
+        [`${core}/CaseCollection/CaseAnnotationAccess`, rawFinding('runs/*/cases/*')],
+        [`${core}/CaseCollection/CaseAnnotationAccess`, rawFinding('account_number=*/case_number=*/terminal-failure.json')],
+        ...analysisFunctionAcks,
+        [`${core}/CaseAnalysis/AnalysisStagesAccess`, rawObjectsFinding],
+        [`${core}/CaseAnalysis/AnalysisStagesAccess`, rawFinding('account_number=*/case_number=*/checkpoints/*')],
+        [`${core}/CaseAnalysis/AnalysisStagesAccess`, processedFinding],
+        [`${core}/CaseAnalysis/AnalysisStagesBedrock/Policy`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/CaseAnalysis/UpdateCaseMetadataAccess`, rawObjectsFinding],
+        [`${core}/CaseAnalysis/UpdateCaseMetadataAccess`, processedFinding],
+        [`${core}/CaseAnalysis/WorkflowStarterAccess`, rawFinding('account_number=*/case_number=*/workflow.json')],
+        [`${core}/CaseAnalysis/WorkflowStarterAccess`, rawFinding('account_number=*/case_number=*/failure-deliveries/*')],
+        [`${core}/CaseAnalysis/WorkflowStarterAccess`, rawFinding('runs/*/cases/*')],
+        [`${core}/CaseAnalysis/HandleFailureAccess`, rawFinding('account_number=*/case_number=*/failure-deliveries/*')],
+        [`${core}/CaseAnalysis/WorkflowStarterAccess`, processedFinding],
+        [`${core}/CaseAnalysis/WorkflowStarterAccess`, executionsFinding],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, rawObjectsFinding],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, rawFinding('account_number=*/case_number=*/data.json')],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, rawFinding('account_number=*/case_number=*/communications.json')],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, rawFinding('account_number=*/case_number=*/workflow.json')],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, rawFinding('cleanup-state/*')],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, rawFinding('account_number=*/case_number=*/failure-deliveries/*')],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, processedFinding],
+        [`${core}/CaseAnalysis/CaseCleanupAccess`, executionsFinding],
+        [`${core}/CaseAnalysis/StateMachine/Role`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/CaseAnalysis/StateMachine/Role`, versionsFinding(analysis.stagesFunction)],
+        [`${core}/CaseAnalysis/StateMachine/Role`, versionsFinding(analysis.updateFunction)],
+        [`${core}/CaseAnalysis/StateMachine/Role`, versionsFinding(analysis.failureFunction)],
+        [`${core}/CaseAnalysis/CaseCleanupScheduleRole`, versionsFinding(analysis.cleanupFunction)],
+        [`${core}/Observability/AlarmTopic`, 'AwsSolutions-SNS2'],
+        [`${core}/Observability/RunCompletion/TelemetryPolicy`, 'AwsSolutions-IAM5[Resource::*]'],
+        [`${core}/Observability/RunCompletion/Function`, 'AwsSolutions-L1'],
+        [`${core}/Observability/RunCompletionAccess`, accountListsFinding],
+        [`${core}/Observability/RunCompletionAccess`, rawFinding('runs/*')],
+        [`${core}/Observability/RunCompletionAccess`, rawFinding('runs/*/completion.json')],
+        [`${core}/Observability/RunCompletionAccess`, rawFinding('account_number=*/case_number=*/failure-deliveries/*')],
+        [`${core}/Observability/RunCompletionAccess`, executionsFinding],
+        [`${core}/Observability/RunCompletionScheduleRole`, versionsFinding(coreStack.observability.runCompletionFunction)],
+        [
+          `${notificationsHandler?.node.path ?? 'missing'}/Role`,
+          'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]',
+        ],
+      ].sort(),
+    );
+    for (const { reason } of acknowledged) {
+      expect(reason.length).toBeGreaterThanOrEqual(40);
+    }
+  });
+
+  test('cdk-nag findings fail synthesis', () => {
+    const app = testApp();
+    const { core } = addCaseInsightsStacks(app, { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
+    new s3.Bucket(core, 'InsecureBucket', { enforceSSL: false });
+    const error = synthError(app);
+    expect(error).toMatch(/AwsSolutions-S1'/);
+    expect(error).toMatch(/AwsSolutions-S10'/);
+  });
+
+  test('invalid configuration stops before any stack is created', () => {
+    const configDir = fixtureConfigDir({ prod: { alarmEmail: undefined } });
+
+    const app = testApp();
+    expect(() => addCaseInsightsStacks(app, { env: 'prod', configDir })).toThrow(ConfigValidationError);
+    expect(app.node.children).toHaveLength(0);
+  });
+});

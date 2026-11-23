@@ -1,0 +1,35 @@
+# Node / TypeScript
+node_modules/
+*.js.map
+*.d.ts
+coverage/
+
+# CDK
+cdk.out/
+.cdk.staging/
+
+# Repository-local dependency caches (pip wheel cache used by layer bundling)
+.cache/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local reports and editor/OS files
+reports/
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local secrets and machine-specific settings
+.env
+.env.*
+.kiro/settings/mcp.json

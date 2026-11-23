@@ -1,0 +1,1317 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`dev Analytics stack template snapshot 1`] = `
+{
+  "Description": "Support Case Insights Glue catalog, crawler and Athena workgroup (scidev)",
+  "Outputs": {
+    "AthenaResultsBucketName": {
+      "Description": "SSE-S3 bucket holding Athena query results",
+      "Value": {
+        "Ref": "AnalyticsResultsBucket8D578079",
+      },
+    },
+    "AthenaWorkgroupName": {
+      "Description": "Athena workgroup that enforces results encryption and the scan cutoff",
+      "Value": "CaseInsights-scidev",
+    },
+    "CrawlerName": {
+      "Description": "Glue crawler that adds new account/case partitions",
+      "Value": "case-insights-partition-crawler-scidev",
+    },
+    "CrawlerSchedule": {
+      "Description": "Crawler schedule (UTC); new records are queryable after the next crawl",
+      "Value": "cron(0 9 * * ? *)",
+    },
+    "GlueDatabaseName": {
+      "Description": "Glue database of the case_summary table",
+      "Value": {
+        "Ref": "AnalyticsDatabase9D7E58B6",
+      },
+    },
+    "GlueTableName": {
+      "Description": "Athena table of processed case records",
+      "Value": "case_summary",
+    },
+    "ManualCrawlerStartCommand": {
+      "Description": "Run the crawler now to make newly processed cases visible in Athena before the next scheduled crawl",
+      "Value": "aws glue start-crawler --name case-insights-partition-crawler-scidev --region us-east-1",
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "AnalyticsCaseSummaryTable7B859BA9": {
+      "DependsOn": [
+        "AnalyticsDatabase9D7E58B6",
+      ],
+      "Properties": {
+        "CatalogId": "111111111111",
+        "DatabaseName": {
+          "Ref": "AnalyticsDatabase9D7E58B6",
+        },
+        "TableInput": {
+          "Description": "One enriched record per resolved Support case, partitioned by account and case.",
+          "Name": "case_summary",
+          "Parameters": {
+            "EXTERNAL": "TRUE",
+            "classification": "json",
+            "typeOfData": "file",
+          },
+          "PartitionKeys": [
+            {
+              "Name": "account_number",
+              "Type": "string",
+            },
+            {
+              "Name": "case_number",
+              "Type": "string",
+            },
+          ],
+          "StorageDescriptor": {
+            "Columns": [
+              {
+                "Name": "caseid",
+                "Type": "string",
+              },
+              {
+                "Name": "displayid",
+                "Type": "string",
+              },
+              {
+                "Name": "subject",
+                "Type": "string",
+              },
+              {
+                "Name": "servicecode",
+                "Type": "string",
+              },
+              {
+                "Name": "categorycode",
+                "Type": "string",
+              },
+              {
+                "Name": "severitycode",
+                "Type": "string",
+              },
+              {
+                "Name": "submittedby",
+                "Type": "string",
+              },
+              {
+                "Name": "timecreated",
+                "Type": "string",
+              },
+              {
+                "Name": "case_retrieval_date",
+                "Type": "string",
+              },
+              {
+                "Name": "case_summary",
+                "Type": "string",
+              },
+              {
+                "Name": "rca_category",
+                "Type": "string",
+              },
+              {
+                "Name": "rca_reason",
+                "Type": "string",
+              },
+              {
+                "Name": "rca_retrieval_date",
+                "Type": "string",
+              },
+              {
+                "Name": "lifecycle_category",
+                "Type": "string",
+              },
+              {
+                "Name": "lifecycle_reason",
+                "Type": "string",
+              },
+              {
+                "Name": "lifecycle_retrieval_date",
+                "Type": "string",
+              },
+              {
+                "Name": "model_id",
+                "Type": "string",
+              },
+              {
+                "Name": "prompt_version",
+                "Type": "string",
+              },
+            ],
+            "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+            "Location": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Fn::GetStackOutput": {
+                      "OutputName": "PublishOutputRefStorageProcessedBucket69BE692206355CC2",
+                      "Region": "us-east-1",
+                      "StackName": "CaseInsightsCoreStack-scidev",
+                    },
+                  },
+                  "/",
+                ],
+              ],
+            },
+            "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+            "SerdeInfo": {
+              "Parameters": {
+                "case.insensitive": "false",
+                "dots.in.keys": "false",
+                "ignore.malformed.json": "false",
+                "mapping.case_retrieval_date": "Case_Retrieval_Date",
+                "mapping.case_summary": "Case_Summary",
+                "mapping.caseid": "caseId",
+                "mapping.categorycode": "categoryCode",
+                "mapping.displayid": "displayId",
+                "mapping.lifecycle_category": "Lifecycle_Category",
+                "mapping.lifecycle_reason": "Lifecycle_Reason",
+                "mapping.lifecycle_retrieval_date": "Lifecycle_Retrieval_Date",
+                "mapping.model_id": "Model_Id",
+                "mapping.prompt_version": "Prompt_Version",
+                "mapping.rca_category": "RCA_Category",
+                "mapping.rca_reason": "RCA_Reason",
+                "mapping.rca_retrieval_date": "RCA_Retrieval_Date",
+                "mapping.servicecode": "serviceCode",
+                "mapping.severitycode": "severityCode",
+                "mapping.subject": "subject",
+                "mapping.submittedby": "submittedBy",
+                "mapping.timecreated": "timeCreated",
+              },
+              "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe",
+            },
+          },
+          "TableType": "EXTERNAL_TABLE",
+        },
+      },
+      "Type": "AWS::Glue::Table",
+    },
+    "AnalyticsCrawlerAccess6DA3235E": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "glue:BatchCreatePartition",
+                "glue:BatchGetPartition",
+                "glue:BatchUpdatePartition",
+                "glue:CreatePartition",
+                "glue:GetDatabase",
+                "glue:GetPartition",
+                "glue:GetPartitions",
+                "glue:GetTable",
+                "glue:UpdatePartition",
+                "glue:UpdateTable",
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:glue:us-east-1:111111111111:catalog",
+                "arn:aws:glue:us-east-1:111111111111:database/case_insights_scidev",
+                "arn:aws:glue:us-east-1:111111111111:table/case_insights_scidev/case_summary",
+              ],
+              "Sid": "RefreshCaseSummaryPartitions",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetStackOutput": {
+                        "OutputName": "PublishOutputFnGetAttStorageProcessedBucket69BE6922ArnCAED39FC",
+                        "Region": "us-east-1",
+                        "StackName": "CaseInsightsCoreStack-scidev",
+                      },
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "ReadProcessedRecords",
+            },
+            {
+              "Action": [
+                "s3:GetBucketLocation",
+                "s3:ListBucket",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetStackOutput": {
+                  "OutputName": "PublishOutputFnGetAttStorageProcessedBucket69BE6922ArnCAED39FC",
+                  "Region": "us-east-1",
+                  "StackName": "CaseInsightsCoreStack-scidev",
+                },
+              },
+              "Sid": "ListProcessedRecords",
+            },
+            {
+              "Action": [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:logs:us-east-1:111111111111:log-group:/aws-glue/crawlers",
+                "arn:aws:logs:us-east-1:111111111111:log-group:/aws-glue/crawlers:log-stream:*",
+              ],
+              "Sid": "WriteCrawlerLogs",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AnalyticsCrawlerAccess6DA3235E",
+        "Roles": [
+          {
+            "Ref": "AnalyticsCrawlerRoleFA0E7B69",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AnalyticsCrawlerRoleFA0E7B69": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "glue.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Glue crawler that adds partitions to case_insights_scidev.case_summary",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "AnalyticsDatabase9D7E58B6": {
+      "Properties": {
+        "CatalogId": "111111111111",
+        "DatabaseInput": {
+          "Description": "Support Case Insights processed case records (scidev)",
+          "Name": "case_insights_scidev",
+        },
+      },
+      "Type": "AWS::Glue::Database",
+    },
+    "AnalyticsPartitionCrawler083B9F6C": {
+      "DependsOn": [
+        "AnalyticsCaseSummaryTable7B859BA9",
+        "AnalyticsCrawlerAccess6DA3235E",
+      ],
+      "Properties": {
+        "Configuration": "{"Version":1,"CrawlerOutput":{"Partitions":{"AddOrUpdateBehavior":"InheritFromTable"}}}",
+        "Description": "Adds new account/case partitions to case_insights_scidev.case_summary",
+        "Name": "case-insights-partition-crawler-scidev",
+        "Role": {
+          "Fn::GetAtt": [
+            "AnalyticsCrawlerRoleFA0E7B69",
+            "Arn",
+          ],
+        },
+        "Schedule": {
+          "ScheduleExpression": "cron(0 9 * * ? *)",
+        },
+        "SchemaChangePolicy": {
+          "DeleteBehavior": "LOG",
+          "UpdateBehavior": "LOG",
+        },
+        "Tags": {
+          "Environment": "dev",
+          "Project": "SupportCaseInsights",
+          "UniqueId": "scidev",
+        },
+        "Targets": {
+          "CatalogTargets": [
+            {
+              "DatabaseName": {
+                "Ref": "AnalyticsDatabase9D7E58B6",
+              },
+              "Tables": [
+                "case_summary",
+              ],
+            },
+          ],
+        },
+      },
+      "Type": "AWS::Glue::Crawler",
+    },
+    "AnalyticsResultsBucket8D578079": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256",
+              },
+            },
+          ],
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7,
+              },
+              "ExpirationInDays": 30,
+              "Id": "ExpireQueryResults",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 30,
+              },
+              "Status": "Enabled",
+            },
+          ],
+        },
+        "LoggingConfiguration": {
+          "DestinationBucketName": {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefStorageAccessLogsBucketFEE4D6FB763CD76F",
+              "Region": "us-east-1",
+              "StackName": "CaseInsightsCoreStack-scidev",
+            },
+          },
+          "LogFilePrefix": "athena-results/",
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced",
+            },
+          ],
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true,
+        },
+        "Tags": [
+          {
+            "Key": "aws-cdk:auto-delete-objects",
+            "Value": "true",
+          },
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "VersioningConfiguration": {
+          "Status": "Enabled",
+        },
+      },
+      "Type": "AWS::S3::Bucket",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "AnalyticsResultsBucketAutoDeleteObjectsCustomResource8B33D551": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "AnalyticsResultsBucketPolicy889D85A0",
+      ],
+      "Properties": {
+        "BucketName": {
+          "Ref": "AnalyticsResultsBucket8D578079",
+        },
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "Custom::S3AutoDeleteObjects",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "AnalyticsResultsBucketPolicy889D85A0": {
+      "Properties": {
+        "Bucket": {
+          "Ref": "AnalyticsResultsBucket8D578079",
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false",
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "AnalyticsResultsBucket8D578079",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "AnalyticsResultsBucket8D578079",
+                          "Arn",
+                        ],
+                      },
+                      "/*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "NumericLessThan": {
+                  "s3:TlsVersion": 1.2,
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "AnalyticsResultsBucket8D578079",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "AnalyticsResultsBucket8D578079",
+                          "Arn",
+                        ],
+                      },
+                      "/*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": [
+                "s3:DeleteObject*",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:PutBucketPolicy",
+              ],
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::GetAtt": [
+                    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+                    "Arn",
+                  ],
+                },
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "AnalyticsResultsBucket8D578079",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "AnalyticsResultsBucket8D578079",
+                          "Arn",
+                        ],
+                      },
+                      "/*",
+                    ],
+                  ],
+                },
+              ],
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+      },
+      "Type": "AWS::S3::BucketPolicy",
+    },
+    "AnalyticsWorkgroup6A4A8884": {
+      "Properties": {
+        "Description": "Support Case Insights queries over case_insights_scidev (scidev)",
+        "Name": "CaseInsights-scidev",
+        "RecursiveDeleteOption": true,
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "dev",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "scidev",
+          },
+        ],
+        "WorkGroupConfiguration": {
+          "BytesScannedCutoffPerQuery": 10737418240,
+          "EnforceWorkGroupConfiguration": true,
+          "EngineVersion": {
+            "SelectedEngineVersion": "Athena engine version 3",
+          },
+          "PublishCloudWatchMetricsEnabled": true,
+          "RequesterPaysEnabled": false,
+          "ResultConfiguration": {
+            "EncryptionConfiguration": {
+              "EncryptionOption": "SSE_S3",
+            },
+            "ExpectedBucketOwner": "111111111111",
+            "OutputLocation": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Ref": "AnalyticsResultsBucket8D578079",
+                  },
+                  "/query-results/",
+                ],
+              ],
+            },
+          },
+        },
+      },
+      "Type": "AWS::Athena::WorkGroup",
+    },
+    "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F": {
+      "DependsOn": [
+        "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-east-1",
+          "S3Key": "ASSET_HASH.zip",
+        },
+        "Description": {
+          "Fn::Join": [
+            "",
+            [
+              "Lambda function for auto-deleting objects in ",
+              {
+                "Ref": "AnalyticsResultsBucket8D578079",
+              },
+              " S3 bucket.",
+            ],
+          ],
+        },
+        "Handler": "index.handler",
+        "MemorySize": 128,
+        "Role": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 900,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
+
+exports[`prod Analytics stack template snapshot 1`] = `
+{
+  "Description": "Support Case Insights Glue catalog, crawler and Athena workgroup (sciprod)",
+  "Outputs": {
+    "AthenaResultsBucketName": {
+      "Description": "SSE-S3 bucket holding Athena query results",
+      "Value": {
+        "Ref": "AnalyticsResultsBucket8D578079",
+      },
+    },
+    "AthenaWorkgroupName": {
+      "Description": "Athena workgroup that enforces results encryption and the scan cutoff",
+      "Value": "CaseInsights-sciprod",
+    },
+    "CrawlerName": {
+      "Description": "Glue crawler that adds new account/case partitions",
+      "Value": "case-insights-partition-crawler-sciprod",
+    },
+    "CrawlerSchedule": {
+      "Description": "Crawler schedule (UTC); new records are queryable after the next crawl",
+      "Value": "cron(0 9 * * ? *)",
+    },
+    "GlueDatabaseName": {
+      "Description": "Glue database of the case_summary table",
+      "Value": {
+        "Ref": "AnalyticsDatabase9D7E58B6",
+      },
+    },
+    "GlueTableName": {
+      "Description": "Athena table of processed case records",
+      "Value": "case_summary",
+    },
+    "ManualCrawlerStartCommand": {
+      "Description": "Run the crawler now to make newly processed cases visible in Athena before the next scheduled crawl",
+      "Value": "aws glue start-crawler --name case-insights-partition-crawler-sciprod --region us-east-1",
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "AnalyticsCaseSummaryTable7B859BA9": {
+      "DependsOn": [
+        "AnalyticsDatabase9D7E58B6",
+      ],
+      "Properties": {
+        "CatalogId": "111111111111",
+        "DatabaseName": {
+          "Ref": "AnalyticsDatabase9D7E58B6",
+        },
+        "TableInput": {
+          "Description": "One enriched record per resolved Support case, partitioned by account and case.",
+          "Name": "case_summary",
+          "Parameters": {
+            "EXTERNAL": "TRUE",
+            "classification": "json",
+            "typeOfData": "file",
+          },
+          "PartitionKeys": [
+            {
+              "Name": "account_number",
+              "Type": "string",
+            },
+            {
+              "Name": "case_number",
+              "Type": "string",
+            },
+          ],
+          "StorageDescriptor": {
+            "Columns": [
+              {
+                "Name": "caseid",
+                "Type": "string",
+              },
+              {
+                "Name": "displayid",
+                "Type": "string",
+              },
+              {
+                "Name": "subject",
+                "Type": "string",
+              },
+              {
+                "Name": "servicecode",
+                "Type": "string",
+              },
+              {
+                "Name": "categorycode",
+                "Type": "string",
+              },
+              {
+                "Name": "severitycode",
+                "Type": "string",
+              },
+              {
+                "Name": "submittedby",
+                "Type": "string",
+              },
+              {
+                "Name": "timecreated",
+                "Type": "string",
+              },
+              {
+                "Name": "case_retrieval_date",
+                "Type": "string",
+              },
+              {
+                "Name": "case_summary",
+                "Type": "string",
+              },
+              {
+                "Name": "rca_category",
+                "Type": "string",
+              },
+              {
+                "Name": "rca_reason",
+                "Type": "string",
+              },
+              {
+                "Name": "rca_retrieval_date",
+                "Type": "string",
+              },
+              {
+                "Name": "lifecycle_category",
+                "Type": "string",
+              },
+              {
+                "Name": "lifecycle_reason",
+                "Type": "string",
+              },
+              {
+                "Name": "lifecycle_retrieval_date",
+                "Type": "string",
+              },
+              {
+                "Name": "model_id",
+                "Type": "string",
+              },
+              {
+                "Name": "prompt_version",
+                "Type": "string",
+              },
+            ],
+            "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+            "Location": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Fn::GetStackOutput": {
+                      "OutputName": "PublishOutputRefStorageProcessedBucket69BE692206355CC2",
+                      "Region": "us-east-1",
+                      "StackName": "CaseInsightsCoreStack-sciprod",
+                    },
+                  },
+                  "/",
+                ],
+              ],
+            },
+            "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+            "SerdeInfo": {
+              "Parameters": {
+                "case.insensitive": "false",
+                "dots.in.keys": "false",
+                "ignore.malformed.json": "false",
+                "mapping.case_retrieval_date": "Case_Retrieval_Date",
+                "mapping.case_summary": "Case_Summary",
+                "mapping.caseid": "caseId",
+                "mapping.categorycode": "categoryCode",
+                "mapping.displayid": "displayId",
+                "mapping.lifecycle_category": "Lifecycle_Category",
+                "mapping.lifecycle_reason": "Lifecycle_Reason",
+                "mapping.lifecycle_retrieval_date": "Lifecycle_Retrieval_Date",
+                "mapping.model_id": "Model_Id",
+                "mapping.prompt_version": "Prompt_Version",
+                "mapping.rca_category": "RCA_Category",
+                "mapping.rca_reason": "RCA_Reason",
+                "mapping.rca_retrieval_date": "RCA_Retrieval_Date",
+                "mapping.servicecode": "serviceCode",
+                "mapping.severitycode": "severityCode",
+                "mapping.subject": "subject",
+                "mapping.submittedby": "submittedBy",
+                "mapping.timecreated": "timeCreated",
+              },
+              "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe",
+            },
+          },
+          "TableType": "EXTERNAL_TABLE",
+        },
+      },
+      "Type": "AWS::Glue::Table",
+    },
+    "AnalyticsCrawlerAccess6DA3235E": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "glue:BatchCreatePartition",
+                "glue:BatchGetPartition",
+                "glue:BatchUpdatePartition",
+                "glue:CreatePartition",
+                "glue:GetDatabase",
+                "glue:GetPartition",
+                "glue:GetPartitions",
+                "glue:GetTable",
+                "glue:UpdatePartition",
+                "glue:UpdateTable",
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:glue:us-east-1:111111111111:catalog",
+                "arn:aws:glue:us-east-1:111111111111:database/case_insights_sciprod",
+                "arn:aws:glue:us-east-1:111111111111:table/case_insights_sciprod/case_summary",
+              ],
+              "Sid": "RefreshCaseSummaryPartitions",
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetStackOutput": {
+                        "OutputName": "PublishOutputFnGetAttStorageProcessedBucket69BE6922ArnCAED39FC",
+                        "Region": "us-east-1",
+                        "StackName": "CaseInsightsCoreStack-sciprod",
+                      },
+                    },
+                    "/account_number=*",
+                  ],
+                ],
+              },
+              "Sid": "ReadProcessedRecords",
+            },
+            {
+              "Action": [
+                "s3:GetBucketLocation",
+                "s3:ListBucket",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetStackOutput": {
+                  "OutputName": "PublishOutputFnGetAttStorageProcessedBucket69BE6922ArnCAED39FC",
+                  "Region": "us-east-1",
+                  "StackName": "CaseInsightsCoreStack-sciprod",
+                },
+              },
+              "Sid": "ListProcessedRecords",
+            },
+            {
+              "Action": [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:logs:us-east-1:111111111111:log-group:/aws-glue/crawlers",
+                "arn:aws:logs:us-east-1:111111111111:log-group:/aws-glue/crawlers:log-stream:*",
+              ],
+              "Sid": "WriteCrawlerLogs",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AnalyticsCrawlerAccess6DA3235E",
+        "Roles": [
+          {
+            "Ref": "AnalyticsCrawlerRoleFA0E7B69",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AnalyticsCrawlerRoleFA0E7B69": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "glue.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Glue crawler that adds partitions to case_insights_sciprod.case_summary",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "AnalyticsDatabase9D7E58B6": {
+      "Properties": {
+        "CatalogId": "111111111111",
+        "DatabaseInput": {
+          "Description": "Support Case Insights processed case records (sciprod)",
+          "Name": "case_insights_sciprod",
+        },
+      },
+      "Type": "AWS::Glue::Database",
+    },
+    "AnalyticsPartitionCrawler083B9F6C": {
+      "DependsOn": [
+        "AnalyticsCaseSummaryTable7B859BA9",
+        "AnalyticsCrawlerAccess6DA3235E",
+      ],
+      "Properties": {
+        "Configuration": "{"Version":1,"CrawlerOutput":{"Partitions":{"AddOrUpdateBehavior":"InheritFromTable"}}}",
+        "Description": "Adds new account/case partitions to case_insights_sciprod.case_summary",
+        "Name": "case-insights-partition-crawler-sciprod",
+        "Role": {
+          "Fn::GetAtt": [
+            "AnalyticsCrawlerRoleFA0E7B69",
+            "Arn",
+          ],
+        },
+        "Schedule": {
+          "ScheduleExpression": "cron(0 9 * * ? *)",
+        },
+        "SchemaChangePolicy": {
+          "DeleteBehavior": "LOG",
+          "UpdateBehavior": "LOG",
+        },
+        "Tags": {
+          "Environment": "prod",
+          "Project": "SupportCaseInsights",
+          "UniqueId": "sciprod",
+        },
+        "Targets": {
+          "CatalogTargets": [
+            {
+              "DatabaseName": {
+                "Ref": "AnalyticsDatabase9D7E58B6",
+              },
+              "Tables": [
+                "case_summary",
+              ],
+            },
+          ],
+        },
+      },
+      "Type": "AWS::Glue::Crawler",
+    },
+    "AnalyticsResultsBucket8D578079": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256",
+              },
+            },
+          ],
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7,
+              },
+              "ExpirationInDays": 30,
+              "Id": "ExpireQueryResults",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 30,
+              },
+              "Status": "Enabled",
+            },
+          ],
+        },
+        "LoggingConfiguration": {
+          "DestinationBucketName": {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefStorageAccessLogsBucketFEE4D6FB763CD76F",
+              "Region": "us-east-1",
+              "StackName": "CaseInsightsCoreStack-sciprod",
+            },
+          },
+          "LogFilePrefix": "athena-results/",
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced",
+            },
+          ],
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true,
+        },
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "VersioningConfiguration": {
+          "Status": "Enabled",
+        },
+      },
+      "Type": "AWS::S3::Bucket",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "AnalyticsResultsBucketPolicy889D85A0": {
+      "Properties": {
+        "Bucket": {
+          "Ref": "AnalyticsResultsBucket8D578079",
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false",
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "AnalyticsResultsBucket8D578079",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "AnalyticsResultsBucket8D578079",
+                          "Arn",
+                        ],
+                      },
+                      "/*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "NumericLessThan": {
+                  "s3:TlsVersion": 1.2,
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "AnalyticsResultsBucket8D578079",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "AnalyticsResultsBucket8D578079",
+                          "Arn",
+                        ],
+                      },
+                      "/*",
+                    ],
+                  ],
+                },
+              ],
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+      },
+      "Type": "AWS::S3::BucketPolicy",
+    },
+    "AnalyticsWorkgroup6A4A8884": {
+      "Properties": {
+        "Description": "Support Case Insights queries over case_insights_sciprod (sciprod)",
+        "Name": "CaseInsights-sciprod",
+        "RecursiveDeleteOption": true,
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "prod",
+          },
+          {
+            "Key": "Project",
+            "Value": "SupportCaseInsights",
+          },
+          {
+            "Key": "UniqueId",
+            "Value": "sciprod",
+          },
+        ],
+        "WorkGroupConfiguration": {
+          "BytesScannedCutoffPerQuery": 10737418240,
+          "EnforceWorkGroupConfiguration": true,
+          "EngineVersion": {
+            "SelectedEngineVersion": "Athena engine version 3",
+          },
+          "PublishCloudWatchMetricsEnabled": true,
+          "RequesterPaysEnabled": false,
+          "ResultConfiguration": {
+            "EncryptionConfiguration": {
+              "EncryptionOption": "SSE_S3",
+            },
+            "ExpectedBucketOwner": "111111111111",
+            "OutputLocation": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Ref": "AnalyticsResultsBucket8D578079",
+                  },
+                  "/query-results/",
+                ],
+              ],
+            },
+          },
+        },
+      },
+      "Type": "AWS::Athena::WorkGroup",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;

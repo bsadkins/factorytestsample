@@ -1,0 +1,6 @@
+# Lambda runtime dependencies packaged into the shared layer.
+# Compile the hashed lock for the Lambda platform (Python 3.12, Linux x86_64) with:
+#   .venv/bin/uv pip compile requirements.in --generate-hashes --python-version 3.12 \
+#     --python-platform x86_64-manylinux_2_28 --no-header --output-file requirements.txt
+aws-lambda-powertools[tracer]==3.40.0
+boto3==1.44.2

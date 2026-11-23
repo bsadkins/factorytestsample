@@ -1,0 +1,6 @@
+Your previous response could not be accepted: {problem}
+
+The allowed categories and their definitions are:
+{categories}
+
+Respond again with only one JSON object containing exactly two string keys, {category_key} and {reason_key}. The value of {category_key} must be one allowed category label copied exactly. The value of {reason_key} must be one short sentence.

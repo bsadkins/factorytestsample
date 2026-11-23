@@ -1,0 +1,12 @@
+{
+  "$comment": "Accepted npm advisories that have no patched release reachable from this project. Each entry must name the exact advisory, package and lockfile locations, give a specific reason and a review date. Expired or unused entries fail the scan.",
+  "exceptions": [
+    {
+      "advisory": "GHSA-g3hv-75wg-m249",
+      "name": "minimatch",
+      "locations": ["node_modules/aws-cdk-lib/node_modules/minimatch"],
+      "reason": "Bundled inside aws-cdk-lib 2.276.0, the latest release, so npm overrides cannot replace it (the top-level minimatch is overridden to 11.0.8). aws-cdk-lib only matches glob patterns supplied by this repository's code or the CDK CLI operator (asset excludes, bundling-stack selection, construct selectors) during local synthesis; no untrusted input reaches it and it is never deployed to AWS. Remove when aws-cdk-lib bundles minimatch >= 11.0.1.",
+      "reviewBy": "2027-02-13"
+    }
+  ]
+}

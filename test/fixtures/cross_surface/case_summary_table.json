@@ -1,0 +1,112 @@
+{
+  "tableName": "case_summary",
+  "serializationLibrary": "org.openx.data.jsonserde.JsonSerDe",
+  "columns": [
+    {
+      "name": "caseid",
+      "type": "string"
+    },
+    {
+      "name": "displayid",
+      "type": "string"
+    },
+    {
+      "name": "subject",
+      "type": "string"
+    },
+    {
+      "name": "servicecode",
+      "type": "string"
+    },
+    {
+      "name": "categorycode",
+      "type": "string"
+    },
+    {
+      "name": "severitycode",
+      "type": "string"
+    },
+    {
+      "name": "submittedby",
+      "type": "string"
+    },
+    {
+      "name": "timecreated",
+      "type": "string"
+    },
+    {
+      "name": "case_retrieval_date",
+      "type": "string"
+    },
+    {
+      "name": "case_summary",
+      "type": "string"
+    },
+    {
+      "name": "rca_category",
+      "type": "string"
+    },
+    {
+      "name": "rca_reason",
+      "type": "string"
+    },
+    {
+      "name": "rca_retrieval_date",
+      "type": "string"
+    },
+    {
+      "name": "lifecycle_category",
+      "type": "string"
+    },
+    {
+      "name": "lifecycle_reason",
+      "type": "string"
+    },
+    {
+      "name": "lifecycle_retrieval_date",
+      "type": "string"
+    },
+    {
+      "name": "model_id",
+      "type": "string"
+    },
+    {
+      "name": "prompt_version",
+      "type": "string"
+    }
+  ],
+  "partitionKeys": [
+    {
+      "name": "account_number",
+      "type": "string"
+    },
+    {
+      "name": "case_number",
+      "type": "string"
+    }
+  ],
+  "recordKeyTemplate": "account_number={account_number}/case_number={case_number}/data.json",
+  "serdeParameters": {
+    "case.insensitive": "false",
+    "ignore.malformed.json": "false",
+    "dots.in.keys": "false",
+    "mapping.caseid": "caseId",
+    "mapping.displayid": "displayId",
+    "mapping.subject": "subject",
+    "mapping.servicecode": "serviceCode",
+    "mapping.categorycode": "categoryCode",
+    "mapping.severitycode": "severityCode",
+    "mapping.submittedby": "submittedBy",
+    "mapping.timecreated": "timeCreated",
+    "mapping.case_retrieval_date": "Case_Retrieval_Date",
+    "mapping.case_summary": "Case_Summary",
+    "mapping.rca_category": "RCA_Category",
+    "mapping.rca_reason": "RCA_Reason",
+    "mapping.rca_retrieval_date": "RCA_Retrieval_Date",
+    "mapping.lifecycle_category": "Lifecycle_Category",
+    "mapping.lifecycle_reason": "Lifecycle_Reason",
+    "mapping.lifecycle_retrieval_date": "Lifecycle_Retrieval_Date",
+    "mapping.model_id": "Model_Id",
+    "mapping.prompt_version": "Prompt_Version"
+  }
+}

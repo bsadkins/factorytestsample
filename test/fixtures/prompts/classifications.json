@@ -1,0 +1,89 @@
+{
+  "_comment": "Invented model replies for classifier regression. No real case data.",
+  "cases": [
+    {
+      "id": "rca-plain",
+      "taxonomy": "rca",
+      "response": "{\"RCA_Category\": \"Limit reached\", \"RCA_Reason\": \"The account exhausted its On-Demand vCPU quota.\"}",
+      "expected": {
+        "RCA_Category": "Limit reached",
+        "RCA_Reason": "The account exhausted its On-Demand vCPU quota."
+      }
+    },
+    {
+      "id": "rca-fenced-with-prose",
+      "taxonomy": "rca",
+      "response": "Here is my answer:\n```json\n{\"RCA_Category\": \"Throttling\", \"RCA_Reason\": \"PutItem calls exceeded the table's write capacity.\"}\n```",
+      "expected": {
+        "RCA_Category": "Throttling",
+        "RCA_Reason": "PutItem calls exceeded the table's write capacity."
+      }
+    },
+    {
+      "id": "rca-braces-in-string",
+      "taxonomy": "rca",
+      "response": "{\"RCA_Category\": \"Development Issue\", \"RCA_Reason\": \"A template literal {stage} was left unresolved; the parser hit '}' early.\"}",
+      "expected": {
+        "RCA_Category": "Development Issue",
+        "RCA_Reason": "A template literal {stage} was left unresolved; the parser hit '}' early."
+      }
+    },
+    {
+      "id": "rca-escaped-quotes",
+      "taxonomy": "rca",
+      "response": "{\"RCA_Category\": \"Customer Release\", \"RCA_Reason\": \"The \\\"v2\\\" release removed a required IAM permission.\"}",
+      "expected": {
+        "RCA_Category": "Customer Release",
+        "RCA_Reason": "The \"v2\" release removed a required IAM permission."
+      }
+    },
+    {
+      "id": "lifecycle-nested-extra",
+      "taxonomy": "lifecycle",
+      "response": "{\"Lifecycle_Category\": \"Load Testing\", \"Lifecycle_Reason\": \"Peak traffic was never tested.\", \"meta\": {\"confidence\": 0.8}}",
+      "expected": {
+        "Lifecycle_Category": "Load Testing",
+        "Lifecycle_Reason": "Peak traffic was never tested."
+      }
+    },
+    {
+      "id": "lifecycle-slash-label",
+      "taxonomy": "lifecycle",
+      "response": "{\"Lifecycle_Category\": \"Backup/DR\", \"Lifecycle_Reason\": \"No tested restore existed for the deleted table.\"}",
+      "expected": {
+        "Lifecycle_Category": "Backup/DR",
+        "Lifecycle_Reason": "No tested restore existed for the deleted table."
+      }
+    },
+    {
+      "id": "rca-invalid-category",
+      "taxonomy": "rca",
+      "response": "{\"RCA_Category\": \"Quota Issue\", \"RCA_Reason\": \"Close to a limit.\"}",
+      "error": "invalid_category"
+    },
+    {
+      "id": "rca-unclassified-from-model",
+      "taxonomy": "rca",
+      "response": "{\"RCA_Category\": \"Unclassified\", \"RCA_Reason\": \"Unsure.\"}",
+      "error": "invalid_category"
+    },
+    {
+      "id": "lifecycle-wrong-keys",
+      "taxonomy": "lifecycle",
+      "response": "{\"RCA_Category\": \"Throttling\", \"RCA_Reason\": \"Wrong schema.\"}",
+      "error": "missing_category"
+    },
+    {
+      "id": "lifecycle-malformed",
+      "taxonomy": "lifecycle",
+      "response": "{\"Lifecycle_Category\": \"Monitoring\", \"Lifecycle_Reason\": \"unterminated",
+      "error": "no_json_object"
+    },
+    {
+      "id": "rca-prose-only",
+      "taxonomy": "rca",
+      "response": "The root cause was throttling.",
+      "error": "no_json_object"
+    }
+  ]
+}

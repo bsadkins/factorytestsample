@@ -1,0 +1,108 @@
+flowchart TB
+  CLIENT["Kiro or other MCP client<br/>scripts/mcp_aws_client.py SigV4 stdio bridge"]
+
+  subgraph MGMT["Management account, deployment Region (all names end in -#lt;uniqueId#gt;)"]
+    direction TB
+
+    subgraph CORE["CaseInsightsCoreStack-#lt;uniqueId#gt;"]
+      direction TB
+      subgraph DISC["1. Account discovery"]
+        direction LR
+        SCHED["EventBridge Scheduler<br/>CaseInsights-AccountLookup<br/>00:00 UTC daily"]
+        LOOKUP["Lambda-AccountLookup-#lt;uniqueId#gt;<br/>Organizations ListAccounts"]
+        ACCTLIST[("S3 account-list bucket<br/>account-lists/#lt;runId#gt;.json")]
+        READER["Lambda-AccountReader"]
+        SCHED --> LOOKUP --> ACCTLIST -->|S3 event| READER
+      end
+      subgraph COLL["2. Case collection"]
+        direction LR
+        Q1[["SQS CaseInsights-ActiveAccounts<br/>+ DLQ"]]
+        RET["Lambda-CaseRetrieval<br/>support:DescribeCases"]
+        Q2[["SQS CaseInsights-CaseAnnotation<br/>+ DLQ"]]
+        ANN["Lambda-CaseAnnotation<br/>support:DescribeCommunications"]
+        Q3[["SQS CaseInsights-CaseSummary<br/>+ DLQ"]]
+        Q1 --> RET --> Q2 --> ANN --> Q3
+      end
+      subgraph ANALYSIS["3. Case analysis"]
+        direction LR
+        STARTER["Lambda-WorkflowStarter"]
+        subgraph SFN["Step Functions CaseAnalysis (Standard)"]
+          direction LR
+          SUM["Summary"] --> RCA["RCA"] --> LIFE["Lifecycle"] --> UPD["UpdateCaseMetadata"]
+        end
+        STAGES["Lambda-CaseAnalysisStages<br/>reserved concurrency =<br/>bedrockMaxConcurrency"]
+        BEDROCK{{"Amazon Bedrock global inference profile<br/>Claude Haiku 4.5 (default) or Sonnet 4.5<br/>summary, RCA and lifecycle calls"}}
+        STARTER --> SUM
+        SUM & RCA & LIFE -.->|invoke| STAGES --> BEDROCK
+        HF["Lambda-HandleFailure"]
+        FAILQ[["SQS CaseInsights-WorkflowFailures<br/>(terminal)"]]
+        SFN -->|on error| HF --> FAILQ
+      end
+      subgraph STORE["Storage"]
+        direction LR
+        RAW[("S3 raw bucket<br/>case data, conversations,<br/>checkpoints, run markers")]
+        PROC[("S3 processed bucket<br/>account_number=/case_number=/data.json")]
+        DDB[("DynamoDB idempotency table<br/>(Powertools only)")]
+      end
+      subgraph OPS["Operations"]
+        direction LR
+        CLEAN["Lambda-CaseCleanup<br/>22:00 UTC daily"]
+        RUNC["Lambda-RunCompletion<br/>hourly heartbeat"]
+        CW["CloudWatch dashboard<br/>and alarms"]
+        SNS["SNS CaseInsights-Alarms<br/>TLS only, not encrypted at rest"]
+        CW --> SNS
+      end
+      READER --> Q1
+      Q3 --> STARTER
+      UPD -->|write once| PROC
+      ANN -->|raw objects| RAW
+      READER -.->|idempotency| DDB
+    end
+
+    subgraph MRS["CaseInsightsMemberRoleStack-#lt;uniqueId#gt;"]
+      STACKSET["Service-managed StackSet<br/>CaseInsights-MemberRole-#lt;uniqueId#gt;"]
+    end
+
+    subgraph AN["CaseInsightsAnalyticsStack-#lt;uniqueId#gt; (enableAnalytics)"]
+      direction LR
+      CRAWLER["Glue crawler<br/>case-insights-partition-crawler<br/>09:00 UTC daily"]
+      GLUE[("Glue database case_insights_#lt;id#gt;<br/>table case_summary")]
+      ATHENA["Athena workgroup<br/>CaseInsights-#lt;uniqueId#gt;"]
+      RESULTS[("S3 Athena results bucket<br/>query-results/")]
+      CRAWLER --> GLUE
+      ATHENA --> GLUE
+      ATHENA --> RESULTS
+    end
+
+    subgraph APILOG["CaseInsightsApiLoggingStack-#lt;sharedId#gt; (managed mode)"]
+      APIACCT["AWS::ApiGateway::Account + CloudWatch Logs role<br/>account-wide setting used by MCP access logs"]
+    end
+
+    subgraph MCPS["CaseInsightsMcpStack-#lt;uniqueId#gt; (enableMcp)"]
+      direction LR
+      WAF["AWS WAF web ACL<br/>per-IP rate, 32 KiB body, Core rule set"]
+      APIGW["API Gateway REST API<br/>POST /v1/mcp, AWS_IAM (SigV4)"]
+      MCPFN["Lambda-McpServer<br/>reserved concurrency 20<br/>8 read-only tools"]
+      WAF --> APIGW --> MCPFN
+    end
+
+    PIPE["Optional CaseInsightsPipelineStack<br/>-c pipeline=true"]
+  end
+
+  subgraph MEMBERS["Member accounts under memberRoleTargets"]
+    direction LR
+    MROLE["Support-Case-Analysis-Role-#lt;uniqueId#gt;"]
+    SUPPORT["AWS Support API"]
+    MROLE --> SUPPORT
+  end
+
+  EMAIL["Email subscribers (alarmEmail)"]
+
+  RET -->|AssumeRole| MROLE
+  ANN -->|AssumeRole| MROLE
+  STACKSET -->|automatic deployment| MROLE
+  SNS --> EMAIL
+  PROC --> CRAWLER
+  CLIENT --> WAF
+  MCPFN --> ATHENA
+  MCPFN -.-> BEDROCK

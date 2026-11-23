@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bsadkins/factorytestsample/config/pipeline.schema.json",
+  "title": "Support Case Insights optional CDK Pipelines configuration",
+  "description": "Opt-in configuration for config/pipeline.json. It is validated separately from config/<env>.json and never changes standalone 'cdk deploy --all -c env=<env>' behaviour.",
+  "$comment": "Cross-file rules enforced by lib/config/pipeline.ts: config/dev.json and config/prod.json must declare environment dev and prod, use different uniqueId values, share orgId, and both managementAccountId and region values must equal account and region, and both must use the same apiGatewayLogging settings. The connection ARN must be in the same account, Region and partition as the pipeline.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["account", "region", "connectionArn"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional editor hint pointing at this schema."
+    },
+    "pipelineName": {
+      "type": "string",
+      "description": "CodePipeline name.",
+      "pattern": "^[A-Za-z0-9.@_-]{1,100}$",
+      "default": "CaseInsights-Pipeline"
+    },
+    "account": {
+      "type": "string",
+      "description": "Management account that hosts the pipeline and both deployment stages.",
+      "pattern": "^[0-9]{12}$"
+    },
+    "region": {
+      "type": "string",
+      "description": "Region that hosts the pipeline.",
+      "pattern": "^[a-z]{2}(-[a-z]+)+-[0-9]$"
+    },
+    "connectionArn": {
+      "type": "string",
+      "description": "ARN of an existing, human-authorised AWS CodeConnections connection to GitHub in the pipeline account and Region. No personal access tokens are used.",
+      "pattern": "^arn:aws(-[a-z]+)*:(codeconnections|codestar-connections):[a-z]{2}(-[a-z]+)+-[0-9]:[0-9]{12}:connection/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "repository": {
+      "type": "string",
+      "description": "GitHub owner/repository used as the pipeline source. Only bsadkins/factorytestsample is supported.",
+      "const": "bsadkins/factorytestsample",
+      "default": "bsadkins/factorytestsample"
+    },
+    "branch": {
+      "type": "string",
+      "description": "Source branch. Only main is supported.",
+      "const": "main",
+      "default": "main"
+    }
+  }
+}

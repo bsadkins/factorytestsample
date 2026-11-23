@@ -1,0 +1,52 @@
+{
+  "name": "support-case-insights",
+  "version": "0.1.0",
+  "description": "Support Case Insights: AWS CDK application that collects resolved AWS Support cases across an AWS Organization and enriches them with Amazon Bedrock.",
+  "license": "MIT-0",
+  "private": true,
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24"
+  },
+  "scripts": {
+    "cdk": "cdk",
+    "lint": "npm run lint:ts && npm run lint:py",
+    "lint:ts": "eslint . --max-warnings 0",
+    "lint:py": ".venv/bin/ruff check . && .venv/bin/ruff format --check .",
+    "typecheck": "npm run typecheck:ts && npm run typecheck:py",
+    "typecheck:ts": "tsc --noEmit",
+    "typecheck:py": ".venv/bin/mypy",
+    "test": "npm run test:ts && npm run test:py",
+    "test:ts": "jest",
+    "test:py": ".venv/bin/pytest --cov",
+    "synth": "cdk synth -c env=dev --no-lookups --quiet --output cdk.out/dev && cdk synth -c env=prod --no-lookups --quiet --output cdk.out/prod",
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run synth",
+    "security": "npm run security:npm && npm run security:py",
+    "security:npm": "node scripts/security/npm-advisory-scan.cjs",
+    "security:py": ".venv/bin/pip-audit --strict --disable-pip -r requirements.txt -r requirements-dev.txt && .venv/bin/bandit -q -c pyproject.toml -r src scripts"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "aws-cdk-lib": "2.276.0",
+    "cdk-nag": "3.0.2",
+    "constructs": "10.8.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/jest": "30.0.0",
+    "@types/node": "24.19.2",
+    "aws-cdk": "2.1148.1",
+    "eslint": "10.14.0",
+    "jest": "30.5.2",
+    "semver": "7.8.6",
+    "ts-jest": "29.4.15",
+    "ts-node": "10.9.2",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.2"
+  },
+  "overrides": {
+    "glob": "14.0.6",
+    "minimatch": "11.0.8",
+    "test-exclude": "8.0.0"
+  }
+}
