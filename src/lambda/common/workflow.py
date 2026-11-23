@@ -12,8 +12,9 @@ before calling StartExecution, and it stores the exact execution input, so any s
 a claim whose owner stopped between the write and StartExecution without creating a second
 execution (StartExecution with the same name and input is idempotent while it runs).
 
-While Case Cleanup resets an abandoned case, `workflow.json` holds a `ResetClaim` instead; see
-there for how starters and cleanup share the key.
+While Case Cleanup resets an abandoned case, or `scripts/reprocess-cases.py` removes a case's
+checkpoints, `workflow.json` holds a `ResetClaim` instead; see there for how starters and the
+resetters share the key.
 """
 
 from __future__ import annotations
@@ -242,12 +243,13 @@ class OwnershipMarker:
 
 @dataclass(frozen=True, slots=True)
 class ResetClaim:
-    """Cleanup's claim on a case it is about to reset, stored in place of the ownership marker.
+    """A claim on a case about to be reset, stored in place of the ownership marker.
 
-    Cleanup writes it with a conditional write on the exact marker it judged closed (or on there
-    being none) before deleting any input, so a starter that took ownership first always wins.
+    Case Cleanup (before deleting inputs) and the reprocess script (before deleting checkpoints)
+    write it with a conditional write on the exact marker they judged closed (or on there being
+    none), so a starter or another resetter that took ownership first always wins.
     Starters never overwrite a claim younger than `RESET_CLAIM_STALE_AFTER`; an older claim was
-    left by a cleanup that stopped mid-reset and may be taken over.
+    left by a resetter that stopped mid-reset and may be taken over.
     """
 
     account_id: str

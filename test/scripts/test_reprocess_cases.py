@@ -7,7 +7,9 @@ moto S3/SQS. Step Functions is `workflow_kit.FakeStepFunctions`. Every record is
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import re
 import subprocess
@@ -36,6 +38,7 @@ from common.workflow import (
 )
 from moto import mock_aws
 from workflow_kit import STATE_MACHINE_ARN, FakeStepFunctions, sfn_error
+from workflow_starter import app as starter
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "reprocess-cases.py"
@@ -171,7 +174,8 @@ class Env:
                     2,
                 )
                 claim = OwnershipMarker.claim(ref, 1, NOW - timedelta(days=30))
-                self.put(RAW, claim.key, claim.to_document())
+                # Stored exactly as the starter writes it (sorted, compact JSON).
+                self.put(RAW, claim.key, encode_input(claim.to_document()))
                 self.sfn.add(claim.execution_name, marker, encode_input(claim.input))
                 seeded.execution = claim.execution_name
         if checkpoints:
@@ -861,7 +865,7 @@ def test_active_unknown_and_starting_work_is_left_unchanged(env: Env) -> None:
     assert reasons == {
         "2001": "a RUNNING CaseAnalysis execution belongs to the case",
         "2002": f"execution {pending.execution} is PENDING_REDRIVE",
-        "2003": "Case Cleanup is resetting the case",
+        "2003": "a Case Cleanup reset or another reprocess is in progress",
         "2004": "a RUNNING CaseAnalysis execution belongs to the case",
         "2005": "the ownership marker is unreadable; status unknown",
         "2006": f"execution {fresh.execution_name} is being started",
@@ -1031,6 +1035,210 @@ def test_a_record_replaced_during_reprocessing_is_kept(env: Env) -> None:
     assert code == 0
     assert "the processed record changed during reprocessing; record kept" in out
     assert env.versions(PROCESSED, seeded.key)[0] == ("version", replaced[0], True)
+    # The rewritten record keeps the checkpoints it was made from.
+    for stage in STAGES:
+        assert env.versions(RAW, checkpoint_key(MEMBER_A, "4101", stage))[0][0] == "version"
+    deleted = [p["Key"] for name, p in env.calls if name == "DeleteObject"]
+    assert [key for key in deleted if not key.endswith("/workflow.json")] == []
+
+
+# --- overlapping work, slow acknowledgements and permissions ------------------------------------
+
+
+def start_workflow(env: Env, message: dict[str, Any]) -> dict[str, Any]:
+    """Hand a summary reference to the real Workflow Starter decision logic."""
+    settings = starter.Settings(RAW, PROCESSED, STATE_MACHINE_ARN, timedelta(minutes=15))
+    clients = starter.Clients(s3=env.s3, sfn=env.sfn)  # type: ignore[arg-type]
+    result: dict[str, Any] = starter.reconcile_case(SummaryRef.parse(message), settings, clients)
+    return result
+
+
+@pytest.fixture
+def starter_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(starter, "now", lambda: NOW + timedelta(minutes=2))
+
+
+@pytest.mark.usefixtures("starter_clock")
+@pytest.mark.parametrize("workflow_started", [True, False], ids=["started", "not-yet-started"])
+def test_an_overlapping_reprocess_never_touches_the_work_the_first_one_queued(
+    env: Env, script: ModuleType, monkeypatch: pytest.MonkeyPatch, *, workflow_started: bool
+) -> None:
+    seeded = env.seed("5001")
+    window = ("--from", "2026-01-01", "--to", "2026-12-31")
+    token = env.token(*window)
+    marker = marker_key(MEMBER_A, "5001")
+    original_marker = env.s3.get_object(Bucket=RAW, Key=marker)["Body"].read()
+    summary_checkpoint = checkpoint_key(MEMBER_A, "5001", STAGES[0])
+    first: dict[str, Any] = {}
+    recheck = script.Executor._recheck
+
+    def overlap(self: Any, planned: Any) -> Any:  # noqa: ANN401
+        # The second operator's last check has passed; the first operator's whole reprocess,
+        # and the execution its reference starts, run before the second one changes anything.
+        result = recheck(self, planned)
+        if first:
+            return result
+        first["mark"] = len(env.calls)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            first["code"] = script.main(
+                ["--env", UNIQUE, "--config-dir", str(env.config_dir), *window, "--confirm", token]
+            )
+        first["out"] = output.getvalue()
+        [message] = [
+            json.loads(p["MessageBody"])
+            for name, p in env.calls[first["mark"] :]
+            if name == "SendMessage"
+        ]
+        first["message"] = message
+        if workflow_started:
+            assert start_workflow(env, message)["outcome"] == "started"
+            first["checkpoint"] = env.put(RAW, summary_checkpoint, {"synthetic": "new run"})
+            first["marker"] = env.s3.get_object(Bucket=RAW, Key=marker)["Body"].read()
+        first["after"] = len(env.calls)
+        return result
+
+    monkeypatch.setattr(script.Executor, "_recheck", overlap)
+    code, out, _ = env.run(*window, "--confirm", token)
+
+    assert first["code"] == 0
+    assert f"requeued    {MEMBER_A} 5001" in first["out"]
+    assert code == 0
+    if workflow_started:
+        # The starter's new marker defeats the second reprocess's conditional claim.
+        assert "the case's ownership changed since the check" in _line(out, "5001")
+    else:
+        # The restored marker lets the claim through; the recheck under the claim stops it.
+        assert "the processed record changed since the preview" in _line(out, "5001")
+    assert f"skipped     {MEMBER_A} 5001" in out
+    second = env.calls[first["after"] :]
+    assert [p for name, p in second if name == "SendMessage"] == []
+    deleted = [p["Key"] for name, p in second if name == "DeleteObject"]
+    assert [key for key in deleted if not key.endswith("/workflow.json")] == []
+    assert env.removed(PROCESSED, seeded.key)
+    current_marker = env.s3.get_object(Bucket=RAW, Key=marker)["Body"].read()
+    if workflow_started:
+        # The running execution keeps its checkpoint and its ownership marker.
+        assert env.versions(RAW, summary_checkpoint)[0] == ("version", first["checkpoint"], True)
+        assert current_marker == first["marker"]
+    else:
+        # The ownership marker is back as it was, and the queued reference still starts the
+        # new execution.
+        assert json.loads(current_marker) == json.loads(original_marker)
+        assert start_workflow(env, first["message"])["outcome"] == "started"
+
+
+@pytest.mark.usefixtures("starter_clock")
+def test_a_slowly_acknowledged_reference_consumed_early_still_leaves_one_pending_reference(
+    env: Env, script: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seeded = env.seed("5101")
+    window = ("--from", "2026-01-01", "--to", "2026-12-31", "--delay-seconds", "6")
+    token = env.token(*window)
+    clock = [1000.0]
+    monkeypatch.setattr(script, "monotonic", lambda: clock[0])
+    answered: list[str] = []
+
+    def accepted_then_slow_response(**_: Any) -> None:  # noqa: ANN401
+        if answered:
+            return
+        # SQS accepted the message and its delay ran out before the response arrived; the
+        # starter consumed it while the processed record still existed.
+        [message] = [json.loads(p["MessageBody"]) for n, p in env.calls if n == "SendMessage"]
+        answered.append(start_workflow(env, message)["outcome"])
+        env.sqs.purge_queue(QueueUrl=env.queue_url)
+        clock[0] += 7
+
+    env.sqs.meta.events.register("after-call.sqs.SendMessage", accepted_then_slow_response)
+    code, out, _ = env.run(*window, "--confirm", token)
+
+    assert answered == ["alreadyProcessed"]
+    assert code == 0
+    assert f"requeued    {MEMBER_A} 5101" in out
+    assert env.removed(PROCESSED, seeded.key)
+    pending = env.sqs.receive_message(QueueUrl=env.queue_url, MaxNumberOfMessages=10).get(
+        "Messages", []
+    )
+    [reference] = [json.loads(m["Body"]) for m in pending]
+    assert str(reference["redriveId"]).endswith("-f")
+    assert start_workflow(env, reference)["outcome"] == "started"
+
+
+def _deny(env: Env, operation: str, matches: Callable[[dict[str, Any]], bool], code: str) -> None:
+    def hook(params: dict[str, Any], **_: Any) -> None:  # noqa: ANN401
+        if matches(params):
+            raise ClientError(
+                {
+                    "Error": {"Code": code, "Message": "synthetic"},
+                    "ResponseMetadata": {"HTTPStatusCode": 403},  # type: ignore[typeddict-item]
+                },
+                operation,
+            )
+
+    env.s3.meta.events.register(f"provide-client-params.s3.{operation}", hook)
+
+
+def _line(out: str, display: str) -> str:
+    """The last line about `display`: its preview line, or its report line after execution."""
+    return [line for line in out.splitlines() if f" {display} " in line][-1]
+
+
+def test_a_denied_versioned_conversation_read_is_a_permission_error_not_expired_inputs(
+    env: Env,
+) -> None:
+    seeded = env.seed("6001", marker=None)
+    _deny(
+        env,
+        "GetObject",
+        lambda p: "VersionId" in p and p["Key"].endswith("/communications.json"),
+        "AccessDenied",
+    )
+    window = ("--from", "2026-01-01", "--to", "2026-12-31")
+
+    code, out, _ = env.run(*window, "--dry-run")
+
+    assert code == 0
+    line = _line(out, "6001")
+    assert line.startswith("skip ")
+    assert "permission denied (AccessDenied" in line
+    assert "s3:GetObjectVersion" in line
+    assert "Nothing to reprocess" in out
+    assert env.unchanged(seeded)
+
+
+def test_a_403_for_absent_raw_inputs_is_reported_as_a_missing_list_permission(env: Env) -> None:
+    seeded = env.seed("6002", "2026-09-01T00:00:00Z", raw=False)
+    _deny(env, "HeadObject", lambda p: p["Bucket"] == RAW, "403")
+    window = ("--from", "2026-01-01", "--to", "2026-12-31")
+
+    code, out, _ = env.run(*window, "--dry-run")
+
+    assert code == 0
+    line = _line(out, "6002")
+    assert line.startswith("skip ")
+    assert "permission denied (403" in line
+    assert "s3:ListBucket" in line
+    assert env.unchanged(seeded)
+
+
+def test_a_403_while_removing_checkpoints_fails_the_case_as_a_permission_error(env: Env) -> None:
+    seeded = env.seed("6003", checkpoints=False)
+    window = ("--from", "2026-01-01", "--to", "2026-12-31")
+    token = env.token(*window)
+    marker = marker_key(MEMBER_A, "6003")
+    original_marker = env.s3.get_object(Bucket=RAW, Key=marker)["Body"].read()
+    _deny(env, "HeadObject", lambda p: "/checkpoints/" in p["Key"], "403")
+
+    code, out, _ = env.run(*window, "--confirm", token)
+
+    assert code == 1
+    line = _line(out, "6003")
+    assert line.startswith("failed ")
+    assert "permission denied (403" in line
+    assert "s3:ListBucket" in line
+    assert env.unchanged(seeded)
+    restored = env.s3.get_object(Bucket=RAW, Key=marker)["Body"].read()
+    assert json.loads(restored) == json.loads(original_marker)
 
 
 def test_output_keys_match_the_core_stack_outputs(script: ModuleType) -> None:

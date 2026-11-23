@@ -9,9 +9,10 @@ the case's S3 ownership marker with the Step Functions status of the execution i
 - a claim whose execution does not exist yet is completed with the claim's own name and input
   (an idempotent StartExecution), unless it is older than the claim settle time, when it is
   treated as abandoned;
-- a reset claim of Case Cleanup (see `common.workflow.ResetClaim`) is never overwritten while it
-  is recent: the record fails with `CaseResetInProgressError` and is retried. A claim older than
-  any cleanup can run was left by an interrupted reset and is taken over like an absent marker;
+- a reset claim of Case Cleanup or the reprocess script (see `common.workflow.ResetClaim`) is
+  never overwritten while it is recent: the record fails with `CaseResetInProgressError` and is
+  retried. A claim older than any reset can run was left by an interrupted reset and is taken
+  over like an absent marker;
 - a closed FAILED, TIMED_OUT or ABORTED execution is recovered with the next attempt name for
   this run (or attempt 1 of a new run), claimed with a conditional write on the marker's ETag.
   Before the marker is replaced, a pending failure-delivery marker is kept for the closed attempt

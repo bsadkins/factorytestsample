@@ -94,7 +94,7 @@ Each table lists the metrics a service publishes, in the `SupportCaseInsights` n
 | `CasesAlreadyProcessed` | The case already has a processed record |
 | `FailedAttemptsRecovered` | A closed failed attempt was recovered under the next attempt name |
 | `FailureDeliveriesPreserved` | A pending failure-delivery marker was kept for reconciliation |
-| `StaleResetClaimsTakenOver` | A Case Cleanup reset claim older than an hour was taken over |
+| `StaleResetClaimsTakenOver` | A reset claim of Case Cleanup or the reprocess script older than an hour was taken over |
 | `OwnershipClaimsCompleted` | An interrupted ownership claim was completed |
 | `ExecutionNameConflicts` | `StartExecution` reported that the execution name already exists |
 | `InvalidMessages` | A queue message was malformed (also counted in `WorkflowStartFailures`) |

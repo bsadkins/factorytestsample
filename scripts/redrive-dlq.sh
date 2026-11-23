@@ -60,8 +60,14 @@ Required permissions:
   use SQS-managed encryption, so no KMS permissions are needed. Cancelling a task needs
   sqs:CancelMessageMoveTask on the dead-letter queue.
 
-Exit status: 0 started or nothing to redrive, 1 an AWS request failed or the task failed,
-2 invalid options or target, 3 cancelled or not confirmed.
+Uncertain starts:
+  Only a refusal for lack of permission proves that no task started. Any other failed, timed-out
+  or unreadable StartMessageMoveTask response is reported as UNKNOWN, because SQS may have
+  accepted the request (the AWS CLI also retries some failures itself). Inspect the dead-letter
+  queue and its move tasks with the printed commands before retrying.
+
+Exit status: 0 started or nothing to redrive, 1 an AWS request failed, the task failed or its
+start is unknown, 2 invalid options or target, 3 cancelled or not confirmed.
 EOF
 }
 
@@ -204,6 +210,7 @@ PY
 
 AWS_ERR=""
 PY_ERR=""
+DLQ_URL=""
 
 aws_json() {
   local -a command=(aws --region "$REGION" --output json)
@@ -293,6 +300,7 @@ resolve_queues() {
   # Each lookup runs in a subshell; its exit status carries any refusal out of this function.
   source_url=$(queue_url "$SOURCE_NAME") || exit $?
   dlq_url=$(queue_url "$DLQ_NAME") || exit $?
+  DLQ_URL=$dlq_url
   source=$(queue_attributes "$source_url" QueueArn RedrivePolicy) || exit $?
   dlq=$(queue_attributes "$dlq_url" QueueArn ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible) || exit $?
   SOURCE_ARN=$(json_get Attributes QueueArn <<<"$source")
@@ -368,18 +376,43 @@ confirmed() {
   return 0
 }
 
+print_inspect_commands() {
+  printf 'Progress: aws sqs list-message-move-tasks --source-arn %s --region %s\n' "$DLQ_ARN" "$REGION"
+  printf 'DLQ depth: aws sqs get-queue-attributes --queue-url %s --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible --region %s\n' \
+    "$DLQ_URL" "$REGION"
+}
+
+start_unknown() {
+  # start_unknown <detail>: the start request may have been accepted without a confirmation.
+  printf 'error: the move task start is UNKNOWN (%s). SQS may have accepted the request without confirming it, so messages may already be moving from %s to %s.\n' \
+    "$1" "$DLQ_NAME" "$SOURCE_NAME" >&2
+  printf 'Do not assume nothing moved: inspect the dead-letter queue and its move tasks before retrying, with the commands below. Start another redrive only when no task is RUNNING and the messages are still in %s.\n' \
+    "$DLQ_NAME" >&2
+  print_inspect_commands
+  exit "$EXIT_FAILED"
+}
+
 start_task() {
   local -a rate=()
-  local response handle status tasks
+  local response handle status tasks code
   if [[ -n $RATE ]]; then
     rate=(--max-number-of-messages-per-second "$RATE")
   fi
   if ! response=$(aws_json sqs start-message-move-task --source-arn "$DLQ_ARN" \
     --destination-arn "$SOURCE_ARN" ${rate[@]+"${rate[@]}"}); then
-    printf 'error: the move task was not started (%s). No messages were moved.\n' "$(aws_error_code)" >&2
-    exit "$EXIT_FAILED"
+    code=$(aws_error_code)
+    case $code in
+      AccessDenied | AccessDeniedException)
+        # Every attempt of the request, including the CLI's own retries, carries the same
+        # authorisation, so a refusal for permission means none of them was accepted.
+        printf 'error: the move task was not started (%s). No messages were moved.\n' "$code" >&2
+        exit "$EXIT_FAILED"
+        ;;
+    esac
+    start_unknown "$code"
   fi
-  handle=$(json_get TaskHandle <<<"$response")
+  handle=$(json_get TaskHandle <<<"$response" 2>/dev/null) || handle=""
+  [[ -n $handle ]] || start_unknown "no task handle in the response"
   printf 'Started move task %s.\n' "$handle"
   if ! tasks=$(aws_json sqs list-message-move-tasks --source-arn "$DLQ_ARN" --max-results 1); then
     printf 'warning: the move task was started, but its status could not be read (%s). Do not start another; check it with the command below.\n' "$(aws_error_code)" >&2

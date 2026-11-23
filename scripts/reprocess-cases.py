@@ -12,14 +12,24 @@ makes each selected case eligible for analysis again:
   ID, so the Workflow Starter claims a new execution name that no closed execution can hold. The
   stage checkpoints and then the processed record are removed while the message is delayed. A
   message that arrives while the record still exists is answered as already processed, so an
-  interrupted reprocess leaves the case as it was. If removal took longer than the delay, a
-  follow-up reference is sent; duplicate references never start a second execution.
+  interrupted reprocess leaves the case as it was. If the time from just before the send until
+  removal finished came close to (or exceeded) the delay, a follow-up reference is sent; duplicate
+  references never start a second execution.
 - rediscover: when the raw inputs have expired but the case is still inside the collection
   lookback window, the checkpoints and processed record are removed and the next scheduled run
   collects and analyses the case again.
 
 Cases with active work (a RUNNING or PENDING_REDRIVE execution, an execution being started, or a
-Case Cleanup reset in progress), unknown status, or neither path available are left unchanged.
+Case Cleanup reset or another reprocess in progress), unknown status, or neither path available are
+left unchanged.
+
+Before changing a case, the script replaces exactly the ownership marker it checked (or its
+absence) with a reset claim (`common.workflow.ResetClaim`), conditional on that marker's ETag, as
+Case Cleanup does. While the claim is held, the Workflow Starter starts nothing for the case, Case
+Cleanup leaves it alone and a concurrent reprocess skips it; a starter or another reprocess that
+changed the marker first makes the claim fail, and the case is skipped. With the claim held, the
+processed record is checked again immediately before the checkpoints are removed, and every
+removal is conditional on the ETag that was read. Afterwards the original marker is put back.
 
 Removals are plain deletes, which add an S3 delete marker. Earlier versions are never deleted by
 version ID, so no older processed record or checkpoint can become current again; the previous
@@ -73,17 +83,22 @@ from common.processed import (  # noqa: E402
 )
 from common.s3_json import (  # noqa: E402
     S3JsonError,
+    S3PreconditionFailedError,
     delete_if_unchanged,
+    is_not_found_error,
     read_json_object,
+    write_json,
 )
 from common.workflow import (  # noqa: E402
     ACTIVE_STATUSES,
+    MAX_MARKER_BYTES,
     InvalidOwnershipMarkerError,
     OwnershipMarker,
     ResetClaim,
     describe_status,
     display_component,
     execution_arn,
+    marker_key,
     parse_execution_name,
     read_ownership,
 )
@@ -129,6 +144,23 @@ UNIQUE_ID: Final = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 REGION: Final = re.compile(r"^[a-z]{2}(-[a-z]+)+-[0-9]$")
 ISO_DATE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MAX_SCOPE_VALUES: Final = 100
+
+RESET_IN_PROGRESS: Final = "a Case Cleanup reset or another reprocess is in progress"
+RECORD_CHANGED: Final = "the processed record changed during reprocessing; record kept"
+HTTP_FORBIDDEN: Final = 403
+ACCESS_DENIED_CODES: Final = frozenset(
+    {"AccessDenied", "AccessDeniedException", "403", "Forbidden"}
+)
+# What a 403 most likely lacks, per kind of request (see the runbook's permission list).
+NEEDS_READ: Final = (
+    "s3:GetObject on the object and s3:ListBucket on its bucket; without s3:ListBucket S3 "
+    "answers 403 instead of 404 for an absent object"
+)
+NEEDS_VERSION_READ: Final = "s3:GetObjectVersion on the raw communications.json"
+NEEDS_CLAIM: Final = "s3:PutObject and s3:DeleteObject on the raw workflow.json"
+NEEDS_REMOVE: Final = (
+    "s3:ListBucket on the raw bucket and s3:DeleteObject on the checkpoints and processed record"
+)
 
 ACTION_REQUEUE: Final = "requeue"
 ACTION_REDISCOVER: Final = "rediscover"
@@ -196,7 +228,9 @@ Safety:
   shown in the preview, or accepts it through --confirm for non-interactive use. The token covers
   the exact records and versions previewed, so a changed record set needs a fresh preview.
   Credentials must belong to the deployment's managementAccountId, and every target comes from the
-  CaseInsightsCoreStack-<uniqueId> outputs in the configuration's Region.
+  CaseInsightsCoreStack-<uniqueId> outputs in the configuration's Region. Each case is changed only
+  under a conditional reset claim on its workflow.json, so two reprocesses of the same scope never
+  change a case at the same time: the second skips every case the first has claimed or queued.
 
 Versioned objects and execution identity:
   The processed record and stage checkpoints are removed with plain deletes (S3 delete markers).
@@ -204,6 +238,11 @@ Versioned objects and execution identity:
   preview and report print the previous processed version ID, restorable until the bucket's
   noncurrent-version expiry. Requeued cases use a fresh run ID and redrive ID, so the Workflow
   Starter starts attempt 1 of a new run and never reuses a closed execution name.
+
+Permissions:
+  Besides object reads, reprocessing needs s3:ListBucket on the raw bucket (without it S3 answers
+  403 instead of 404 for absent objects) and s3:GetObjectVersion on the raw communications.json.
+  A permission error is reported as such and the case is left unchanged; see docs/runbook.md.
 
 Exit status: 0 done or nothing to do, 1 some cases failed, 2 invalid options or target,
 3 cancelled or not confirmed.
@@ -617,30 +656,58 @@ def _error_code(exc: Exception) -> str:
     return type(exc).__name__
 
 
+def _is_access_denied(exc: Exception) -> bool:
+    if not isinstance(exc, ClientError):
+        return False
+    status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    return status == HTTP_FORBIDDEN or _error_code(exc) in ACCESS_DENIED_CODES
+
+
+def _describe(exc: Exception, needs: str) -> str:
+    """The error code; for a 403 also that it is a permission error and what it probably lacks."""
+    code = _error_code(exc)
+    if _is_access_denied(exc):
+        return f"permission denied ({code}; check {needs}, see docs/runbook.md)"
+    return code
+
+
+@dataclass(frozen=True, slots=True)
+class Ownership:
+    """The case's `workflow.json` as checked: the document to put back and the ETag to claim on."""
+
+    owner: OwnershipMarker | ResetClaim | None = None
+    etag: str | None = None
+
+    @property
+    def marker(self) -> OwnershipMarker | None:
+        return self.owner if isinstance(self.owner, OwnershipMarker) else None
+
+
 def active_work(
     candidate: Candidate,
     deployment: Deployment,
     clients: Clients,
     running: set[tuple[str, str]],
     now: datetime,
-) -> tuple[str | None, OwnershipMarker | None]:
-    """Why the case must be left alone (or `None`), and its ownership marker if it has one."""
+) -> tuple[str | None, Ownership]:
+    """Why the case must be left alone (or `None`), and its checked `workflow.json`."""
     if (candidate.account_id, display_component(candidate.display_id)) in running:
-        return "a RUNNING CaseAnalysis execution belongs to the case", None
+        return "a RUNNING CaseAnalysis execution belongs to the case", Ownership()
     try:
         current = read_ownership(
             clients.s3, deployment.raw_bucket, candidate.account_id, candidate.display_id
         )
     except InvalidOwnershipMarkerError:
-        return "the ownership marker is unreadable; status unknown", None
+        return "the ownership marker is unreadable; status unknown", Ownership()
     except (ClientError, S3JsonError) as exc:
-        return f"the ownership marker could not be read ({_error_code(exc)})", None
+        return f"the ownership marker could not be read ({_describe(exc, NEEDS_READ)})", Ownership()
     if current is None:
-        return None, None
-    owner, _ = current
+        return None, Ownership()
+    owner, etag = current
+    ownership = Ownership(owner, etag)
     if isinstance(owner, ResetClaim):
-        return (None if owner.is_stale(now) else "Case Cleanup is resetting the case"), None
-    return _execution_reason(owner, deployment, clients, now), owner
+        return (None if owner.is_stale(now) else RESET_IN_PROGRESS), ownership
+    return _execution_reason(owner, deployment, clients, now), ownership
 
 
 def _execution_reason(
@@ -659,8 +726,8 @@ def _execution_reason(
     return None
 
 
-def _head_version(s3: S3Client, bucket: str, key: str) -> str | None:
-    """Current version ID of `key`, or `None` when it has no current version."""
+def _head(s3: S3Client, bucket: str, key: str) -> tuple[str, str] | None:
+    """Current version ID and ETag of `key`, or `None` when it has no current version."""
     try:
         response = s3.head_object(Bucket=bucket, Key=key)
     except ClientError as exc:
@@ -668,7 +735,13 @@ def _head_version(s3: S3Client, bucket: str, key: str) -> str | None:
         if status == 404 or exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey"}:  # noqa: PLR2004
             return None
         raise
-    return str(response.get("VersionId") or "null")
+    return str(response.get("VersionId") or "null"), str(response.get("ETag", ""))
+
+
+def _head_version(s3: S3Client, bucket: str, key: str) -> str | None:
+    """Current version ID of `key`, or `None` when it has no current version."""
+    current = _head(s3, bucket, key)
+    return None if current is None else current[0]
 
 
 def _communication_count(
@@ -678,7 +751,11 @@ def _communication_count(
     version_id: str,
     marker: OwnershipMarker | None,
 ) -> int | None:
-    """Count of the stored conversation version; never reads or returns message content."""
+    """Count of the stored conversation version; never returns message content.
+
+    An absent, unreadable or inconsistent version yields `None`. Other S3 errors, permission
+    errors in particular, propagate: they say nothing about whether the inputs are usable.
+    """
     if marker is not None:
         ref = marker.case_ref
         if ref.communications_version_id == version_id:
@@ -691,7 +768,7 @@ def _communication_count(
             max_bytes=MAX_CONVERSATION_BYTES,
             version_id=version_id,
         )
-    except (ClientError, S3JsonError):
+    except S3JsonError:
         return None
     count = document.get("communicationCount")
     identity = (document.get("accountId"), document.get("caseId"), document.get("displayId"))
@@ -724,7 +801,7 @@ def assess(
     now: datetime,
 ) -> PlannedCase:
     """Decide how (or whether) one in-range case can be reprocessed. Read-only."""
-    reason, marker = active_work(candidate, deployment, clients, running, now)
+    reason, ownership = active_work(candidate, deployment, clients, running, now)
     if reason is not None:
         return PlannedCase(candidate, ACTION_SKIP, reason)
     prefix = case_record_key(candidate.account_id, candidate.display_id).rsplit("/", 1)[0]
@@ -736,9 +813,20 @@ def assess(
             clients.s3, deployment.raw_bucket, f"{prefix}/{COMMUNICATIONS_FILE}"
         )
     except ClientError as exc:
-        return PlannedCase(candidate, ACTION_SKIP, f"raw inputs unknown ({_error_code(exc)})")
+        return PlannedCase(
+            candidate, ACTION_SKIP, f"raw inputs unknown ({_describe(exc, NEEDS_READ)})"
+        )
     if raw_version is not None and comms_version is not None:
-        count = _communication_count(clients.s3, deployment, candidate, comms_version, marker)
+        try:
+            count = _communication_count(
+                clients.s3, deployment, candidate, comms_version, ownership.marker
+            )
+        except ClientError as exc:
+            return PlannedCase(
+                candidate,
+                ACTION_SKIP,
+                f"raw conversation unknown ({_describe(exc, NEEDS_VERSION_READ)}); record kept",
+            )
         if count is not None:
             return PlannedCase(
                 candidate,
@@ -848,23 +936,89 @@ class Executor:
             DelaySeconds=delay,
         )
 
-    def _recheck(self, planned: PlannedCase) -> str | None:
-        """Why the case can no longer be changed as previewed, or `None`."""
+    def _recheck(self, planned: PlannedCase) -> tuple[str | None, Ownership]:
+        """Why the case can no longer be changed as previewed (or `None`), and its ownership."""
+        candidate = planned.candidate
+        current = _head_version(self.clients.s3, self.deployment.processed_bucket, candidate.key)
+        if current != candidate.version_id:
+            return "the processed record changed since the preview; record kept", Ownership()
+        return active_work(candidate, self.deployment, self.clients, self.running, self.now())
+
+    def _recheck_claimed(self, planned: PlannedCase, ownership: Ownership) -> str | None:
+        """The checks repeated once the claim is held: the record and the previous owner."""
         candidate = planned.candidate
         current = _head_version(self.clients.s3, self.deployment.processed_bucket, candidate.key)
         if current != candidate.version_id:
             return "the processed record changed since the preview; record kept"
-        reason, _ = active_work(candidate, self.deployment, self.clients, self.running, self.now())
-        return reason
+        if ownership.marker is None:
+            return None
+        return _execution_reason(ownership.marker, self.deployment, self.clients, self.now())
 
-    def _remove_checkpoints(self, candidate: Candidate) -> int:
-        removed = 0
+    def _claim(self, candidate: Candidate, ownership: Ownership) -> str | None:
+        """Replace exactly the checked `workflow.json` (or its absence) with a reset claim.
+
+        Returns the claim's ETag, or `None` when a starter, Case Cleanup or another reprocess
+        changed the case's ownership since the check.
+        """
+        claim = ResetClaim(candidate.account_id, candidate.display_id, self.now())
+        try:
+            written = write_json(
+                self.clients.s3,
+                self.deployment.raw_bucket,
+                claim.key,
+                claim.to_document(),
+                if_none_match=ownership.etag is None,
+                if_match=ownership.etag,
+                max_bytes=MAX_MARKER_BYTES,
+            )
+        except S3PreconditionFailedError:
+            return None
+        except ClientError as exc:
+            if is_not_found_error(exc):
+                return None
+            raise
+        return written.etag
+
+    def _release(self, candidate: Candidate, ownership: Ownership, claim_etag: str) -> str | None:
+        """Put the checked `workflow.json` back in place of the claim; why that failed, if it did.
+
+        Restoring the previous owner, rather than leaving the key empty, lets the starter and
+        Case Cleanup reconcile it exactly as before (a closed failed attempt keeps its pending
+        failure record, for example).
+        """
+        s3, bucket = self.clients.s3, self.deployment.raw_bucket
+        key = marker_key(candidate.account_id, candidate.display_id)
+        try:
+            if ownership.owner is None:
+                delete_if_unchanged(s3, bucket, key, claim_etag)
+            else:
+                write_json(
+                    s3,
+                    bucket,
+                    key,
+                    ownership.owner.to_document(),
+                    if_match=claim_etag,
+                    max_bytes=MAX_MARKER_BYTES,
+                )
+        except S3PreconditionFailedError:
+            return None  # the claim was already taken over; nothing of ours is left to release
+        except (ClientError, BotoCoreError) as exc:
+            if is_not_found_error(exc):
+                return None
+            return _describe(exc, NEEDS_CLAIM)
+        return None
+
+    def _remove_checkpoints(self, candidate: Candidate) -> bool:
+        """Delete the current checkpoints, each only while unchanged; False if one changed."""
+        s3, bucket = self.clients.s3, self.deployment.raw_bucket
         for stage in STAGES:
             key = checkpoint_key(candidate.account_id, candidate.display_id, stage)
-            if _head_version(self.clients.s3, self.deployment.raw_bucket, key) is not None:
-                self.clients.s3.delete_object(Bucket=self.deployment.raw_bucket, Key=key)
-                removed += 1
-        return removed
+            current = _head(s3, bucket, key)
+            if current is None:
+                continue
+            if not delete_if_unchanged(s3, bucket, key, current[1]) and _head(s3, bucket, key):
+                return False
+        return True
 
     def apply(self, planned: PlannedCase) -> Outcome:
         try:
@@ -873,13 +1027,56 @@ class Executor:
             return Outcome(planned, "failed", f"{_error_code(exc)}; see the detail above")
 
     def _apply(self, planned: PlannedCase) -> Outcome:
+        candidate = planned.candidate
         try:
-            reason = self._recheck(planned)
+            reason, ownership = self._recheck(planned)
         except ClientError as exc:
-            return Outcome(planned, "failed", f"status check failed ({_error_code(exc)}); kept")
+            return Outcome(
+                planned, "failed", f"status check failed ({_describe(exc, NEEDS_READ)}); kept"
+            )
+        if reason is not None:
+            return Outcome(planned, "skipped", reason)
+        try:
+            claim_etag = self._claim(candidate, ownership)
+        except (ClientError, BotoCoreError) as exc:
+            return Outcome(
+                planned,
+                "failed",
+                f"the reprocess claim was not written ({_describe(exc, NEEDS_CLAIM)}); "
+                "nothing changed",
+            )
+        if claim_etag is None:
+            return Outcome(
+                planned,
+                "skipped",
+                "the case's ownership changed since the check (a starter, Case Cleanup or "
+                "another reprocess); record kept",
+            )
+        try:
+            outcome = self._apply_claimed(planned, ownership)
+        except (ClientError, BotoCoreError, S3JsonError) as exc:
+            outcome = Outcome(planned, "failed", f"{_error_code(exc)}; see the detail above")
+        release_error = self._release(candidate, ownership, claim_etag)
+        if release_error is not None:
+            outcome.status = "failed"
+            outcome.detail += (
+                f"; the reprocess claim on workflow.json was not released ({release_error}), so "
+                "the Workflow Starter waits until it is an hour old"
+            )
+        return outcome
+
+    def _apply_claimed(self, planned: PlannedCase, ownership: Ownership) -> Outcome:
+        try:
+            reason = self._recheck_claimed(planned, ownership)
+        except ClientError as exc:
+            return Outcome(
+                planned, "failed", f"status check failed ({_describe(exc, NEEDS_READ)}); kept"
+            )
         if reason is not None:
             return Outcome(planned, "skipped", reason)
         messages: list[dict[str, Any]] = []
+        # SQS can accept the message, and start its delay, long before the response arrives.
+        send_started = monotonic()
         if planned.action == ACTION_REQUEUE:
             message = summary_message(planned, self.ids, self.ids.redrive_id)
             try:
@@ -891,52 +1088,61 @@ class Executor:
                     f"summary reference not sent ({_error_code(exc)}); nothing changed",
                 )
             messages.append(message)
-        return self._remove(planned, messages, monotonic())
+        return self._remove(planned, messages, send_started)
 
     def _remove(
-        self, planned: PlannedCase, messages: list[dict[str, Any]], sent_at: float
+        self, planned: PlannedCase, messages: list[dict[str, Any]], send_started: float
     ) -> Outcome:
-        candidate = planned.candidate
         try:
-            self._remove_checkpoints(candidate)
-            removed = delete_if_unchanged(
-                self.clients.s3, self.deployment.processed_bucket, candidate.key, candidate.etag
-            )
+            reason = self._delete_case(planned.candidate)
         except (ClientError, BotoCoreError) as exc:
             return Outcome(
                 planned,
                 "failed",
-                f"removal failed ({_error_code(exc)}); the processed record was kept and any "
-                "queued reference is answered as already processed",
+                f"removal failed ({_describe(exc, NEEDS_REMOVE)}); the processed record was kept "
+                "and any queued reference is answered as already processed",
                 messages,
             )
-        if not removed:
-            return Outcome(
-                planned,
-                "skipped",
-                "the processed record changed during reprocessing; record kept",
-                messages,
-            )
+        if reason is not None:
+            return Outcome(planned, "skipped", reason, messages)
         if planned.action == ACTION_REDISCOVER:
             return Outcome(
                 planned, "rediscover", "record removed; the next scheduled run collects the case"
             )
-        if monotonic() - sent_at >= self.delay_seconds - FOLLOW_UP_MARGIN_SECONDS:
+        if monotonic() - send_started >= self.delay_seconds - FOLLOW_UP_MARGIN_SECONDS:
             # The first reference may have arrived before the record was removed.
-            follow_up = summary_message(planned, self.ids, f"{self.ids.redrive_id}-f")
-            try:
-                self._send(follow_up, 0)
-            except (ClientError, BotoCoreError) as exc:
-                return Outcome(
-                    planned,
-                    "failed",
-                    f"record removed but the follow-up reference was not sent "
-                    f"({_error_code(exc)}); send this message to the summary queue: "
-                    f"{json.dumps(follow_up, sort_keys=True)}",
-                    messages,
-                )
-            messages.append(follow_up)
+            return self._follow_up(planned, messages)
         return Outcome(planned, "requeued", "record removed; new execution queued", messages)
+
+    def _delete_case(self, candidate: Candidate) -> str | None:
+        """Remove the checkpoints, then the processed record; the reason when either changed."""
+        s3, processed = self.clients.s3, self.deployment.processed_bucket
+        # Checked again right before the first delete, so a record rewritten in the meantime
+        # keeps the checkpoints it was made from.
+        if _head_version(s3, processed, candidate.key) != candidate.version_id:
+            return RECORD_CHANGED
+        if not self._remove_checkpoints(candidate):
+            return "a stage checkpoint changed during reprocessing; record kept"
+        if not delete_if_unchanged(s3, processed, candidate.key, candidate.etag):
+            return RECORD_CHANGED
+        return None
+
+    def _follow_up(self, planned: PlannedCase, messages: list[dict[str, Any]]) -> Outcome:
+        follow_up = summary_message(planned, self.ids, f"{self.ids.redrive_id}-f")
+        try:
+            self._send(follow_up, 0)
+        except (ClientError, BotoCoreError) as exc:
+            return Outcome(
+                planned,
+                "failed",
+                f"record removed but the follow-up reference was not sent "
+                f"({_error_code(exc)}); send this message to the summary queue: "
+                f"{json.dumps(follow_up, sort_keys=True)}",
+                messages,
+            )
+        return Outcome(
+            planned, "requeued", "record removed; new execution queued", [*messages, follow_up]
+        )
 
 
 # --- output ------------------------------------------------------------------------------------

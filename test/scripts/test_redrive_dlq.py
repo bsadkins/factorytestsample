@@ -103,6 +103,13 @@ elif (service, operation) == ("sqs", "list-message-move-tasks"):
     reply = {{"Results": tasks[: int(options["max-results"][0])]}}
 elif (service, operation) == ("sqs", "start-message-move-task"):
     open(os.environ["FAKE_AWS_STATE"] + ".started", "w").close()
+    # SQS accepted the task, but the caller never sees a usable acknowledgement.
+    if state.get("start_outcome") == "lost":
+        sys.stderr.write('\\nRead timeout on endpoint URL: "https://sqs.example.invalid/"\\n')
+        sys.exit(255)
+    if state.get("start_outcome") == "garbled":
+        print("<html>gateway error</html>")
+        sys.exit(0)
     reply = {{"TaskHandle": "synthetic-task-handle-0001"}}
 else:
     fail("UnsupportedOperation")
@@ -648,6 +655,50 @@ def test_a_refused_start_is_reported_as_nothing_moved(harness: Harness) -> None:
     assert result.code == 1
     assert "the move task was not started (AccessDenied). No messages were moved." in result.err
     assert "Started move task" not in result.out
+
+
+@pytest.mark.parametrize(
+    ("state", "detail"),
+    [
+        ({"start_outcome": "lost"}, "AWS CLI error"),
+        ({"start_outcome": "garbled"}, "no task handle in the response"),
+        ({"failures": {"sqs start-message-move-task": "InternalError"}}, "InternalError"),
+        (
+            {
+                "failures": {
+                    "sqs start-message-move-task": "AWS.SimpleQueueService.UnsupportedOperation"
+                }
+            },
+            "AWS.SimpleQueueService.UnsupportedOperation",
+        ),
+    ],
+    ids=["lost-acknowledgement", "unparseable-response", "server-error", "retry-rejected"],
+)
+def test_an_unconfirmed_start_is_reported_as_unknown_not_as_nothing_moved(
+    harness: Harness, state: dict[str, Any], detail: str
+) -> None:
+    token = harness.token(*TARGET)
+    harness.state.update(state)
+
+    result = harness.run(*TARGET, "--confirm", token)
+
+    assert result.code == 1
+    output = result.out + result.err
+    assert f"the move task start is UNKNOWN ({detail})" in result.err
+    assert "No messages were moved" not in output
+    assert "Started move task" not in result.out
+    assert "inspect the dead-letter queue and its move tasks before retrying" in result.err
+    dlq = f"CaseInsights-CaseSummary-{UNIQUE}-DLQ"
+    assert (
+        f"Progress: aws sqs list-message-move-tasks --source-arn {queue_arn(dlq)} --region {REGION}"
+        in result.out
+    )
+    dlq_url = f"https://sqs.{REGION}.amazonaws.com/{ACCOUNT}/{dlq}"
+    assert (
+        f"DLQ depth: aws sqs get-queue-attributes --queue-url {dlq_url} --attribute-names "
+        f"ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible --region {REGION}"
+    ) in result.out
+    assert result.writes() == ["sqs start-message-move-task"]
 
 
 def test_a_started_task_whose_status_cannot_be_read_is_not_reported_as_success(
