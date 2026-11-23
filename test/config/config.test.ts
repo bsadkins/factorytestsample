@@ -325,6 +325,29 @@ describe('schedules', () => {
   });
 
   test.each([
+    {
+      name: 'month selectors prevent a January to February false positive',
+      valid: 'cron(0,59 23,0 1,31 JAN ? *)',
+      invalid: 'cron(0,59 23,0 1,31 JAN,FEB ? *)',
+    },
+    {
+      name: 'year selectors prevent a non-adjacent-year false positive',
+      valid: 'cron(0,59 23,0 1,31 DEC,JAN ? 2028,2030)',
+      invalid: 'cron(0,59 23,0 1,31 DEC,JAN ? 2028,2029)',
+    },
+    {
+      name: 'leap years separate February 28 from March 1',
+      valid: 'cron(0,59 23,0 1,28 FEB,MAR ? 2028)',
+      invalid: 'cron(0,59 23,0 1,28 FEB,MAR ? 2027)',
+    },
+  ])('honours the full UTC calendar: $name', ({ valid, invalid }) => {
+    expect(parseConfig(minimalConfig({ enableAnalytics: true, schedules: { crawler: valid } })).schedules.crawler).toBe(valid);
+    expect(issuesFor(minimalConfig({ enableAnalytics: true, schedules: { crawler: invalid } }))).toEqual([
+      `/schedules/crawler runs 1 minute apart (23:59 and 00:00 UTC the next day); ${glueMinimum}`,
+    ]);
+  });
+
+  test.each([
     'cron(0/5 * * * ? *)',
     'cron(*/5 * * * ? *)',
     'cron(0/15 * * * ? *)',

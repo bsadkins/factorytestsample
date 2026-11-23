@@ -1,33 +1,46 @@
-import { DAY_OF_MONTH, DAY_OF_WEEK, HOURS, MINUTES, expandList } from './cron';
+import { DAY_OF_MONTH, DAY_OF_WEEK, HOURS, MINUTES, MONTH, YEAR, expandList } from './cron';
 
 /** AWS Glue rejects crawler schedules that run more often than this. */
 export const GLUE_CRAWLER_MINIMUM_MINUTES = 5;
 
-/** Shortest month length; a day at or past it can be the last day of some month. */
-const SHORTEST_MONTH_DAYS = 28;
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 
 function clock(hour: number, minute: number): string {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
 /**
- * Whether two consecutive calendar days can both be selected. Day-of-month L, LW and nW and
- * day-of-week nL and n#k pick at most one day a month, and day-of-week L picks only Saturdays. Any
- * selected day of month from the 28th with the 1st counts as consecutive, whatever the month field.
+ * Whether the full calendar selects two consecutive UTC days. Day-of-month L, LW and nW and
+ * day-of-week nL and n#k pick at most one day a month, and day-of-week L picks only Saturdays, so
+ * none can select adjacent dates. The other forms are enumerated over the supported year range,
+ * which makes month lengths, leap years and month/year filters part of the adjacency decision.
  */
-function selectsConsecutiveDays(dayOfMonth: string, dayOfWeek: string): boolean {
-  if (dayOfMonth !== '?') {
-    if (/[LW]/.test(dayOfMonth)) {
-      return false;
-    }
-    const days = new Set(expandList(DAY_OF_MONTH, dayOfMonth));
-    return [...days].some((day) => days.has(day + 1) || (day >= SHORTEST_MONTH_DAYS && days.has(DAY_OF_MONTH.min)));
-  }
-  if (/[L#]/.test(dayOfWeek)) {
+function selectsConsecutiveDays(dayOfMonth: string, month: string, dayOfWeek: string, year: string): boolean {
+  if ((dayOfMonth !== '?' && /[LW]/.test(dayOfMonth)) || (dayOfMonth === '?' && /[L#]/.test(dayOfWeek))) {
     return false;
   }
-  const weekdays = new Set(expandList(DAY_OF_WEEK, dayOfWeek));
-  return [...weekdays].some((day) => weekdays.has((day % DAY_OF_WEEK.max) + 1));
+  const months = expandList(MONTH, month);
+  const years = expandList(YEAR, year);
+  const days = new Set(dayOfMonth === '?' ? [] : expandList(DAY_OF_MONTH, dayOfMonth));
+  const weekdays = new Set(dayOfMonth === '?' ? expandList(DAY_OF_WEEK, dayOfWeek) : []);
+  let previousDay: number | undefined;
+
+  for (const selectedYear of years) {
+    for (const selectedMonth of months) {
+      const monthLength = new Date(Date.UTC(selectedYear, selectedMonth, 0)).getUTCDate();
+      for (let day = 1; day <= monthLength; day += 1) {
+        const timestamp = Date.UTC(selectedYear, selectedMonth - 1, day);
+        const selected = dayOfMonth === '?' ? weekdays.has(new Date(timestamp).getUTCDay() + 1) : days.has(day);
+        if (selected && previousDay !== undefined && timestamp - previousDay === MILLISECONDS_PER_DAY) {
+          return true;
+        }
+        if (selected) {
+          previousDay = timestamp;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -36,7 +49,9 @@ function selectsConsecutiveDays(dayOfMonth: string, dayOfWeek: string): boolean 
  * this applies only to crawler schedules. Reports the earliest pair of runs under the minimum.
  */
 export function glueCrawlerCadenceIssues(expression: string): string[] {
-  const [minuteField = '', hourField = '', dayOfMonth = '', , dayOfWeek = ''] = expression.slice('cron('.length, -1).split(' ');
+  const [minuteField = '', hourField = '', dayOfMonth = '', month = '', dayOfWeek = '', year = ''] = expression
+    .slice('cron('.length, -1)
+    .split(' ');
   const minutes = expandList(MINUTES, minuteField);
   const hours = expandList(HOURS, hourField);
   const first = minutes[0] ?? MINUTES.min;
@@ -63,7 +78,7 @@ export function glueCrawlerCadenceIssues(expression: string): string[] {
   if (nextHour !== undefined) {
     return issue(acrossHours, clock(nextHour, last), `${clock(nextHour + 1, first)} UTC`);
   }
-  if (latestHour === HOURS.max && earliestHour === HOURS.min && selectsConsecutiveDays(dayOfMonth, dayOfWeek)) {
+  if (latestHour === HOURS.max && earliestHour === HOURS.min && selectsConsecutiveDays(dayOfMonth, month, dayOfWeek, year)) {
     return issue(acrossHours, clock(latestHour, last), `${clock(earliestHour, first)} UTC the next day`);
   }
   return [];

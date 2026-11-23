@@ -16,9 +16,9 @@ const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
 export const MINUTES: CronField = { name: 'minutes', min: 0, max: 59 };
 export const HOURS: CronField = { name: 'hours', min: 0, max: 23 };
 export const DAY_OF_MONTH: CronField = { name: 'day-of-month', min: 1, max: 31 };
-const MONTH: CronField = { name: 'month', min: 1, max: 12, names: MONTHS };
+export const MONTH: CronField = { name: 'month', min: 1, max: 12, names: MONTHS };
 export const DAY_OF_WEEK: CronField = { name: 'day-of-week', min: 1, max: 7, names: WEEKDAYS };
-const YEAR: CronField = { name: 'year', min: 1970, max: 2199 };
+export const YEAR: CronField = { name: 'year', min: 1970, max: 2199 };
 
 /** Maximum occurrence N in day-of-week "D#N" (the Nth weekday D of the month). */
 const MAX_WEEKDAY_OCCURRENCE = 5;
