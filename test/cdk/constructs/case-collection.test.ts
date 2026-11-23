@@ -13,6 +13,7 @@ import {
   TERMINAL_MARKER_PATTERN,
 } from '../../../lib';
 import { acknowledgedRules, asArray, iamPolicyStatements, nagApp, synthError, testApp, testConfig } from '../../helpers/cdk';
+import { FIXTURE_CONFIG_DIR } from '../../config/helpers';
 
 function coreTemplate(overrides: Parameters<typeof testConfig>[0] = {}): { core: CaseInsightsCoreStack; template: Template } {
   const config = testConfig(overrides);
@@ -207,7 +208,7 @@ describe('CaseCollection', () => {
 
   test('passes cdk-nag with specific acknowledgements only', () => {
     const app = nagApp();
-    const { core } = addCaseInsightsStacks(app, { env: 'dev' });
+    const { core } = addCaseInsightsStacks(app, { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
     expect(synthError(app)).toBeUndefined();
     const rawFinding = `AwsSolutions-IAM5[Resource::<${logicalId(core, core.storage.rawBucket)}.Arn>/account_number=*]`;
     const acknowledged = acknowledgedRules(core.caseCollection).map(({ path, id }) => [

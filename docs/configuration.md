@@ -109,7 +109,7 @@ Read [Shared API Gateway logging prerequisite](mcp-server-deployment.md#shared-a
 
 ## schedules
 
-Each value is a six-field AWS cron expression, `cron(minutes hours day-of-month month day-of-week year)`, evaluated in UTC. The schema accepts only `cron(...)`, not `rate(...)`, and one of day-of-month or day-of-week must be `?`.
+Each value is a six-field AWS cron expression, `cron(minutes hours day-of-month month day-of-week year)`, evaluated in UTC. The schema accepts only `cron(...)`, not `rate(...)`, and one of day-of-month or day-of-week must be `?`. Each field must hold values EventBridge Scheduler and AWS Glue accept: minutes 0-59, hours 0-23, day-of-month 1-31 (or `L`, `LW`, `<day>W`), month 1-12 or `JAN`-`DEC`, day-of-week 1-7 or `SUN`-`SAT` (or `L`, `<day>L`, `<day>#<1-5>`) and year 1970-2199, as single values, comma-separated lists, ranges (`MON-FRI`) or increments (`0/15`, `*/5`).
 
 | Field | Default | Runs | Effect |
 | --- | --- | --- | --- |
@@ -184,6 +184,7 @@ These rules are checked after schema validation. Every message below was produce
 | Rule | Example message |
 | --- | --- |
 | Each cron schedule uses `?` in exactly one of day-of-month and day-of-week | `/schedules/accountLookup must use "?" in exactly one of day-of-month or day-of-week` |
+| Each cron field is in range for its position | `/schedules/accountLookup minutes field "99" is invalid: expected 0-59, got "99"` |
 | `operations.queues.visibilityTimeoutSeconds`, when set, is at least 6 x `consumerTimeoutSeconds` | `/operations/queues/visibilityTimeoutSeconds (600) must be at least 6 x consumerTimeoutSeconds (1800)` |
 | `operations.cleanup.graceHours` x 60 exceeds `workflow.executionTimeoutMinutes` | `/operations/cleanup/graceHours (1h) must exceed workflow.executionTimeoutMinutes (60min) so cleanup never targets running work` |
 | `rawRetentionDays` x 24 exceeds `operations.cleanup.graceHours` | `/rawRetentionDays (7d) must exceed operations.cleanup.graceHours (200h) so raw inputs do not expire before cleanup can reconcile them` |
@@ -232,8 +233,8 @@ cp config/example.json config/prod.json
 | `pipelineName` | `^[A-Za-z0-9.@_-]{1,100}$` | `CaseInsights-Pipeline` |
 | `account` | Required. 12 digits | None |
 | `region` | Required. Region pattern | None |
-| `connectionArn` | Required. CodeConnections or CodeStar Connections connection ARN | None |
-| `repository` | GitHub `owner/repository` | `bsadkins/factorytestsample` |
+| `connectionArn` | Required. CodeConnections or CodeStar Connections connection ARN in `account` and `region` | None |
+| `repository` | Only `bsadkins/factorytestsample` | `bsadkins/factorytestsample` |
 | `branch` | Only `main` | `main` |
 
 The pipeline app also loads `config/dev.json` and `config/prod.json` and stops with these errors when they cannot be deployed side by side:
@@ -241,6 +242,8 @@ The pipeline app also loads `config/dev.json` and `config/prod.json` and stops w
 | Rule | Message |
 | --- | --- |
 | Connection in the pipeline account | `/connectionArn is in account <account> but the pipeline account is <account>` |
+| Connection in the pipeline Region | `/connectionArn is in Region <region> but the pipeline Region is <region>; CodePipeline source actions cannot use a connection in another Region` |
+| Connection in the partition of the pipeline Region | `/connectionArn is in partition <partition> but the pipeline Region <region> is in partition <partition>` |
 | Environment names | `dev stage configuration declares environment "<name>"`, `prod stage configuration declares environment "<name>"` |
 | Distinct namespaces | `dev and prod must use different uniqueId values (both are "<uniqueId>")` |
 | Same organisation | `dev orgId <id> differs from prod orgId <id>` |

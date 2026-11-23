@@ -8,6 +8,7 @@ import {
 } from '../../../lib';
 import { normaliseAssetHashes } from '../../helpers/assets';
 import { asArray, iamPolicyStatements, testApp } from '../../helpers/cdk';
+import { FIXTURE_CONFIG_DIR } from '../../config/helpers';
 
 interface MemberTemplate {
   Resources: Record<string, { Type: string; Properties: Record<string, unknown> }>;
@@ -36,7 +37,7 @@ describe.each(['dev', 'prod'] as const)('%s member-role StackSet', (env) => {
   let member: MemberTemplate;
 
   beforeAll(() => {
-    stacks = addCaseInsightsStacks(testApp(), { env });
+    stacks = addCaseInsightsStacks(testApp(), { env, configDir: FIXTURE_CONFIG_DIR });
     properties = stackSetProperties(stacks);
     member = JSON.parse(properties.TemplateBody) as MemberTemplate;
   });

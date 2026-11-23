@@ -28,6 +28,7 @@ import {
   testConfig,
   trustStatements,
 } from '../../helpers/cdk';
+import { FIXTURE_CONFIG_DIR } from '../../config/helpers';
 
 function coreStack(overrides: Parameters<typeof testConfig>[0] = {}): CaseInsightsCoreStack {
   const config = testConfig(overrides);
@@ -168,7 +169,7 @@ describe('CaseAnalysis', () => {
 
   test('the stage function packages its dispatcher and the three stage handlers as top-level packages', () => {
     const app = testApp();
-    const { core } = addCaseInsightsStacks(app, { env: 'dev' });
+    const { core } = addCaseInsightsStacks(app, { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
     const assembly = app.synth();
     const template = Template.fromStack(core);
     const fn = template.findResources('AWS::Lambda::Function', { Properties: { Handler: 'analysis_stages.app.handler' } });
@@ -359,7 +360,7 @@ describe('CaseAnalysis', () => {
 
   test('passes cdk-nag with specific acknowledgements only', () => {
     const app = nagApp();
-    const { core } = addCaseInsightsStacks(app, { env: 'dev' });
+    const { core } = addCaseInsightsStacks(app, { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
     expect(synthError(app)).toBeUndefined();
     const names = resourceNames(core.config);
     const rawId = logicalId(core, core.storage.rawBucket);

@@ -25,6 +25,7 @@ import {
   testConfig,
   trustStatements,
 } from '../../helpers/cdk';
+import { FIXTURE_CONFIG_DIR } from '../../config/helpers';
 
 function coreTemplate(overrides: Parameters<typeof testConfig>[0] = {}): { core: CaseInsightsCoreStack; template: Template } {
   const config = testConfig(overrides);
@@ -206,7 +207,7 @@ describe('Observability', () => {
   });
 
   test.each(['dev', 'prod'] as const)('%s: only CloudWatch alarms of this deployment may publish to the alarm topic, always over TLS', (env) => {
-    const { core } = addCaseInsightsStacks(testApp(), { env });
+    const { core } = addCaseInsightsStacks(testApp(), { env, configDir: FIXTURE_CONFIG_DIR });
     const template = Template.fromStack(core);
     const { region, managementAccountId } = core.config;
     const prefix = resourceNames(core.config).alarmPrefix;
@@ -249,7 +250,7 @@ describe('Observability', () => {
   test('without alarmEmail the topic has no subscription; prod always subscribes its required address', () => {
     const { template } = coreTemplate();
     template.resourceCountIs('AWS::SNS::Subscription', 0);
-    const { core } = addCaseInsightsStacks(testApp(), { env: 'prod' });
+    const { core } = addCaseInsightsStacks(testApp(), { env: 'prod', configDir: FIXTURE_CONFIG_DIR });
     expect(core.config.alarmEmail).toBeDefined();
     Template.fromStack(core).hasResourceProperties('AWS::SNS::Subscription', { Protocol: 'email', Endpoint: core.config.alarmEmail });
   });
@@ -480,7 +481,7 @@ describe('Observability', () => {
 
   test('passes cdk-nag with specific acknowledgements only', () => {
     const app = nagApp();
-    const { core } = addCaseInsightsStacks(app, { env: 'dev' });
+    const { core } = addCaseInsightsStacks(app, { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
     expect(synthError(app)).toBeUndefined();
     const names = resourceNames(core.config);
     const rawFinding = (pattern: string): string => `AwsSolutions-IAM5[Resource::<${logicalId(core, core.storage.rawBucket)}.Arn>/${pattern}]`;
@@ -508,7 +509,7 @@ describe('Observability', () => {
 
   test('the alarm topic encryption acknowledgement states the operational metadata notifications carry', () => {
     const app = nagApp();
-    const { core } = addCaseInsightsStacks(app, { env: 'dev' });
+    const { core } = addCaseInsightsStacks(app, { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
     const sns2 = acknowledgedRules(core).filter(({ id }) => id.endsWith('AwsSolutions-SNS2'));
     expect(sns2.map(({ path: constructPath }) => constructPath)).toEqual([core.observability.alarmTopic.node.path]);
     const reason = sns2[0]?.reason ?? '';

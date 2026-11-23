@@ -13,6 +13,8 @@ import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
+# Synthetic configurations for fixed assertions; operators edit the files in config/.
+FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "config"
 
 # library/brief-reference.md, "Original config fields".
 ORIGINAL_FIELDS = {
@@ -38,9 +40,13 @@ HAIKU = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 SONNET = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
 
 
-def load(name: str) -> dict[str, Any]:
-    data: dict[str, Any] = json.loads((CONFIG_DIR / name).read_text(encoding="utf-8"))
+def load(name: str, directory: Path = CONFIG_DIR) -> dict[str, Any]:
+    data: dict[str, Any] = json.loads((directory / name).read_text(encoding="utf-8"))
     return data
+
+
+def fixture(name: str) -> dict[str, Any]:
+    return load(name, FIXTURE_DIR)
 
 
 def validator(schema_name: str) -> Draft202012Validator:
@@ -58,12 +64,28 @@ def test_committed_configs_are_valid(name: str) -> None:
     assert errors(load(name)) == []
 
 
-def test_pipeline_example_is_valid() -> None:
-    assert list(validator("pipeline.schema.json").iter_errors(load("pipeline.example.json"))) == []
+@pytest.mark.parametrize("name", ["dev.json", "prod.json"])
+def test_fixture_configs_are_valid(name: str) -> None:
+    assert errors(fixture(name)) == []
 
 
-def test_dev_enables_both_optional_stacks() -> None:
-    dev = load("dev.json")
+def test_pipeline_example_and_fixture_are_valid() -> None:
+    pipeline = validator("pipeline.schema.json")
+    assert list(pipeline.iter_errors(load("pipeline.example.json"))) == []
+    assert list(pipeline.iter_errors(fixture("pipeline.json"))) == []
+    if (CONFIG_DIR / "pipeline.json").exists():
+        assert list(pipeline.iter_errors(load("pipeline.json"))) == []
+
+
+def test_pipeline_source_repository_is_fixed() -> None:
+    pipeline = validator("pipeline.schema.json")
+    for repository in ("example-org/factorytestsample", "bsadkins/another-repository"):
+        document = {**fixture("pipeline.json"), "repository": repository}
+        assert list(pipeline.iter_errors(document)) != []
+
+
+def test_dev_fixture_enables_both_optional_stacks() -> None:
+    dev = fixture("dev.json")
     assert dev["environment"] == "dev"
     assert dev["enableAnalytics"] is True
     assert dev["enableMcp"] is True
@@ -89,13 +111,13 @@ def test_schema_defaults_match_the_brief() -> None:
 
 
 def test_prod_requires_alarm_email() -> None:
-    prod = load("prod.json")
+    prod = fixture("prod.json")
     del prod["alarmEmail"]
     assert "'alarmEmail' is a required property" in errors(prod)
 
 
 def test_mcp_requires_analytics() -> None:
-    dev = load("dev.json")
+    dev = fixture("dev.json")
     dev["enableAnalytics"] = False
     assert any("True was expected" in message for message in errors(dev))
 
@@ -112,8 +134,8 @@ def test_mcp_reserved_concurrency_is_fixed_at_20() -> None:
 
 
 def test_shared_api_logging_modes() -> None:
-    dev = load("dev.json")
-    assert dev["apiGatewayLogging"] == load("prod.json")["apiGatewayLogging"]
+    dev = fixture("dev.json")
+    assert dev["apiGatewayLogging"] == fixture("prod.json")["apiGatewayLogging"]
     existing = copy.deepcopy(dev)
     existing["apiGatewayLogging"] = {
         "mode": "existing",
@@ -147,6 +169,6 @@ def test_shared_api_logging_modes() -> None:
     ],
 )
 def test_invalid_values_are_rejected(field: str, value: object) -> None:
-    document = copy.deepcopy(load("dev.json"))
+    document = copy.deepcopy(fixture("dev.json"))
     document[field] = value
     assert errors(document) != []

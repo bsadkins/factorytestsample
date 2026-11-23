@@ -23,8 +23,8 @@ cp config/pipeline.example.json config/pipeline.json
 | --- | --- |
 | `pipelineName` | CodePipeline name (default `CaseInsights-Pipeline`). |
 | `account`, `region` | Management account and Region that host the pipeline and both environments. |
-| `connectionArn` | ARN of an existing CodeConnections (or CodeStar Connections) connection in `account`. |
-| `repository` | GitHub `owner/repository` (`bsadkins/factorytestsample`). |
+| `connectionArn` | ARN of an existing CodeConnections (or CodeStar Connections) connection in `account` and `region`. |
+| `repository` | Must be `bsadkins/factorytestsample` (the default). |
 | `branch` | Must be `main`. |
 
 Unknown fields are rejected, including token fields such as `oauthToken` and approval switches such as `manualApproval`. With `-c pipeline=true` the app also loads `config/dev.json` and `config/prod.json` and checks, before creating any stack, that:
@@ -33,7 +33,9 @@ Unknown fields are rejected, including token fields such as `oauthToken` and app
 - the two files use different `uniqueId` values, so every stack, role (including `Support-Case-Analysis-Role-<uniqueId>` in member accounts), bucket, queue and other physical name differs;
 - both use the same `orgId`, and `managementAccountId` and `region` equal the pipeline `account` and `region` (cross-account and cross-Region stages are not supported);
 - both use the same `apiGatewayLogging` settings;
-- the connection ARN is in the pipeline account.
+- the connection ARN is in the pipeline account and Region, and its partition (for example `aws`, or `aws-cn` for China Regions) is the partition of that Region.
+
+The role CodePipeline assumes for the Source action may call `codestar-connections:UseConnection` and `codeconnections:UseConnection` on exactly this connection ARN; AWS requires both, whichever service prefix the ARN uses.
 
 Any problem stops synthesis with a list of the errors. Because the Build step synthesises from the repository, `config/pipeline.json`, `config/dev.json` and `config/prod.json` must be committed on `main`. They contain account IDs and a connection ARN, not secrets.
 

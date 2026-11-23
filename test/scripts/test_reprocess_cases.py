@@ -1244,5 +1244,7 @@ def test_a_403_while_removing_checkpoints_fails_the_case_as_a_permission_error(e
 def test_output_keys_match_the_core_stack_outputs(script: ModuleType) -> None:
     snapshot_file = REPO_ROOT / "test" / "cdk" / "__snapshots__" / "app.test.ts.snap"
     snapshot = snapshot_file.read_text("utf-8")
+    core_snapshots = snapshot.count("core stack template snapshot 1`] = `")
+    assert core_snapshots == 3  # dev, prod and Core-only
     for key in script.CORE_OUTPUTS.values():
-        assert snapshot.count(f'\n    "{key}": {{\n') == 2, key  # dev and prod snapshots
+        assert snapshot.count(f'\n    "{key}": {{\n') == core_snapshots, key

@@ -239,7 +239,7 @@ QuickSight is not provisioned by the stacks. To build dashboards, create an Athe
 The pipeline deploys dev, then prod after a manual approval, from `main` through an existing AWS CodeConnections connection. Before its first run:
 
 1. Create and authorise the CodeConnections connection, and bootstrap the account, as described in [Before the first deployment](pipeline.md#before-the-first-deployment-not-done-by-this-repository).
-2. Create the pipeline configuration and set `account`, `region`, `connectionArn` and `repository`:
+2. Create the pipeline configuration and set `account`, `region` and `connectionArn` (a connection in that account and Region). `repository` must stay `bsadkins/factorytestsample`:
 
    ```bash
    cp config/pipeline.example.json config/pipeline.json

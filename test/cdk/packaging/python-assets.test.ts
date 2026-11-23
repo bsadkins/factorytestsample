@@ -17,6 +17,7 @@ import {
   TEMPLATES_DIR_ENV,
 } from '../../../lib';
 import { testApp } from '../../helpers/cdk';
+import { FIXTURE_CONFIG_DIR } from '../../config/helpers';
 
 const ENV = { account: '111111111111', region: 'us-east-1' };
 const createdDirs: string[] = [];
@@ -246,7 +247,7 @@ let attached: AttachedAssets | undefined;
 function attachedAssets(): AttachedAssets {
   if (attached === undefined) {
     const app = testApp();
-    const { core } = addCaseInsightsStacks(app, { env: 'dev' });
+    const { core } = addCaseInsightsStacks(app, { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
     const assemblyDir = app.synth().directory;
     const template = Template.fromStack(core);
     const functions = Object.fromEntries(
@@ -479,7 +480,7 @@ describe('attached function assets', () => {
 describe('core stack', () => {
   test('exposes the shared layers', () => {
     const app = new App({ outdir: tempDir('case-insights-core-'), context: { 'aws:cdk:bundling-stacks': [] } });
-    const { core, config } = addCaseInsightsStacks(app, { env: 'dev' });
+    const { core, config } = addCaseInsightsStacks(app, { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
     expect(core.layers).toBeInstanceOf(SharedLayers);
     const template = Template.fromStack(core);
     template.hasResourceProperties('AWS::Lambda::LayerVersion', { LayerName: `case-insights-common-${config.uniqueId}` });

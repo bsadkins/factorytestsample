@@ -21,7 +21,7 @@ import {
   resourceNames,
   SAFE_POWERTOOLS_ENVIRONMENT,
 } from '../../../lib';
-import { type JsonObject, readConfigJson } from '../../config/helpers';
+import { FIXTURE_CONFIG_DIR, type JsonObject, readFixtureJson } from '../../config/helpers';
 import { normaliseAssetHashes } from '../../helpers/assets';
 import { acknowledgedRules, asArray, iamPolicyStatements, type PolicyStatementJson, synthError, tempOutdir, testApp, trustStatements } from '../../helpers/cdk';
 import { ownedTempDir } from '../../helpers/temp-dirs';
@@ -35,15 +35,15 @@ const MCP_OFF = { enableAnalytics: true, enableMcp: false } as const;
 
 function configDirWith(env: Env, overrides: JsonObject): string {
   const dir = tempOutdir();
-  fs.writeFileSync(path.join(dir, `${env}.json`), JSON.stringify({ ...readConfigJson(`${env}.json`), ...overrides }));
+  fs.writeFileSync(path.join(dir, `${env}.json`), JSON.stringify({ ...readFixtureJson(env), ...overrides }));
   return dir;
 }
 
 function stacksFor(env: Env, overrides?: JsonObject, app: App = testApp()): CaseInsightsAppStacks {
-  return addCaseInsightsStacks(app, { env, configDir: overrides === undefined ? undefined : configDirWith(env, overrides) });
+  return addCaseInsightsStacks(app, { env, configDir: overrides === undefined ? FIXTURE_CONFIG_DIR : configDirWith(env, overrides) });
 }
 
-/** The shipped dev configuration, or prod with MCP enabled. */
+/** The dev fixture, or the prod fixture with MCP enabled. */
 function mcpStacks(env: Env, app: App = testApp()): CaseInsightsAppStacks {
   return env === 'dev' ? stacksFor('dev', undefined, app) : stacksFor('prod', PROD_MCP, app);
 }

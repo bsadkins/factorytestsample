@@ -1,6 +1,6 @@
 // Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
 
-exports[`approval-gated pipeline (shipped dev and prod configurations) pipeline stack template snapshot 1`] = `
+exports[`approval-gated pipeline (synthetic fixture configurations) pipeline stack template snapshot 1`] = `
 {
   "Description": "Support Case Insights CDK pipeline: bsadkins/factorytestsample@main -> scidev -> approval -> sciprod",
   "Parameters": {
@@ -1749,7 +1749,10 @@ exports[`approval-gated pipeline (shipped dev and prod configurations) pipeline 
         "PolicyDocument": {
           "Statement": [
             {
-              "Action": "codestar-connections:UseConnection",
+              "Action": [
+                "codeconnections:UseConnection",
+                "codestar-connections:UseConnection",
+              ],
               "Effect": "Allow",
               "Resource": "arn:aws:codeconnections:us-east-1:111111111111:connection/00000000-0000-4000-8000-000000000000",
             },

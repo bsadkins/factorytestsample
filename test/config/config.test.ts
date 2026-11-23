@@ -1,11 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
-  CONFIG_DIR,
   ConfigValidationError,
   HAIKU_4_5_GLOBAL_PROFILE,
   SONNET_4_5_GLOBAL_PROFILE,
-  loadConfigFile,
   loadEnvironmentConfig,
   MCP_RESERVED_CONCURRENCY,
   parseConfig,
@@ -14,7 +12,7 @@ import {
   validateSharedApiLoggingConsistency,
 } from '../../lib';
 import { ownedTempDir } from '../helpers/temp-dirs';
-import { minimalConfig, readConfigJson, type JsonObject } from './helpers';
+import { fixtureEnvironmentConfig, minimalConfig, readConfigJson, readFixtureJson, type JsonObject } from './helpers';
 
 function issuesFor(raw: unknown): readonly string[] {
   try {
@@ -30,27 +28,21 @@ function withOperations(operations: JsonObject, overrides: JsonObject = {}): Jso
   return minimalConfig({ operations, ...overrides });
 }
 
-describe('committed configuration files', () => {
-  test.each(['example.json', 'dev.json', 'prod.json'])('%s is valid', (file) => {
-    expect(() => loadConfigFile(path.join(CONFIG_DIR, file))).not.toThrow();
-  });
-
-  test('dev enables both optional stacks', () => {
-    const dev = loadEnvironmentConfig('dev');
+describe('synthetic fixtures and the committed example', () => {
+  // The fixed CDK assertions and snapshots rely on these combinations, not on the operator files in config/.
+  test('the dev fixture enables both optional stacks', () => {
+    const dev = fixtureEnvironmentConfig('dev');
     expect(dev.environment).toBe('dev');
     expect(dev.enableAnalytics).toBe(true);
     expect(dev.enableMcp).toBe(true);
     expect(dev.mcpAllowedPrincipals.length).toBeGreaterThan(0);
   });
 
-  test('prod declares an alarm email and retains the original defaults', () => {
-    const prod = loadEnvironmentConfig('prod');
+  test('the prod fixture declares an alarm email, enables Analytics only and keeps the original defaults', () => {
+    const prod = fixtureEnvironmentConfig('prod');
     expect(prod.environment).toBe('prod');
     expect(prod.alarmEmail).toMatch(/@example\.com$/);
-    expect(prod.region).toBe('us-east-1');
-    expect(prod.lookbackMonths).toBe(12);
-    expect(prod.bedrockMaxTokens).toBe(1000);
-    expect(prod.logRetentionDays).toBe(90);
+    expect(prod).toMatchObject({ enableAnalytics: true, enableMcp: false, region: 'us-east-1', lookbackMonths: 12, bedrockMaxTokens: 1000, logRetentionDays: 90 });
   });
 
   test('example lists every top-level and operations field explicitly', () => {
@@ -166,6 +158,24 @@ describe('rejected configurations', () => {
     ['cron with two "?"', minimalConfig({ schedules: { crawler: 'cron(0 9 ? * ? *)' } }), /\/schedules\/crawler must use "\?"/],
     ['cron without "?"', minimalConfig({ schedules: { crawler: 'cron(0 9 * * * *)' } }), /\/schedules\/crawler must use "\?"/],
     ['unknown schedule', minimalConfig({ schedules: { hourly: 'cron(0 * * * ? *)' } }), /unsupported property "hourly"/],
+    ['cron minute 99', minimalConfig({ schedules: { accountLookup: 'cron(99 0 * * ? *)' } }), /\/schedules\/accountLookup minutes field "99" is invalid: expected 0-59, got "99"/],
+    ['cron hour 24', minimalConfig({ schedules: { cleanup: 'cron(0 24 * * ? *)' } }), /\/schedules\/cleanup hours field "24" is invalid: expected 0-23, got "24"/],
+    ['cron day-of-month 32', minimalConfig({ schedules: { crawler: 'cron(0 9 32 * ? *)' } }), /\/schedules\/crawler day-of-month field "32" is invalid: expected 1-31, got "32"/],
+    ['cron day-of-month 0', minimalConfig({ schedules: { crawler: 'cron(0 9 0 * ? *)' } }), /day-of-month field "0" is invalid: expected 1-31, got "0"/],
+    ['cron month 13', minimalConfig({ schedules: { crawler: 'cron(0 9 ? 13 MON *)' } }), /month field "13" is invalid: expected 1-12 or JAN-DEC, got "13"/],
+    ['cron unknown month name', minimalConfig({ schedules: { crawler: 'cron(0 9 1 JUNE ? *)' } }), /month field "JUNE" is invalid: expected 1-12 or JAN-DEC, got "JUNE"/],
+    ['cron day-of-week 8', minimalConfig({ schedules: { crawler: 'cron(0 9 ? * 8 *)' } }), /day-of-week field "8" is invalid: expected 1-7 or SUN-SAT, got "8"/],
+    ['cron unknown weekday', minimalConfig({ schedules: { crawler: 'cron(0 9 ? * FUN *)' } }), /day-of-week field "FUN" is invalid: expected 1-7 or SUN-SAT, got "FUN"/],
+    ['cron year before 1970', minimalConfig({ schedules: { crawler: 'cron(0 9 * * ? 1969)' } }), /year field "1969" is invalid: expected 1970-2199, got "1969"/],
+    ['cron range past the maximum', minimalConfig({ schedules: { crawler: 'cron(0 9-25 * * ? *)' } }), /hours field "9-25" is invalid: expected 0-23, got "25"/],
+    ['cron list element past the maximum', minimalConfig({ schedules: { crawler: 'cron(0,60 9 * * ? *)' } }), /minutes field "0,60" is invalid: expected 0-59, got "60"/],
+    ['cron zero increment', minimalConfig({ schedules: { crawler: 'cron(0/0 9 * * ? *)' } }), /minutes field "0\/0" is invalid: expected an increment of 1-60, got "0"/],
+    ['cron empty list element', minimalConfig({ schedules: { crawler: 'cron(0,,5 9 * * ? *)' } }), /minutes field "0,,5" is invalid: expected 0-59, got ""/],
+    ['cron "?" in minutes', minimalConfig({ schedules: { crawler: 'cron(? 9 * * ? *)' } }), /minutes field "\?" is invalid: "\?" is allowed only in day-of-month or day-of-week/],
+    ['cron "L" in hours', minimalConfig({ schedules: { crawler: 'cron(0 L * * ? *)' } }), /hours field "L" is invalid: expected 0-23, got "L"/],
+    ['cron "#" in day-of-month', minimalConfig({ schedules: { crawler: 'cron(0 9 3#2 * ? *)' } }), /day-of-month field "3#2" is invalid/],
+    ['cron sixth weekday of a month', minimalConfig({ schedules: { crawler: 'cron(0 9 ? * 2#6 *)' } }), /day-of-week field "2#6" is invalid: expected an occurrence of 1-5, got "6"/],
+    ['cron weekday-nearest 32', minimalConfig({ schedules: { crawler: 'cron(0 9 32W * ? *)' } }), /day-of-month field "32W" is invalid: expected 1-31, got "32"/],
     ['receive count zero', withOperations({ queues: { maxReceiveCount: 0 } }), /maxReceiveCount must be >= 1/],
     ['consumer timeout above Lambda maximum', withOperations({ functions: { consumerTimeoutSeconds: 901 } }), /must be <= 900/],
     ['starter concurrency below SQS minimum', withOperations({ workflow: { starterMaxConcurrency: 1 } }), /must be >= 2/],
@@ -223,6 +233,16 @@ describe('rejected configurations', () => {
     expect(issuesFor(raw).join('\n')).toMatch(expected);
   });
 
+  test('every out-of-range schedule field is reported', () => {
+    const issues = issuesFor(minimalConfig({ schedules: { accountLookup: 'cron(60 24 * 0 ? 2200)' } }));
+    expect(issues).toEqual([
+      '/schedules/accountLookup minutes field "60" is invalid: expected 0-59, got "60"',
+      '/schedules/accountLookup hours field "24" is invalid: expected 0-23, got "24"',
+      '/schedules/accountLookup month field "0" is invalid: expected 1-12 or JAN-DEC, got "0"',
+      '/schedules/accountLookup year field "2200" is invalid: expected 1970-2199, got "2200"',
+    ]);
+  });
+
   test('prod without an alarm email', () => {
     const issues = issuesFor(minimalConfig({ environment: 'prod' }));
     expect(issues).toContain("(root) must have required property 'alarmEmail'");
@@ -254,6 +274,31 @@ describe('rejected configurations', () => {
 
   test('a non-object document', () => {
     expect(issuesFor(['not', 'an', 'object'])).toEqual(['(root) must be object']);
+  });
+});
+
+describe('schedules', () => {
+  test.each([
+    'cron(0 0 * * ? *)',
+    'cron(0 22 * * ? *)',
+    'cron(0 9 * * ? *)',
+    'cron(0/15 * * * ? *)',
+    'cron(*/5 8-17 ? * MON-FRI *)',
+    'cron(5,35 14 * JAN,JUL ? 2026-2030)',
+    'cron(0 6 ? * 2-6 *)',
+    'cron(10-50/20 0 1-15/7 * ? *)',
+    'cron(30 2 L * ? *)',
+    'cron(0 0 LW * ? *)',
+    'cron(0 0 15W * ? *)',
+    'cron(0 12 ? * 6#3 *)',
+    'cron(0 12 ? * FRI#1 *)',
+    'cron(0 12 ? * 6L *)',
+    'cron(0 12 ? * L *)',
+    'cron(59 23 31 DEC ? 2199)',
+    'cron(0 0 1 1 ? 1970)',
+  ])('accepts %s', (expression) => {
+    const config = parseConfig(minimalConfig({ schedules: { accountLookup: expression, cleanup: expression, crawler: expression } }));
+    expect(config.schedules).toEqual({ accountLookup: expression, cleanup: expression, crawler: expression });
   });
 });
 
@@ -316,7 +361,7 @@ describe('environment selection', () => {
 
   test('rejects a file whose environment does not match the requested one', () => {
     const configDir = ownedTempDir('case-insights-config-');
-    fs.writeFileSync(path.join(configDir, 'prod.json'), JSON.stringify(readConfigJson('dev.json')));
+    fs.writeFileSync(path.join(configDir, 'prod.json'), JSON.stringify(readFixtureJson('dev')));
     expect(() => loadEnvironmentConfig('prod', { configDir })).toThrow(/\/environment is "dev" but the file was loaded for -c env=prod/);
   });
 

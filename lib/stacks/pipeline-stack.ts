@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
 import { BuildSpec, Cache, CfnProject, ComputeType, LinuxBuildImage, LocalCacheMode } from 'aws-cdk-lib/aws-codebuild';
-import { CfnPolicy } from 'aws-cdk-lib/aws-iam';
+import { CfnPolicy, PolicyStatement, Role } from 'aws-cdk-lib/aws-iam';
 import { ExecutionMode, PipelineType } from 'aws-cdk-lib/aws-codepipeline';
 import { BlockPublicAccess, Bucket, BucketEncryption, ObjectOwnership } from 'aws-cdk-lib/aws-s3';
 import { CodePipeline, CodePipelineSource, ManualApprovalStep, ShellStep } from 'aws-cdk-lib/pipelines';
@@ -178,7 +178,29 @@ export class CaseInsightsPipelineStack extends Stack {
     this.pipeline.addStage(this.prodStage, { pre: [this.approval] });
 
     this.pipeline.buildPipeline();
+    this.grantSourceConnection(settings.connectionArn);
     this.acknowledgeGeneratedFindings();
+  }
+
+  /**
+   * The CodeStarSourceConnection action needs both codestar-connections:UseConnection and
+   * codeconnections:UseConnection on the connection, whichever service prefix its ARN uses; CDK
+   * Pipelines grants only the legacy action to the role CodePipeline assumes for the Source action.
+   */
+  private grantSourceConnection(connectionArn: string): void {
+    const roles = this.pipeline.pipeline.node
+      .findAll()
+      .filter((construct): construct is Role => construct instanceof Role && construct.node.path.includes('/Pipeline/Source/'));
+    const [role] = roles;
+    if (role === undefined || roles.length !== 1) {
+      throw new Error(`expected exactly one CDK Pipelines Source action role, found ${String(roles.length)}`);
+    }
+    role.addToPrincipalPolicy(
+      new PolicyStatement({
+        actions: ['codestar-connections:UseConnection', 'codeconnections:UseConnection'],
+        resources: [connectionArn],
+      }),
+    );
   }
 
   /** cdk-nag findings on resources that CDK Pipelines generates, each acknowledged individually with its reason. */

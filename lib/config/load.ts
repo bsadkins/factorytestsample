@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { cronExpressionIssues } from './cron';
 import { type CaseInsightsConfig, ENVIRONMENT_NAMES, type EnvironmentName, type ScheduleConfig } from './types';
 import { CONFIG_DIR, CONFIG_SCHEMA_PATH, ConfigValidationError, readJsonFile, validateAgainstSchema } from './schema-validator';
 
@@ -10,22 +11,13 @@ export function queueVisibilityTimeoutSeconds(config: CaseInsightsConfig): numbe
   return queues.visibilityTimeoutSeconds ?? functions.consumerTimeoutSeconds * VISIBILITY_TIMEOUT_MULTIPLIER;
 }
 
-function cronIssues(name: string, expression: string): string[] {
-  const fields = expression.slice('cron('.length, -1).split(' ');
-  const [, , dayOfMonth, , dayOfWeek] = fields;
-  if ((dayOfMonth === '?') === (dayOfWeek === '?')) {
-    return [`/schedules/${name} must use "?" in exactly one of day-of-month or day-of-week`];
-  }
-  return [];
-}
-
 /** Cross-field rules that JSON Schema cannot express; documented in the schema $comment. */
 function semanticIssues(config: CaseInsightsConfig): string[] {
   const issues: string[] = [];
   const { queues, functions, workflow, cleanup } = config.operations;
 
   for (const name of Object.keys(config.schedules) as (keyof ScheduleConfig)[]) {
-    issues.push(...cronIssues(name, config.schedules[name]));
+    issues.push(...cronExpressionIssues(config.schedules[name]).map((issue) => `/schedules/${name} ${issue}`));
   }
 
   const minimumVisibility = functions.consumerTimeoutSeconds * VISIBILITY_TIMEOUT_MULTIPLIER;

@@ -10,13 +10,12 @@ import {
   CaseInsightsApiLoggingStack,
   CaseInsightsMcpStack,
   ConfigValidationError,
-  loadEnvironmentConfig,
   MCP_ACCESS_LOG_GROUP_PREFIX,
   parseConfig,
   resourceNames,
   sharedApiLoggingNames,
 } from '../../../lib';
-import { type JsonObject, readConfigJson } from '../../config/helpers';
+import { FIXTURE_CONFIG_DIR, fixtureEnvironmentConfig, type JsonObject, readFixtureJson } from '../../config/helpers';
 import { normaliseAssetHashes } from '../../helpers/assets';
 import { acknowledgedRules, asArray, nagApp, type PolicyStatementJson, synthError, tempOutdir, testApp } from '../../helpers/cdk';
 
@@ -27,17 +26,17 @@ const PROD_MCP = { enableMcp: true, mcpAllowedPrincipals: PROD_PRINCIPALS } as c
 const EXISTING_ROLE = 'arn:aws:iam::111111111111:role/platform/ApiGatewayCloudWatchLogs';
 const EXISTING = { apiGatewayLogging: { mode: 'existing', sharedId: 'scishared', existingRoleArn: EXISTING_ROLE } } as const;
 
-/** Writes dev.json and/or prod.json (shipped files plus overrides) to a fresh config directory. */
+/** Writes dev.json and/or prod.json (fixtures plus overrides) to a fresh config directory. */
 function configDir(files: Partial<Record<Env, JsonObject>>): string {
   const dir = tempOutdir();
-  for (const [env, overrides] of Object.entries(files)) {
-    fs.writeFileSync(path.join(dir, `${env}.json`), JSON.stringify({ ...readConfigJson(`${env}.json`), ...overrides }));
+  for (const [env, overrides] of Object.entries(files) as [Env, JsonObject][]) {
+    fs.writeFileSync(path.join(dir, `${env}.json`), JSON.stringify({ ...readFixtureJson(env), ...overrides }));
   }
   return dir;
 }
 
 function stacksFor(env: Env, files?: Partial<Record<Env, JsonObject>>, app: App = testApp()): CaseInsightsAppStacks {
-  return addCaseInsightsStacks(app, { env, configDir: files === undefined ? undefined : configDir(files) });
+  return addCaseInsightsStacks(app, { env, configDir: files === undefined ? FIXTURE_CONFIG_DIR : configDir(files) });
 }
 
 function loggingStackOf(stacks: CaseInsightsAppStacks): CaseInsightsApiLoggingStack {
@@ -74,9 +73,9 @@ describe('managed shared API Gateway logging (default dev)', () => {
     template = Template.fromStack(logging);
   });
 
-  test('the shipped dev configuration selects managed mode with the shared namespace', () => {
+  test('the dev fixture selects managed mode with the shared namespace', () => {
     expect(stacks.config.apiGatewayLogging).toEqual({ mode: 'managed', sharedId: 'scishared' });
-    expect(loadEnvironmentConfig('prod').apiGatewayLogging).toEqual(stacks.config.apiGatewayLogging);
+    expect(fixtureEnvironmentConfig('prod').apiGatewayLogging).toEqual(stacks.config.apiGatewayLogging);
   });
 
   test('ordinary deploy-all synthesis includes CaseInsightsApiLoggingStack-<sharedId> in the management account and Region', () => {
@@ -229,8 +228,8 @@ describe('shared ownership across environments', () => {
 
   test('a root-owned shared stack serves dev and prod stages: one Account association in the whole assembly', () => {
     const app = nagApp();
-    const dev = loadEnvironmentConfig('dev');
-    const prod = parseConfig({ ...readConfigJson('prod.json'), ...PROD_MCP }, 'prod with MCP');
+    const dev = fixtureEnvironmentConfig('dev');
+    const prod = parseConfig({ ...readFixtureJson('prod'), ...PROD_MCP }, 'prod with MCP');
     const shared = addSharedApiLogging(app, [dev, prod]);
     expect(shared?.stack).toBeInstanceOf(CaseInsightsApiLoggingStack);
     const devStage = new Stage(app, 'Dev', { env: { account: dev.managementAccountId, region: dev.region } });
@@ -253,9 +252,9 @@ describe('shared ownership across environments', () => {
 
   test('a stage whose configuration disagrees with the shared settings is rejected', () => {
     const app = testApp();
-    const dev = loadEnvironmentConfig('dev');
+    const dev = fixtureEnvironmentConfig('dev');
     const shared = addSharedApiLogging(app, [dev]);
-    const other = parseConfig({ ...readConfigJson('dev.json'), apiGatewayLogging: { mode: 'managed', sharedId: 'other' } }, 'conflicting');
+    const other = parseConfig({ ...readFixtureJson('dev'), apiGatewayLogging: { mode: 'managed', sharedId: 'other' } }, 'conflicting');
     expect(() => addCaseInsightsEnvironmentStacks(new Stage(app, 'Dev'), other, { sharedApiLogging: shared })).toThrow(
       /apiGatewayLogging.*differs from the shared API Gateway logging settings/,
     );
@@ -263,14 +262,14 @@ describe('shared ownership across environments', () => {
 
   test('an MCP environment without a shared logging owner is rejected', () => {
     const app = testApp();
-    expect(() => addCaseInsightsEnvironmentStacks(new Stage(app, 'Dev'), loadEnvironmentConfig('dev'), {})).toThrow(ConfigValidationError);
+    expect(() => addCaseInsightsEnvironmentStacks(new Stage(app, 'Dev'), fixtureEnvironmentConfig('dev'), {})).toThrow(ConfigValidationError);
   });
 
   test('shared settings for a different account or Region are rejected', () => {
     const app = testApp();
-    const dev = loadEnvironmentConfig('dev');
+    const dev = fixtureEnvironmentConfig('dev');
     const shared = addSharedApiLogging(app, [dev]);
-    const elsewhere = parseConfig({ ...readConfigJson('dev.json'), region: 'eu-west-1' }, 'other Region');
+    const elsewhere = parseConfig({ ...readFixtureJson('dev'), region: 'eu-west-1' }, 'other Region');
     expect(() => addCaseInsightsEnvironmentStacks(new Stage(app, 'Eu'), elsewhere, { sharedApiLogging: shared })).toThrow(/eu-west-1/);
   });
 
@@ -291,8 +290,8 @@ describe('shared ownership across environments', () => {
   });
 
   test('addSharedApiLogging rejects inconsistent configurations itself', () => {
-    const dev = loadEnvironmentConfig('dev');
-    const prod = parseConfig({ ...readConfigJson('prod.json'), ...PROD_MCP, ...EXISTING }, 'prod existing');
+    const dev = fixtureEnvironmentConfig('dev');
+    const prod = parseConfig({ ...readFixtureJson('prod'), ...PROD_MCP, ...EXISTING }, 'prod existing');
     const app = testApp();
     expect(() => addSharedApiLogging(app, [dev, prod])).toThrow(ConfigValidationError);
     expect(app.node.children).toHaveLength(0);
@@ -336,7 +335,7 @@ describe('existing-role mode and MCP disabled', () => {
     }
   });
 
-  test('the shipped prod configuration (MCP disabled) adds no shared stack', () => {
+  test('the prod fixture (MCP disabled) adds no shared stack', () => {
     expect(stacksFor('prod').apiLogging).toBeUndefined();
   });
 });

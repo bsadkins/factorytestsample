@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { type App, Stack, type Stage } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
+import { Role } from 'aws-cdk-lib/aws-iam';
 import {
   addCaseInsightsApp,
   addCaseInsightsPipeline,
@@ -19,26 +20,40 @@ import {
   resolveAppMode,
   resourceNames,
 } from '../../../lib';
-import { type JsonObject, readConfigJson } from '../../config/helpers';
+import { FIXTURE_CONFIG_DIR, fixtureConfigDir, type FixtureConfigFile, type JsonObject } from '../../config/helpers';
 import { normaliseAssetHashes } from '../../helpers/assets';
-import { acknowledgedRules, synthError, tempOutdir, testApp } from '../../helpers/cdk';
+import { acknowledgedRules, asArray, iamPolicyStatements, synthError, testApp } from '../../helpers/cdk';
 
-type ConfigFile = 'pipeline' | 'dev' | 'prod';
-const SHIPPED: Record<ConfigFile, string> = { pipeline: 'pipeline.example.json', dev: 'dev.json', prod: 'prod.json' };
+type ConfigFile = FixtureConfigFile;
 const CONNECTION_ARN = 'arn:aws:codeconnections:us-east-1:111111111111:connection/00000000-0000-4000-8000-000000000000';
 const EXISTING_ROLE = 'arn:aws:iam::111111111111:role/platform/ApiGatewayCloudWatchLogs';
 const EXISTING = { apiGatewayLogging: { mode: 'existing', sharedId: 'scishared', existingRoleArn: EXISTING_ROLE } } as const;
 
-/** A config directory with the shipped files (pipeline.json from the example) plus overrides; `null` omits a file. */
+/** A config directory with the pipeline, dev and prod fixtures plus overrides; `null` omits a file. */
 function configDir(overrides: Partial<Record<ConfigFile, JsonObject | null>> = {}): string {
-  const dir = tempOutdir();
-  for (const file of ['pipeline', 'dev', 'prod'] as const) {
-    const override = overrides[file];
-    if (override !== null) {
-      fs.writeFileSync(path.join(dir, `${file}.json`), JSON.stringify({ ...readConfigJson(SHIPPED[file]), ...override }));
-    }
-  }
-  return dir;
+  return fixtureConfigDir({ pipeline: {}, dev: {}, prod: {}, ...overrides });
+}
+
+const USE_CONNECTION_ACTIONS = ['codeconnections:UseConnection', 'codestar-connections:UseConnection'];
+
+/** Every policy statement in the pipeline stack that grants a connection action, with the roles it is attached to. */
+function connectionGrants(stack: Stack): { roles: unknown[]; actions: string[]; resource: unknown }[] {
+  return iamPolicyStatements(Template.fromStack(stack))
+    .filter(({ statement }) => asArray(statement.Action).some((action) => action.endsWith(':UseConnection')))
+    .map(({ roles, statement }) => {
+      expect(statement.Effect).toBe('Allow');
+      expect(statement.Condition).toBeUndefined();
+      return { roles, actions: asArray(statement.Action).sort(), resource: statement.Resource };
+    });
+}
+
+/** The logical ID of the role CodePipeline assumes for the Source action. */
+function sourceActionRoleId(stack: CaseInsightsPipelineStack): string {
+  const roles = stack.pipeline.pipeline.node
+    .findAll()
+    .filter((construct): construct is Role => construct instanceof Role && construct.node.path.includes('/Source/'));
+  expect(roles).toHaveLength(1);
+  return stack.getLogicalId(required(roles[0], 'source action role').node.defaultChild as never);
 }
 
 interface PipelineJson {
@@ -115,7 +130,7 @@ describe('opt-in app selection', () => {
     const withPipeline = testApp({ env });
     const app = addCaseInsightsApp(withPipeline, { configDir: configDir() });
     const plain = testApp();
-    const reference = addCaseInsightsStacks(plain, { env });
+    const reference = addCaseInsightsStacks(plain, { env, configDir: FIXTURE_CONFIG_DIR });
     expect(app.kind).toBe('standalone');
     const names = (scope: App): string[] =>
       scope.node.children.filter((child): child is Stack => Stack.isStack(child)).map((stack) => stack.stackName).sort();
@@ -146,6 +161,12 @@ describe('invalid pipeline configuration stops before any stack is created', () 
     ['token in place of a connection', { pipeline: { connectionArn: 'ghp_notaconnection' } }, /\/connectionArn must match pattern/],
     ['OAuth token property', { pipeline: { oauthToken: 'x' } }, /unsupported property "oauthToken"/],
     ['non-main branch', { pipeline: { branch: 'release' } }, /\/branch must be "main"/],
+    ['another source repository', { pipeline: { repository: 'example-org/factorytestsample' } }, /\/repository must be "bsadkins\/factorytestsample"/],
+    [
+      'connection in another Region',
+      { pipeline: { connectionArn: 'arn:aws:codeconnections:eu-west-1:111111111111:connection/00000000-0000-4000-8000-000000000000' } },
+      /\/connectionArn is in Region eu-west-1 but the pipeline Region is us-east-1/,
+    ],
     ['approval toggle', { pipeline: { manualApproval: false } }, /unsupported property "manualApproval"/],
     ['duplicate namespaces', { prod: { uniqueId: 'scidev' } }, /different uniqueId values/],
     ['prod in another account', { prod: { managementAccountId: '222222222222' } }, /prod managementAccountId 222222222222 differs from pipeline account/],
@@ -168,7 +189,7 @@ describe('invalid pipeline configuration stops before any stack is created', () 
   });
 });
 
-describe('approval-gated pipeline (shipped dev and prod configurations)', () => {
+describe('approval-gated pipeline (synthetic fixture configurations)', () => {
   let app: App;
   let stack: CaseInsightsPipelineStack;
   let pipeline: PipelineJson['Properties'];
@@ -234,6 +255,16 @@ describe('approval-gated pipeline (shipped dev and prod configurations)', () => 
     Template.fromStack(stack).resourceCountIs('AWS::CodePipeline::Webhook', 0);
     Template.fromStack(stack).resourceCountIs('AWS::CodeStarConnections::Connection', 0);
     Template.fromStack(stack).resourceCountIs('AWS::CodeConnections::Connection', 0);
+  });
+
+  test('only the Source action role may use the connection: both connection actions on exactly the configured ARN', () => {
+    const grants = connectionGrants(stack);
+    expect(grants.length).toBeGreaterThan(0);
+    for (const grant of grants) {
+      expect(grant.roles).toEqual([{ Ref: sourceActionRoleId(stack) }]);
+      expect(grant.resource).toBe(CONNECTION_ARN);
+    }
+    expect([...new Set(grants.flatMap((grant) => grant.actions))].sort()).toEqual(USE_CONNECTION_ACTIONS);
   });
 
   test('stage order is source, verify/synth, self-mutation, assets, shared logging, dev, then approval before prod', () => {
@@ -343,7 +374,7 @@ describe('approval-gated pipeline (shipped dev and prod configurations)', () => 
 
   test('each stage deploys exactly the templates of standalone deploy-all for its environment', () => {
     for (const [stage, env] of [[stack.devStage, 'dev'], [stack.prodStage, 'prod']] as const) {
-      const standalone = addCaseInsightsStacks(testApp(), { env });
+      const standalone = addCaseInsightsStacks(testApp(), { env, configDir: FIXTURE_CONFIG_DIR });
       const expected = [standalone.core, standalone.memberRole, standalone.analytics, standalone.mcp].filter((s) => s !== undefined);
       const actual = stagesOf(stage);
       expect(actual.map((s) => s.stackName).sort()).toEqual(expected.map((s) => s.stackName).sort());
@@ -384,7 +415,7 @@ describe('approval-gated pipeline (shipped dev and prod configurations)', () => 
     expect(accounts([...stagesOf(stack.devStage), ...stagesOf(stack.prodStage), stack])).toBe(0);
     expect(app.node.findAll().filter((construct) => construct instanceof CaseInsightsApiLoggingStack)).toHaveLength(1);
     // The shared stack is identical to the one standalone deploy-all creates, so both entry points reuse it.
-    const standalone = addCaseInsightsStacks(testApp(), { env: 'dev' });
+    const standalone = addCaseInsightsStacks(testApp(), { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
     expect(Template.fromStack(required(sharedStacks[0], 'shared logging stack')).toJSON()).toEqual(Template.fromStack(required(standalone.apiLogging, 'standalone shared logging stack')).toJSON());
     Template.fromStack(required(stack.devStage.stacks.mcp, 'dev MCP stack')).hasOutput('ApiGatewayLoggingStack', { Value: 'CaseInsightsApiLoggingStack-scishared' });
   });
@@ -437,6 +468,20 @@ describe('approval-gated pipeline (shipped dev and prod configurations)', () => 
 
   test('pipeline stack template snapshot', () => {
     expect(normaliseAssetHashes(Template.fromStack(stack).toJSON())).toMatchSnapshot();
+  });
+});
+
+describe('legacy CodeStar Connections ARN', () => {
+  test('the Source action uses the legacy ARN and its role may use it under both connection actions', () => {
+    const legacy = 'arn:aws:codestar-connections:us-east-1:111111111111:connection/11111111-2222-4333-8444-555555555555';
+    const stack = addCaseInsightsPipeline(testApp(), { configDir: configDir({ pipeline: { connectionArn: legacy } }) });
+    expect(pipelineResource(stack).Stages[0]?.Actions[0]?.Configuration?.ConnectionArn).toBe(legacy);
+    const grants = connectionGrants(stack);
+    for (const grant of grants) {
+      expect(grant.roles).toEqual([{ Ref: sourceActionRoleId(stack) }]);
+      expect(grant.resource).toBe(legacy);
+    }
+    expect([...new Set(grants.flatMap((grant) => grant.actions))].sort()).toEqual(USE_CONNECTION_ACTIONS);
   });
 });
 

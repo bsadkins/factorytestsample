@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { RegionInfo } from 'aws-cdk-lib/region-info';
 import { validateSharedApiLoggingConsistency } from './api-logging';
 import { loadEnvironmentConfig, resolveEnvironmentName } from './load';
 import type { CaseInsightsConfig, EnvironmentName, PipelineConfig } from './types';
@@ -9,13 +10,39 @@ export const PIPELINE_CONFIG_FILE = 'pipeline.json';
 /** CDK context key that selects the optional pipeline app (`-c pipeline=true`). */
 export const PIPELINE_CONTEXT_KEY = 'pipeline';
 
+/** The ARN partition of `region`; Regions unknown to the CDK fact table are assumed to be in the commercial partition. */
+function partitionOf(region: string): string {
+  return RegionInfo.get(region).partition ?? 'aws';
+}
+
+/**
+ * The connection must be in the pipeline's account, Region and partition: CodePipeline source actions
+ * cannot use a connection in another Region. The schema has already checked the ARN shape, so both the
+ * codeconnections and the legacy codestar-connections service prefixes reach this point.
+ */
+function connectionLocalityIssues(config: PipelineConfig): string[] {
+  const [, partition = '', , region = '', account = ''] = config.connectionArn.split(':');
+  const issues: string[] = [];
+  if (account !== config.account) {
+    issues.push(`/connectionArn is in account ${account} but the pipeline account is ${config.account}`);
+  }
+  if (region !== config.region) {
+    issues.push(
+      `/connectionArn is in Region ${region} but the pipeline Region is ${config.region}; CodePipeline source actions cannot use a connection in another Region`,
+    );
+  }
+  const expectedPartition = partitionOf(config.region);
+  if (partition !== expectedPartition) {
+    issues.push(`/connectionArn is in partition ${partition} but the pipeline Region ${config.region} is in partition ${expectedPartition}`);
+  }
+  return issues;
+}
+
 export function parsePipelineConfig(raw: unknown, source = 'pipeline configuration'): PipelineConfig {
   const config = validateAgainstSchema(PIPELINE_SCHEMA_PATH, raw, source) as PipelineConfig;
-  const connectionAccount = config.connectionArn.split(':')[4];
-  if (connectionAccount !== config.account) {
-    throw new ConfigValidationError(source, [
-      `/connectionArn is in account ${String(connectionAccount)} but the pipeline account is ${config.account}`,
-    ]);
+  const issues = connectionLocalityIssues(config);
+  if (issues.length > 0) {
+    throw new ConfigValidationError(source, issues);
   }
   return config;
 }

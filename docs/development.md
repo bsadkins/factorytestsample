@@ -63,6 +63,8 @@ Every pull request must pass `npm run verify`, which [continuous integration](#c
 
 **TypeScript.** Jest runs `test/**/*.test.ts` with `ts-jest`, two workers and a 120-second timeout per test. Template snapshots are in `test/cdk/__snapshots__/app.test.ts.snap` and `test/cdk/stacks/__snapshots__/`. When an infrastructure change is intended, update them with `npx jest -u <test file>` and review the snapshot diff as carefully as the code: it is the record of what CloudFormation will change.
 
+**Configuration in tests.** Assertions on particular accounts, names or flags, and every snapshot, use the synthetic configurations in `test/fixtures/config/` (`dev.json`, `prod.json` and `pipeline.json`), never the operator files in `config/`. Editing `config/dev.json`, `config/prod.json` or `config/pipeline.json` therefore cannot break a fixed test. The operator files are still checked on every `npm run verify`: `test/config/operator-config.test.ts` loads them (and, when `config/pipeline.json` exists, builds and synthesises the pipeline app from them with cdk-nag), and `npm run synth` synthesises dev and prod from them with cdk-nag.
+
 ```bash
 npx jest test/cdk/constructs/observability.test.ts
 ```

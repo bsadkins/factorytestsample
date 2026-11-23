@@ -4,9 +4,10 @@ import type { Stack } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { addCaseInsightsStacks, type CaseInsightsAppStacks, REPO_ROOT } from '../../lib';
 import { asArray, iamPolicyStatements, testApp } from '../helpers/cdk';
+import { FIXTURE_CONFIG_DIR } from '../config/helpers';
 
 /**
- * The shipped dev app (Analytics and MCP on) against the shared cross-surface fixtures that
+ * The dev fixture app (Analytics and MCP on) against the shared cross-surface fixtures that
  * test/integration/test_cross_surface_*.py feed through S3, the CSV exporter, the MCP handler and
  * the stdio bridge. These assertions tie the local evidence to the synthesised Glue table and the
  * MCP function's query scope; they prove template properties, not deployed Glue or Athena behaviour.
@@ -63,7 +64,7 @@ describe('shared processed-record fixtures in the default dev app', () => {
   let table: GlueTableProperties;
 
   beforeAll(() => {
-    stacks = addCaseInsightsStacks(testApp(), { env: 'dev' });
+    stacks = addCaseInsightsStacks(testApp(), { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
     expect(stacks.config.enableAnalytics).toBe(true);
     expect(stacks.config.enableMcp).toBe(true);
     analytics = Template.fromStack(stacks.analytics as Stack);

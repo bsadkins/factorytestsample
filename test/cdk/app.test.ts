@@ -7,16 +7,16 @@ import {
   addCaseInsightsStacks,
   CaseInsightsCoreStack,
   CaseInsightsMemberRoleStack,
-  CONFIG_DIR,
   ConfigValidationError,
 } from '../../lib';
 import { normaliseAssetHashes } from '../helpers/assets';
-import { acknowledgedRules, schedulerTrustStatement, synthError, tempOutdir, testApp, trustStatements } from '../helpers/cdk';
+import { acknowledgedRules, schedulerTrustStatement, synthError, testApp, trustStatements } from '../helpers/cdk';
+import { FIXTURE_CONFIG_DIR, fixtureConfigDir } from '../config/helpers';
 
 describe('Support Case Insights app', () => {
   test('dev configuration adds the namespaced core and member-role stacks in the management account', () => {
     const app = testApp();
-    const { config, core, memberRole } = addCaseInsightsStacks(app, { env: 'dev' });
+    const { config, core, memberRole } = addCaseInsightsStacks(app, { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
 
     expect(core).toBeInstanceOf(CaseInsightsCoreStack);
     expect(core.stackName).toBe(`CaseInsightsCoreStack-${config.uniqueId}`);
@@ -32,7 +32,7 @@ describe('Support Case Insights app', () => {
 
   test.each(['dev', 'prod'] as const)('%s configuration synthesises with cdk-nag enforcing and no findings left', (env) => {
     const app = testApp();
-    const { config, core, memberRole, analytics, mcp, apiLogging } = addCaseInsightsStacks(app, { env });
+    const { config, core, memberRole, analytics, mcp, apiLogging } = addCaseInsightsStacks(app, { env, configDir: FIXTURE_CONFIG_DIR });
     // cdk-nag is registered by addCaseInsightsStacks, so an unacknowledged finding makes synth throw
     // (proved by 'cdk-nag findings fail synthesis'). A passing synth writes a report with no plugin
     // entries at all, so the report cannot be the evidence on its own.
@@ -50,7 +50,7 @@ describe('Support Case Insights app', () => {
     expect(report.title).toBe('Validation Report');
     expect(report.pluginReports.filter((plugin) => plugin.conclusion !== 'success')).toEqual([]);
     expect(analytics).toBeDefined();
-    // Both shipped configurations enable Analytics; only dev enables MCP.
+    // Both fixtures enable Analytics; only dev enables MCP.
     expect(mcp !== undefined).toBe(env === 'dev');
     // The shared API Gateway logging stack exists only with MCP in managed mode.
     expect(apiLogging !== undefined).toBe(env === 'dev');
@@ -70,7 +70,7 @@ describe('Support Case Insights app', () => {
   });
 
   test.each(['dev', 'prod'] as const)('%s schedules run in the default group, each through its own role trusted only in that group', (env) => {
-    const { core } = addCaseInsightsStacks(testApp(), { env });
+    const { core } = addCaseInsightsStacks(testApp(), { env, configDir: FIXTURE_CONFIG_DIR });
     const template = Template.fromStack(core);
     const schedules = Object.values(template.findResources('AWS::Scheduler::Schedule')).map(
       (schedule) => schedule.Properties as { GroupName?: string; Target: { RoleArn: { 'Fn::GetAtt': [string, string] } } },
@@ -91,7 +91,7 @@ describe('Support Case Insights app', () => {
   });
 
   test('core stack outputs the exact targets the reprocess script checks against its deployment', () => {
-    const { core } = addCaseInsightsStacks(testApp(), { env: 'dev' });
+    const { core } = addCaseInsightsStacks(testApp(), { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
     const template = Template.fromStack(core);
     const ref = (resource: IConstruct): string => core.getLogicalId(resource.node.defaultChild as CfnElement);
     expect(template.findOutputs('*')).toMatchObject({
@@ -103,13 +103,26 @@ describe('Support Case Insights app', () => {
   });
 
   test.each(['dev', 'prod'] as const)('%s core stack template snapshot', (env) => {
-    const { core } = addCaseInsightsStacks(testApp(), { env });
+    const { core } = addCaseInsightsStacks(testApp(), { env, configDir: FIXTURE_CONFIG_DIR });
     expect(normaliseAssetHashes(Template.fromStack(core).toJSON())).toMatchSnapshot();
+  });
+
+  test('Core-only (Analytics and MCP disabled) core stack template snapshot', () => {
+    const configDir = fixtureConfigDir({ dev: { enableAnalytics: false, enableMcp: false } });
+    const { core, analytics, mcp } = addCaseInsightsStacks(testApp(), { env: 'dev', configDir });
+    expect(analytics).toBeUndefined();
+    expect(mcp).toBeUndefined();
+    const template = normaliseAssetHashes(Template.fromStack(core).toJSON());
+    // The Analytics results bucket's log-delivery grant on the Core access-log bucket exists only with Analytics.
+    expect(JSON.stringify(template)).not.toContain('AllowAthenaResultsAccessLogs');
+    const withAnalytics = JSON.stringify(Template.fromStack(addCaseInsightsStacks(testApp(), { env: 'prod', configDir: FIXTURE_CONFIG_DIR }).core).toJSON());
+    expect(withAnalytics).toContain('AllowAthenaResultsAccessLogs');
+    expect(template).toMatchSnapshot();
   });
 
   test('every cdk-nag acknowledgement is listed here with a specific reason', () => {
     const app = testApp();
-    const { config, core: coreStack, analytics, mcp, apiLogging } = addCaseInsightsStacks(app, { env: 'dev' });
+    const { config, core: coreStack, analytics, mcp, apiLogging } = addCaseInsightsStacks(app, { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
     // Analytics, MCP and shared API logging acknowledgements are listed in their test/cdk/stacks/*.test.ts files.
     const listedElsewhere = [analytics, mcp, apiLogging].map((stack) => `${stack?.stackName ?? 'missing'}/`);
     const acknowledged = acknowledgedRules(app).filter(({ path: constructPath }) => !listedElsewhere.some((prefix) => constructPath.startsWith(prefix))).map(({ path: constructPath, id, reason }) => ({
@@ -204,7 +217,7 @@ describe('Support Case Insights app', () => {
 
   test('cdk-nag findings fail synthesis', () => {
     const app = testApp();
-    const { core } = addCaseInsightsStacks(app, { env: 'dev' });
+    const { core } = addCaseInsightsStacks(app, { env: 'dev', configDir: FIXTURE_CONFIG_DIR });
     new s3.Bucket(core, 'InsecureBucket', { enforceSSL: false });
     const error = synthError(app);
     expect(error).toMatch(/AwsSolutions-S1'/);
@@ -212,10 +225,7 @@ describe('Support Case Insights app', () => {
   });
 
   test('invalid configuration stops before any stack is created', () => {
-    const configDir = tempOutdir();
-    const prod = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, 'prod.json'), 'utf8')) as Record<string, unknown>;
-    delete prod.alarmEmail;
-    fs.writeFileSync(path.join(configDir, 'prod.json'), JSON.stringify(prod));
+    const configDir = fixtureConfigDir({ prod: { alarmEmail: undefined } });
 
     const app = testApp();
     expect(() => addCaseInsightsStacks(app, { env: 'prod', configDir })).toThrow(ConfigValidationError);
