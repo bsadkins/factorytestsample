@@ -133,11 +133,13 @@ The tables list every application message and its main keys. Records written whi
 | --- | --- | --- |
 | INFO | `Account list written` | `run_id`, `object_key`, `listed`, `selected`, `excludedInactive`, `excludedManagement` |
 | WARNING | `Account list for this run already exists` | `run_id`, `object_key` |
+| ERROR | `Account discovery failed` | `run_id` (once known), `error_type`, `error_code`, `http_status` |
 | INFO | `Account references enqueued` | `object_key`, `version_id`, `run_id`, `accounts` |
 | INFO | `Duplicate account-list event skipped` | `object_key`, `version_id` |
 | INFO | `Account list is already being processed` | `object_key`, `version_id` |
 | ERROR | `Account list is malformed` | `object_key`, `version_id`, `reason` |
 | ERROR | `Account list processing failed` | `object_key`, `version_id`, `error_type`, `error_code` |
+| ERROR | `Account-list event processing failed` | `error_type`, `error_code`, `http_status` |
 
 ### Case retrieval and annotation
 

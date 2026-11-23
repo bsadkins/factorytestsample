@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import traceback
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -281,6 +282,103 @@ def test_aws_failure_is_logged_without_the_service_message_or_traceback(
     assert "exception" not in failure
     assert "exception_name" not in failure
     assert metrics_in(output) == {"AccountListFailures": 1}
+    assert env.messages() == []
+
+
+@pytest.mark.usefixtures("sqs_service_error")
+def test_record_failure_raises_only_the_counts_error(
+    env: Env, lambda_context: LambdaContext
+) -> None:
+    event = s3_event(s3_record(account_list_key(RUN), env.put_list()))
+
+    with pytest.raises(app.AccountListProcessingError) as raised:
+        app.handler(event, lambda_context)
+
+    error = raised.value
+    assert type(error) is app.AccountListProcessingError
+    assert error.args == ("1 account list(s) could not be processed",)
+    assert vars(error) == {"failed": 1}
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    rendered = "".join(traceback.format_exception(error))
+    assert SERVICE_SENTINEL not in rendered
+    assert "SENTINEL-NAME" not in rendered
+
+
+def setup_service_error(operation: str) -> ClientError:
+    return ClientError(
+        {
+            "Error": {"Code": "InternalFailure", "Message": SERVICE_SENTINEL},
+            "ResponseMetadata": {"HTTPStatusCode": 500},  # type: ignore[typeddict-item]
+        },
+        operation,
+    )
+
+
+def assert_safe_reader_error(error: BaseException) -> None:
+    """What Lambda reports and keeps in the OnFailure record: fixed text, no displayed chain."""
+    assert type(error) is app.AccountReaderError
+    assert error.args == ("account-list event could not be processed",)
+    assert error.__cause__ is None
+    assert error.__suppress_context__ is True
+    assert vars(error) == {}
+    rendered = "".join(traceback.format_exception(error))
+    assert "During handling of the above exception" not in rendered
+    assert SERVICE_SENTINEL not in str(error) + repr(error) + rendered
+
+
+@pytest.mark.parametrize("failing", ["persistence_layer", "clients"])
+def test_setup_failure_raises_a_safe_error_and_a_retry_processes_the_list(
+    env: Env,
+    lambda_context: LambdaContext,
+    capsys: pytest.CaptureFixture[str],
+    log_stream: io.StringIO,
+    failing: str,
+) -> None:
+    event = s3_event(s3_record(account_list_key(RUN), env.put_list()))
+
+    def broken() -> object:
+        raise setup_service_error("DescribeEndpoints")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(app, failing, broken)
+        with pytest.raises(app.AccountReaderError) as raised:
+            app.handler(event, lambda_context)
+
+    assert_safe_reader_error(raised.value)
+    assert isinstance(raised.value.__context__, ClientError)
+    logs = log_stream.getvalue()
+    assert SERVICE_SENTINEL not in logs + capsys.readouterr().out
+    assert "Traceback" not in logs
+    records = [json.loads(line) for line in logs.splitlines()]
+    [failure] = [r for r in records if r.get("message") == "Account-list event processing failed"]
+    assert failure["level"] == "ERROR"
+    assert failure["error_type"] == "ClientError"
+    assert failure["error_code"] == "InternalFailure"
+    assert failure["http_status"] == 500
+    assert "exception" not in failure
+    assert env.messages() == []
+
+    # Nothing was recorded as in progress or complete, so the retried event enqueues once.
+    retried = app.handler(event, lambda_context)
+
+    assert retried["accountsEnqueued"] == 3
+    assert sorted(env.messages(), key=lambda m: m["accountId"]) == expected_messages()
+    assert app.handler(event, lambda_context)["duplicateEvents"] == 1
+    assert env.messages() == []
+
+
+def test_missing_idempotency_configuration_fails_safely(
+    env: Env, lambda_context: LambdaContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    event = s3_event(s3_record(account_list_key(RUN), env.put_list()))
+    monkeypatch.delenv("IDEMPOTENCY_TABLE_NAME")
+
+    with pytest.raises(app.AccountReaderError) as raised:
+        app.handler(event, lambda_context)
+
+    assert_safe_reader_error(raised.value)
+    assert isinstance(raised.value.__context__, KeyError)
     assert env.messages() == []
 
 

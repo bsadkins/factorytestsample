@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import json
+import logging
 import re
+import traceback
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -12,6 +15,7 @@ import boto3
 import pytest
 from account_lookup import app
 from aws_lambda_powertools.utilities.typing import LambdaContext
+from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 from common.account_list import ACCOUNT_LIST_PREFIX, account_list_key
 
@@ -75,6 +79,38 @@ def stubbed_organizations(
     stub.activate()
     use_organizations(monkeypatch, client)
     return stub
+
+
+@pytest.fixture
+def log_stream(monkeypatch: pytest.MonkeyPatch) -> io.StringIO:
+    """Receives everything the handler's Powertools Logger writes. Logger binds its stream at
+    import time, so `capsys` only sees EMF metrics."""
+    stream = io.StringIO()
+    for log_handler in logging.getLogger(app.logger.service).handlers:
+        if isinstance(log_handler, logging.StreamHandler):
+            monkeypatch.setattr(log_handler, "stream", stream)
+    return stream
+
+
+def log_records(stream: io.StringIO) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in stream.getvalue().splitlines()]
+
+
+def assert_safe_discovery_error(error: BaseException, *sentinels: str) -> None:
+    """`error` is what Lambda reports as errorType/errorMessage/stackTrace and records in the
+    OnFailure destination: a fixed message, no displayed chain and no attached AWS response."""
+    assert type(error) is app.AccountDiscoveryError
+    assert error.args == ("account discovery failed",)
+    assert error.__cause__ is None
+    assert error.__suppress_context__ is True
+    assert vars(error) == {}
+    rendered = "".join(traceback.format_exception(error))
+    assert "During handling of the above exception" not in rendered
+    assert "direct cause" not in rendered
+    for sentinel in sentinels:
+        assert sentinel not in str(error)
+        assert sentinel not in repr(error)
+        assert sentinel not in rendered
 
 
 def stored_document(s3: S3Client, key: str) -> dict[str, Any]:
@@ -224,39 +260,151 @@ def test_invalid_schedule_input_fails_before_any_call(
     s3: S3Client, monkeypatch: pytest.MonkeyPatch, lambda_context: LambdaContext, event: object
 ) -> None:
     stub = stubbed_organizations(monkeypatch, [])
-    with pytest.raises(ValueError, match=r"scheduledTime|event"):
+    with pytest.raises(app.AccountDiscoveryError) as raised:
         app.handler(event, lambda_context)
+    assert_safe_discovery_error(raised.value)
+    assert isinstance(raised.value.__context__, ValueError)
     stub.assert_no_pending_responses()
     assert "Contents" not in s3.list_objects_v2(Bucket=BUCKET)
 
 
+SERVICE_SENTINEL = "SENTINEL-SERVICE-MESSAGE"
+
+
 def test_organizations_failure_writes_nothing(
-    s3: S3Client, monkeypatch: pytest.MonkeyPatch, lambda_context: LambdaContext
+    s3: S3Client,
+    monkeypatch: pytest.MonkeyPatch,
+    lambda_context: LambdaContext,
+    log_stream: io.StringIO,
 ) -> None:
     client: OrganizationsClient = boto3.client("organizations", region_name="us-east-1")
     stub = Stubber(client)
     stub.add_response("list_accounts", {"Accounts": MIXED_PAGES[0], "NextToken": "token-1"}, {})
     stub.add_client_error(
-        "list_accounts", service_error_code="AccessDeniedException", http_status_code=403
+        "list_accounts",
+        service_error_code="AccessDeniedException",
+        service_message=SERVICE_SENTINEL,
+        http_status_code=403,
     )
     stub.activate()
     use_organizations(monkeypatch, client)
 
-    with pytest.raises(client.exceptions.AccessDeniedException):
+    with pytest.raises(app.AccountDiscoveryError) as raised:
         app.handler(SCHEDULED_EVENT, lambda_context)
+
+    stub.assert_no_pending_responses()
     assert "Contents" not in s3.list_objects_v2(Bucket=BUCKET)
+    assert_safe_discovery_error(raised.value, SERVICE_SENTINEL, "SENTINEL-NAME")
+    assert isinstance(raised.value.__context__, client.exceptions.AccessDeniedException)
+    assert SERVICE_SENTINEL not in log_stream.getvalue()
+    [failure] = [r for r in log_records(log_stream) if r["message"] == "Account discovery failed"]
+    assert failure["level"] == "ERROR"
+    assert failure["error_type"] == "AccessDeniedException"
+    assert failure["error_code"] == "AccessDeniedException"
+    assert failure["http_status"] == 403
+    assert "exception" not in failure
+
+
+CUSTOMER_SENTINEL = "SYNTHETIC-CUSTOMER-NAME"
+
+
+def test_account_list_write_failure_raises_a_safe_error_for_lambda_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    lambda_context: LambdaContext,
+    capsys: pytest.CaptureFixture[str],
+    log_stream: io.StringIO,
+    aws_env: None,
+) -> None:
+    """The S3 error echoes the customer account name from the attempted document; neither the
+    exception Lambda reports (and keeps in the OnFailure record) nor any log may carry it."""
+    monkeypatch.setenv("ACCOUNT_LIST_BUCKET", BUCKET)
+    monkeypatch.setenv("MANAGEMENT_ACCOUNT_ID", MANAGEMENT)
+    organizations: OrganizationsClient = boto3.client("organizations", region_name="us-east-1")
+    s3: S3Client = boto3.client("s3", region_name="us-east-1")
+    org_stub, s3_stub = Stubber(organizations), Stubber(s3)
+    org_stub.add_response(
+        "list_accounts",
+        {"Accounts": [account("222222222222", CUSTOMER_SENTINEL, State="ACTIVE")]},
+        {},
+    )
+    s3_stub.add_client_error(
+        "put_object",
+        service_error_code="InternalError",
+        service_message=f"Rejected document for {CUSTOMER_SENTINEL}",
+        http_status_code=500,
+    )
+    bodies: list[bytes] = []
+    s3.meta.events.register_first(
+        "before-parameter-build.s3.PutObject",
+        lambda params, **_: bodies.append(params["Body"]),
+    )
+    monkeypatch.setattr(app, "clients", lambda: app.Clients(organizations=organizations, s3=s3))
+
+    with org_stub, s3_stub, pytest.raises(app.AccountDiscoveryError) as raised:
+        app.handler(SCHEDULED_EVENT, lambda_context)
+
+    org_stub.assert_no_pending_responses()
+    s3_stub.assert_no_pending_responses()
+    assert len(bodies) == 1
+    assert CUSTOMER_SENTINEL.encode() in bodies[0]
+    error = raised.value
+    # The SDK error stays reachable only as suppressed context, which Lambda does not render.
+    assert isinstance(error.__context__, ClientError)
+    assert CUSTOMER_SENTINEL in str(error.__context__)
+    assert_safe_discovery_error(error, CUSTOMER_SENTINEL)
+    logs = log_stream.getvalue()
+    assert CUSTOMER_SENTINEL not in logs + capsys.readouterr().out
+    assert "Traceback" not in logs
+    [failure] = [r for r in log_records(log_stream) if r["message"] == "Account discovery failed"]
+    assert failure["level"] == "ERROR"
+    assert failure["error_type"] == "ClientError"
+    assert failure["error_code"] == "InternalError"
+    assert failure["http_status"] == 500
+    assert failure["run_id"] == "20261113T000000Z"
+
+
+def test_retry_after_a_failed_write_creates_the_list(
+    s3: S3Client,
+    monkeypatch: pytest.MonkeyPatch,
+    make_context: Callable[[str], LambdaContext],
+) -> None:
+    stubbed_organizations(monkeypatch, MIXED_PAGES, repeat=2)
+
+    def failing_write(*_args: object, **_kwargs: object) -> None:
+        raise ClientError(
+            {
+                "Error": {"Code": "SlowDown", "Message": SERVICE_SENTINEL},
+                "ResponseMetadata": {"HTTPStatusCode": 503},  # type: ignore[typeddict-item]
+            },
+            "PutObject",
+        )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app, "write_json", failing_write)
+        with pytest.raises(app.AccountDiscoveryError):
+            app.handler(SCHEDULED_EVENT, make_context("request-1"))
+    assert "Contents" not in s3.list_objects_v2(Bucket=BUCKET)
+
+    retried = app.handler(SCHEDULED_EVENT, make_context("request-1"))
+
+    assert retried["created"] is True
+    assert stored_document(s3, SCHEDULED_KEY)["counts"]["selected"] == 3
 
 
 def test_missing_configuration_is_rejected(
     s3: S3Client, monkeypatch: pytest.MonkeyPatch, lambda_context: LambdaContext
 ) -> None:
     monkeypatch.setenv("MANAGEMENT_ACCOUNT_ID", "not-an-account")
-    with pytest.raises(ValueError, match="MANAGEMENT_ACCOUNT_ID"):
+    with pytest.raises(app.AccountDiscoveryError) as raised:
         app.handler(SCHEDULED_EVENT, lambda_context)
+    assert_safe_discovery_error(raised.value, "not-an-account")
+    assert isinstance(raised.value.__context__, ValueError)
     monkeypatch.setenv("MANAGEMENT_ACCOUNT_ID", MANAGEMENT)
     monkeypatch.delenv("ACCOUNT_LIST_BUCKET")
-    with pytest.raises(KeyError):
+    with pytest.raises(app.AccountDiscoveryError) as raised:
         app.handler(SCHEDULED_EVENT, lambda_context)
+    assert_safe_discovery_error(raised.value)
+    assert isinstance(raised.value.__context__, KeyError)
 
 
 def test_moto_organisation_pages_and_closed_accounts(

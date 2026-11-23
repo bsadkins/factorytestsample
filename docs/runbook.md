@@ -30,11 +30,11 @@ For every function: check the function's log group (`/aws/lambda/<function name>
 
 ### LambdaErrors-AccountLookup
 
-`Lambda-AccountLookup-<uniqueId>` could not list Organizations accounts or write the account list. Check that the stack is deployed in the management account, that Organizations is reachable, and that the account-list bucket exists. Failed scheduled invocations land in `CaseInsights-AccountDiscoveryFailures-<uniqueId>` after retries. To start the run again, invoke the function manually (a manual invocation gets its own run ID).
+`Lambda-AccountLookup-<uniqueId>` could not list Organizations accounts or write the account list. Check that the stack is deployed in the management account, that Organizations is reachable, and that the account-list bucket exists. Failed scheduled invocations land in `CaseInsights-AccountDiscoveryFailures-<uniqueId>` after retries. The invocation error is always `AccountDiscoveryError` with a fixed message; the `Account discovery failed` log entry gives the underlying `error_type` and `error_code`. To start the run again, invoke the function manually (a manual invocation gets its own run ID).
 
 ### LambdaErrors-AccountReader
 
-`Lambda-AccountReader-<uniqueId>` could not read or validate an account list or enqueue accounts. An `InvalidAccountList` error means the object did not match the contract; inspect it in `account-lists/`. Failed events land in `CaseInsights-AccountDiscoveryFailures-<uniqueId>`.
+`Lambda-AccountReader-<uniqueId>` could not read or validate an account list or enqueue accounts. An `InvalidAccountList` error means the object did not match the contract; inspect it in `account-lists/`. The invocation error is `AccountListProcessingError`, which gives only the number of lists that failed (see the `Account list is malformed` and `Account list processing failed` log entries), or `AccountReaderError` when the event failed before any list was read (see `Account-list event processing failed`). Failed events land in `CaseInsights-AccountDiscoveryFailures-<uniqueId>`.
 
 ### LambdaErrors-CaseRetrieval
 

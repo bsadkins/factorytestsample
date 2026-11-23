@@ -61,6 +61,14 @@ class AccountListProcessingError(Exception):
         self.failed = failed
 
 
+class AccountReaderError(Exception):
+    """The event failed before its account lists could be evaluated. Carries no details.
+
+    Lambda records the message of an unhandled exception in its logs and in the asynchronous
+    OnFailure record, and AWS error messages can echo request content.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     account_list_bucket: str
@@ -252,5 +260,11 @@ def process_event(event: object, settings: Settings, aws: Clients) -> dict[str, 
 @metrics.log_metrics
 def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, int]:
     """Enqueue the accounts of each new account list in the S3 event."""
-    IDEMPOTENCY_CONFIG.register_lambda_context(context)
-    return process_event(event, Settings.from_env(), clients())
+    try:
+        IDEMPOTENCY_CONFIG.register_lambda_context(context)
+        return process_event(event, Settings.from_env(), clients())
+    except AccountListProcessingError:
+        raise
+    except Exception as exc:
+        logger.error("Account-list event processing failed", extra=error_fields(exc))
+        raise AccountReaderError("account-list event could not be processed") from None

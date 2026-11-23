@@ -31,6 +31,7 @@ from common.account_list import (
 from common.aws import client_config
 from common.processed import validate_account_id
 from common.s3_json import S3PreconditionFailedError, write_json
+from common.safe_logging import error_fields
 from common.tracing import withhold_exception_messages
 
 if TYPE_CHECKING:
@@ -47,6 +48,14 @@ withhold_exception_messages()
 ACTIVE: Final = "ACTIVE"
 # Organizations throttles ListAccounts aggressively; let the SDK back off for longer.
 ORGANIZATIONS_MAX_ATTEMPTS: Final = 10
+
+
+class AccountDiscoveryError(Exception):
+    """Account discovery failed and the invocation should be retried. Carries no details.
+
+    Lambda records the message of an unhandled exception in its logs and in the asynchronous
+    OnFailure record, and AWS error messages can echo the account names being written.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,4 +198,8 @@ def discover(event: object, settings: Settings, aws: Clients, now: datetime) -> 
 @metrics.log_metrics
 def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     """Discover member accounts and write `account-lists/<runId>.json`."""
-    return discover(event, Settings.from_env(), clients(), datetime.now(UTC))
+    try:
+        return discover(event, Settings.from_env(), clients(), datetime.now(UTC))
+    except Exception as exc:
+        logger.error("Account discovery failed", extra=error_fields(exc))
+        raise AccountDiscoveryError("account discovery failed") from None
