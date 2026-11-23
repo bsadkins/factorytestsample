@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import re
+import shlex
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
@@ -30,6 +31,7 @@ from common.checkpoints import STAGES, checkpoint_key
 from common.conversation import build_conversation_document
 from common.processed import case_record_key
 from common.workflow import (
+    RESET_CLAIM_STALE_AFTER,
     OwnershipMarker,
     ResetClaim,
     encode_input,
@@ -767,6 +769,51 @@ def test_a_record_set_that_changed_after_the_preview_needs_a_new_token(env: Env)
     assert env.writes() == []
 
 
+@dataclass
+class Clock:
+    """The script's wall clock and monotonic clock, moved by hand."""
+
+    wall: datetime = NOW
+    mono: float = 1000.0
+
+    def suspend(self, duration: timedelta, *, wall: bool = True, mono: bool = True) -> None:
+        if wall:
+            self.wall += duration
+        if mono:
+            self.mono += duration.total_seconds()
+
+
+@pytest.fixture
+def clock(env: Env, script: ModuleType, monkeypatch: pytest.MonkeyPatch) -> Clock:
+    del env  # the env fixture fixes the clock first; this one replaces it
+    current = Clock()
+    monkeypatch.setattr(script, "now", lambda: current.wall)
+    monkeypatch.setattr(script, "monotonic", lambda: current.mono)
+    return current
+
+
+def _report_line(out: str, display: str) -> str:
+    [line] = [
+        line
+        for line in out.splitlines()
+        if line.startswith(("requeued ", "rediscover ", "skipped ", "failed "))
+        and f" {display} previous version " in line
+    ]
+    return line
+
+
+def _commands(out: str, prefix: str) -> list[list[str]]:
+    return [shlex.split(line) for line in out.splitlines() if line.strip().startswith(prefix)]
+
+
+def _flag(words: list[str], name: str) -> str:
+    return words[words.index(name) + 1]
+
+
+def _kinds(env: Env, key: str) -> list[str]:
+    return [kind for kind, _, _ in env.versions(RAW, key)]
+
+
 # --- execution ---------------------------------------------------------------------------------
 
 
@@ -824,14 +871,25 @@ def test_confirmed_requeue_supersedes_only_selected_records_with_fresh_identity(
     assert env.sfn.started() == []
 
 
+def _slow_first_send(env: Env, clock: Clock, seconds: float) -> None:
+    """The first send's response arrives `seconds` after the request."""
+    slowed: list[bool] = []
+
+    def slow(**_: Any) -> None:  # noqa: ANN401
+        if not slowed:
+            slowed.append(True)
+            clock.suspend(timedelta(seconds=seconds))
+
+    env.sqs.meta.events.register("after-call.sqs.SendMessage", slow)
+
+
 def test_removal_that_outlasts_the_delay_sends_one_follow_up_reference(
-    env: Env, script: ModuleType, monkeypatch: pytest.MonkeyPatch
+    env: Env, clock: Clock
 ) -> None:
     env.seed("1001")
     window = ("--from", "2026-01-01", "--to", "2026-12-31")
     token = env.token(*window)
-    ticks = iter([1000.0, 1056.0])
-    monkeypatch.setattr(script, "monotonic", lambda: next(ticks))
+    _slow_first_send(env, clock, 56)
 
     code, _, _ = env.run(*window, "--confirm", token)
 
@@ -842,10 +900,13 @@ def test_removal_that_outlasts_the_delay_sends_one_follow_up_reference(
     assert {k: v for k, v in follow_up.items() if k != "redriveId"} == {
         k: v for k, v in first.items() if k != "redriveId"
     }
-    operations = env.operations()
-    assert operations.index("DeleteObject") < len(operations) - 1 - operations[::-1].index(
-        "SendMessage"
+    # The follow-up is sent only once the claim has been released (the marker put back).
+    marker = marker_key(MEMBER_A, "1001")
+    release = max(
+        i for i, (name, p) in enumerate(env.calls) if name == "PutObject" and p["Key"] == marker
     )
+    last_send = max(i for i, (name, _) in enumerate(env.calls) if name == "SendMessage")
+    assert release < last_send
 
 
 def test_zero_delay_always_follows_removal_with_a_reference(env: Env) -> None:
@@ -1012,23 +1073,28 @@ def test_partial_failures_are_reported_and_failed_cases_keep_their_records(env: 
     assert "summary reference not sent (InternalError); nothing changed" in out
     assert f"failed      {MEMBER_A} 4003" in out
     assert "removal failed (InternalError); the processed record was kept" in out
+    # The checkpoint removed before the failure is restored; the failed delete is reported.
+    line = _report_line(out, "4003")
+    assert f"the {STAGES[0]} checkpoint this run had removed was restored" in line
+    assert f"the delete of the {STAGES[1]} checkpoint failed and may have taken effect" in line
+    [listing] = _commands(out, "aws s3api list-object-versions")
+    assert _flag(listing, "--prefix") == checkpoint_key(MEMBER_A, "4003", STAGES[1])
     assert "Totals: failed 2, requeued 1" in out
     assert env.removed(PROCESSED, done.key)
     assert env.unchanged(unsent)
     assert env.unchanged(undeleted)
+    assert _kinds(env, checkpoint_key(MEMBER_A, "4003", STAGES[0]))[0] == "version"
+    assert env.versions(RAW, checkpoint_key(MEMBER_A, "4003", STAGES[0]))[0][2]
     for stage in STAGES:
         assert env.versions(RAW, checkpoint_key(MEMBER_A, "4002", stage))[0][0] == "version"
 
 
-def test_follow_up_send_failure_prints_the_reference_to_send(
-    env: Env, script: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_follow_up_send_failure_prints_the_reference_to_send(env: Env, clock: Clock) -> None:
     env.seed("4001")
     window = ("--from", "2026-01-01", "--to", "2026-12-31")
     token = env.token(*window)
     _fail(env, "SendMessage", lambda p: p.get("DelaySeconds") == 0)
-    ticks = iter([0.0, 100.0])
-    monkeypatch.setattr(script, "monotonic", lambda: next(ticks))
+    _slow_first_send(env, clock, 100)
 
     code, out, _ = env.run(*window, "--confirm", token)
 
@@ -1263,6 +1329,306 @@ def test_a_403_while_removing_checkpoints_fails_the_case_as_a_permission_error(e
     assert env.unchanged(seeded)
     restored = env.s3.get_object(Bucket=RAW, Key=marker)["Body"].read()
     assert json.loads(restored) == json.loads(original_marker)
+
+
+# --- claim fencing, delivery after release and partial removal ---------------------------------
+
+
+def _on_checkpoint_head(env: Env, number: int, action: Callable[[], None]) -> None:
+    """Run `action` just before the `number`-th checkpoint HEAD request (1-based)."""
+    seen: list[str] = []
+
+    def hook(params: dict[str, Any], **_: Any) -> None:  # noqa: ANN401
+        if "/checkpoints/" in params["Key"]:
+            seen.append(params["Key"])
+            if len(seen) == number:
+                action()
+
+    env.s3.meta.events.register("provide-client-params.s3.HeadObject", hook)
+
+
+def test_the_claim_safety_margin_is_well_inside_the_claim_lifetime(script: ModuleType) -> None:
+    assert script.CLAIM_SAFETY_MARGIN <= RESET_CLAIM_STALE_AFTER / 4
+
+
+@pytest.mark.parametrize("suspended", ["monotonic", "wall"])
+def test_a_reprocess_suspended_past_the_claim_safety_margin_stops_before_removing_anything(
+    env: Env, script: ModuleType, clock: Clock, suspended: str
+) -> None:
+    seeded = env.seed("7001")
+    window = ("--from", "2026-01-01", "--to", "2026-12-31")
+    token = env.token(*window)
+    marker = marker_key(MEMBER_A, "7001")
+    original_marker = env.s3.get_object(Bucket=RAW, Key=marker)["Body"].read()
+    pause = script.CLAIM_SAFETY_MARGIN + timedelta(seconds=1)
+    # Suspended after the processed-version check, before the first checkpoint is read. On
+    # Linux and macOS the monotonic clock does not advance while the computer sleeps.
+    _on_checkpoint_head(
+        env,
+        1,
+        lambda: clock.suspend(pause, wall=suspended == "wall", mono=suspended == "monotonic"),
+    )
+
+    code, out, _ = env.run(*window, "--confirm", token)
+
+    assert code == 1
+    line = _report_line(out, "7001")
+    assert line.startswith("failed ")
+    assert "stopped before removing anything" in line
+    assert "older than the 10-minute safety margin" in line
+    assert env.unchanged(seeded)
+    for stage in STAGES:
+        assert _kinds(env, checkpoint_key(MEMBER_A, "7001", stage)) == ["version"]
+    assert [p["Key"] for name, p in env.calls if name == "DeleteObject"] == []
+    # The claim was still this run's own, so the checked marker is put back.
+    restored = env.s3.get_object(Bucket=RAW, Key=marker)["Body"].read()
+    assert json.loads(restored) == json.loads(original_marker)
+
+
+@pytest.mark.parametrize("resumed_clock", ["advanced", "unchanged"])
+@pytest.mark.parametrize("execution_started", [True, False], ids=["executing", "queued"])
+def test_a_reprocess_whose_expired_claim_was_taken_over_never_touches_the_new_owner(  # noqa: PLR0913
+    env: Env,
+    script: ModuleType,
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+    resumed_clock: str,
+    *,
+    execution_started: bool,
+) -> None:
+    env.seed("7101")
+    window = ("--from", "2026-01-01", "--to", "2026-12-31")
+    token = env.token(*window)
+    marker = marker_key(MEMBER_A, "7101")
+    summary_checkpoint = checkpoint_key(MEMBER_A, "7101", STAGES[0])
+    later = NOW + RESET_CLAIM_STALE_AFTER + timedelta(seconds=2)
+    monkeypatch.setattr(starter, "now", lambda: later)
+    takeover: dict[str, Any] = {}
+
+    def suspended_until_the_claim_expired() -> None:
+        # Operator A's process sleeps after its version check. Its claim expires, operator B
+        # reprocesses the case, and B's reference may already have started an execution.
+        if resumed_clock == "advanced":
+            clock.wall = later
+        else:
+            # A's own clocks show no pause (for example a clock that is behind); only the
+            # stored claim can tell it that it lost the case.
+            monkeypatch.setattr(script, "now", lambda: later)
+        mark = len(env.calls)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            takeover["code"] = script.main(
+                ["--env", UNIQUE, "--config-dir", str(env.config_dir), *window, "--confirm", token]
+            )
+        takeover["out"] = output.getvalue()
+        [message] = [
+            json.loads(p["MessageBody"]) for name, p in env.calls[mark:] if name == "SendMessage"
+        ]
+        takeover["message"] = message
+        if execution_started:
+            assert start_workflow(env, message)["outcome"] == "started"
+            takeover["checkpoint"] = env.put(RAW, summary_checkpoint, {"synthetic": "new run"})
+        takeover["marker"] = env.s3.head_object(Bucket=RAW, Key=marker)["VersionId"]
+        takeover["after"] = len(env.calls)
+
+    _on_checkpoint_head(env, 1, suspended_until_the_claim_expired)
+
+    code, out, _ = env.run(*window, "--confirm", token)
+
+    assert takeover["code"] == 0
+    assert f"requeued    {MEMBER_A} 7101" in takeover["out"]
+    assert code == 1
+    line = _report_line(out, "7101")
+    assert line.startswith("failed ")
+    assert "the reprocess claim on workflow.json was taken over by another process" in line
+    assert "stopped before removing anything" in line
+    resumed = [name for name, _ in env.calls[takeover["after"] :]]
+    assert "DeleteObject" not in resumed
+    assert "PutObject" not in resumed
+    assert "SendMessage" not in resumed
+    assert env.s3.head_object(Bucket=RAW, Key=marker)["VersionId"] == takeover["marker"]
+    if execution_started:
+        assert env.versions(RAW, summary_checkpoint)[0] == ("version", takeover["checkpoint"], True)
+    else:
+        # B put back the expired claim it took over, byte for byte; A still recognises that
+        # this is no longer its own claim, and B's queued reference starts the new execution.
+        assert start_workflow(env, takeover["message"])["outcome"] == "started"
+
+
+def test_a_claim_that_expires_during_removal_stops_and_prints_the_exact_recovery(
+    env: Env, script: ModuleType, clock: Clock
+) -> None:
+    seeded = env.seed("7201")
+    window = ("--from", "2026-01-01", "--to", "2026-12-31")
+    token = env.token(*window)
+    keys = [checkpoint_key(MEMBER_A, "7201", stage) for stage in STAGES]
+    before = [env.versions(RAW, key)[0][1] for key in keys]
+    _on_checkpoint_head(env, 2, lambda: clock.suspend(script.CLAIM_SAFETY_MARGIN * 2))
+
+    code, out, _ = env.run(*window, "--confirm", token)
+
+    assert code == 1
+    line = _report_line(out, "7201")
+    assert line.startswith("failed ")
+    assert "stopped during removal" in line
+    assert "older than the 10-minute safety margin" in line
+    assert "the processed record was kept" in line
+    assert f"the {STAGES[0]} checkpoint is hidden by a delete marker this run created" in line
+    assert env.unchanged(seeded)
+    # Nothing is restored without a verified claim; the hidden checkpoint is listed instead.
+    assert _kinds(env, keys[0])[0] == "delete-marker"
+    for key in keys[1:]:
+        assert _kinds(env, key) == ["version"]
+    [command] = _commands(out, "aws s3api delete-object")
+    assert _flag(command, "--bucket") == RAW
+    assert _flag(command, "--key") == keys[0]
+    assert _flag(command, "--region") == REGION
+    assert "--profile" not in command
+    # The printed checks of the conditions for restoring: the processed record and the marker.
+    [record_check] = _commands(out, "aws s3api head-object")
+    assert (_flag(record_check, "--bucket"), _flag(record_check, "--key")) == (
+        PROCESSED,
+        seeded.key,
+    )
+    [marker_check] = _commands(out, "aws s3api get-object")
+    assert _flag(marker_check, "--key") == marker_key(MEMBER_A, "7201")
+
+    env.s3.delete_object(
+        Bucket=RAW, Key=keys[0], VersionId=_flag(command, "--version-id")
+    )  # the printed step
+    assert env.versions(RAW, keys[0])[0] == ("version", before[0], True)
+
+
+@pytest.mark.parametrize("undo", ["permitted", "denied"])
+def test_a_denied_processed_record_delete_reports_and_restores_the_removed_checkpoints(
+    env: Env, undo: str
+) -> None:
+    seeded = env.seed("7301")
+    window = ("--from", "2026-01-01", "--to", "2026-12-31")
+    token = env.token(*window)
+    keys = [checkpoint_key(MEMBER_A, "7301", stage) for stage in STAGES]
+    before = [env.versions(RAW, key)[0][1] for key in keys]
+    _deny(
+        env,
+        "DeleteObject",
+        lambda p: p["Bucket"] == PROCESSED or ("VersionId" in p and undo == "denied"),
+        "AccessDenied",
+    )
+
+    code, out, _ = env.run(*window, "--confirm", token)
+
+    assert code == 1
+    line = _report_line(out, "7301")
+    assert line.startswith("failed ")
+    assert "removal failed (permission denied (AccessDenied" in line
+    assert "the processed record was kept" in line
+    assert env.unchanged(seeded)
+    stages = ", ".join(STAGES)
+    if undo == "permitted":
+        assert f"the {stages} checkpoints this run had removed were restored" in line
+        for key, version in zip(keys, before, strict=True):
+            assert env.versions(RAW, key)[0] == ("version", version, True)
+        assert _commands(out, "aws ") == []
+        return
+    assert f"the {stages} checkpoints are hidden by delete markers this run created" in line
+    assert "s3:DeleteObjectVersion" in line
+    commands = _commands(out, "aws s3api delete-object")
+    assert [_flag(c, "--key") for c in commands] == keys
+    for command, key in zip(commands, keys, strict=True):
+        assert _flag(command, "--bucket") == RAW
+        assert _flag(command, "--region") == REGION
+        assert env.versions(RAW, key)[0] == ("delete-marker", _flag(command, "--version-id"), True)
+    # Following the printed steps with sufficient permissions restores every checkpoint.
+    operator = boto3.client("s3", region_name=REGION)
+    for command in commands:
+        operator.delete_object(
+            Bucket=_flag(command, "--bucket"),
+            Key=_flag(command, "--key"),
+            VersionId=_flag(command, "--version-id"),
+        )
+    for key, version in zip(keys, before, strict=True):
+        assert env.versions(RAW, key)[0] == ("version", version, True)
+
+
+def _one_receive_redrive_policy(env: Env) -> str:
+    """The supported minimum `maxReceiveCount` of 1 on the summary queue; the DLQ URL."""
+    dlq = env.sqs.create_queue(QueueName=f"{QUEUE}-DLQ")["QueueUrl"]
+    arn = env.sqs.get_queue_attributes(QueueUrl=dlq, AttributeNames=["QueueArn"])["Attributes"][
+        "QueueArn"
+    ]
+    env.sqs.set_queue_attributes(
+        QueueUrl=env.queue_url,
+        Attributes={
+            "RedrivePolicy": json.dumps({"deadLetterTargetArn": arn, "maxReceiveCount": 1})
+        },
+    )
+    return str(dlq)
+
+
+def _poll_starter(env: Env, outcomes: list[str]) -> None:
+    """One summary-queue poll by the Workflow Starter. A failed record is left for a retry."""
+    received = env.sqs.receive_message(
+        QueueUrl=env.queue_url, MaxNumberOfMessages=10, VisibilityTimeout=0
+    ).get("Messages", [])
+    for message in received:
+        try:
+            outcome = start_workflow(env, json.loads(message["Body"]))["outcome"]
+        except starter.CaseResetInProgressError:
+            outcomes.append("resetInProgress")
+            continue
+        outcomes.append(str(outcome))
+        env.sqs.delete_message(QueueUrl=env.queue_url, ReceiptHandle=message["ReceiptHandle"])
+
+
+@pytest.mark.usefixtures("starter_clock")
+@pytest.mark.parametrize("first_delivery", ["before-removal", "under-the-claim"])
+def test_a_follow_up_reference_is_delivered_only_after_the_claim_is_released(
+    env: Env, script: ModuleType, monkeypatch: pytest.MonkeyPatch, first_delivery: str
+) -> None:
+    seeded = env.seed("7401")
+    dlq = _one_receive_redrive_policy(env)
+    window = ("--from", "2026-01-01", "--to", "2026-12-31", "--delay-seconds", "0")
+    token = env.token(*window)
+    outcomes: list[str] = []
+    sends: list[int] = []
+
+    def poll_after_send(**_: Any) -> None:  # noqa: ANN401
+        sends.append(1)
+        if first_delivery == "before-removal" or len(sends) > 1:
+            _poll_starter(env, outcomes)
+
+    env.sqs.meta.events.register("after-call.sqs.SendMessage", poll_after_send)
+    release = script.Executor._release
+
+    def poll_then_release(self: Any, *args: Any) -> Any:  # noqa: ANN401
+        if first_delivery == "under-the-claim":
+            # The record is gone but the claim is still held: the starter fails the record.
+            _poll_starter(env, outcomes)
+        return release(self, *args)
+
+    monkeypatch.setattr(script.Executor, "_release", poll_then_release)
+
+    code, out, _ = env.run(*window, "--confirm", token)
+    _poll_starter(env, outcomes)  # later polls; an exhausted record moves to the DLQ
+
+    first_outcome = "alreadyProcessed" if first_delivery == "before-removal" else "resetInProgress"
+    assert outcomes == [first_outcome, "started"]
+    assert len(env.sfn.started()) == 1
+    assert code == 0
+    line = _report_line(out, "7401")
+    assert line.startswith("requeued ")
+    assert "follow-up reference sent after the claim was released" in line
+    assert env.removed(PROCESSED, seeded.key)
+    [(first, _), (follow_up, _)] = env.sent()
+    assert follow_up["redriveId"] == f"{first['redriveId']}-f"
+    dead = env.sqs.receive_message(QueueUrl=dlq, MaxNumberOfMessages=10).get("Messages", [])
+    if first_delivery == "before-removal":
+        assert dead == []
+    else:
+        # Only the early first copy is dead-lettered; the report says it is a duplicate.
+        assert [json.loads(m["Body"])["redriveId"] for m in dead] == [first["redriveId"]]
+        assert "harmless duplicate" in line
+    assert env.sqs.receive_message(QueueUrl=env.queue_url).get("Messages", []) == []
 
 
 def test_output_keys_match_the_core_stack_outputs(script: ModuleType) -> None:

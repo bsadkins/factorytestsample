@@ -64,7 +64,8 @@ Uncertain starts:
   Only a refusal for lack of permission proves that no task started. Any other failed, timed-out
   or unreadable StartMessageMoveTask response is reported as UNKNOWN, because SQS may have
   accepted the request (the AWS CLI also retries some failures itself). Inspect the dead-letter
-  queue and its move tasks with the printed commands before retrying.
+  queue and its move tasks with the printed commands before retrying; they use the same Region
+  and --profile as the redrive.
 
 Exit status: 0 started or nothing to redrive, 1 an AWS request failed, the task failed or its
 start is unknown, 2 invalid options or target, 3 cancelled or not confirmed.
@@ -376,10 +377,22 @@ confirmed() {
   return 0
 }
 
+cli_options() {
+  # The Region and profile of this run, shell-quoted, for the AWS CLI commands the script prints.
+  printf -- '--region %q' "$REGION"
+  if [[ -n $PROFILE ]]; then
+    printf -- ' --profile %q' "$PROFILE"
+  fi
+}
+
+print_progress_command() {
+  printf 'Progress: aws sqs list-message-move-tasks --source-arn %q %s\n' "$DLQ_ARN" "$(cli_options)"
+}
+
 print_inspect_commands() {
-  printf 'Progress: aws sqs list-message-move-tasks --source-arn %s --region %s\n' "$DLQ_ARN" "$REGION"
-  printf 'DLQ depth: aws sqs get-queue-attributes --queue-url %s --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible --region %s\n' \
-    "$DLQ_URL" "$REGION"
+  print_progress_command
+  printf 'DLQ depth: aws sqs get-queue-attributes --queue-url %q --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible %s\n' \
+    "$DLQ_URL" "$(cli_options)"
 }
 
 start_unknown() {
@@ -439,8 +452,8 @@ print(detail)
   fi
   printf 'Moving a message back to %s does not mean it was processed. Committed cases are answered as already processed; other messages are retried by the stage and return to %s if they fail again. Check the dead-letter queue, the stage logs and the alarms for the actual results.\n' \
     "$SOURCE_NAME" "$DLQ_NAME"
-  printf 'Progress: aws sqs list-message-move-tasks --source-arn %s --region %s\n' "$DLQ_ARN" "$REGION"
-  printf 'Cancel:   aws sqs cancel-message-move-task --task-handle %s --region %s\n' "$handle" "$REGION"
+  print_progress_command
+  printf 'Cancel:   aws sqs cancel-message-move-task --task-handle %q %s\n' "$handle" "$(cli_options)"
   case $status in
     FAILED* | CANCELLED* | unknown) exit "$EXIT_FAILED" ;;
   esac

@@ -13,8 +13,9 @@ makes each selected case eligible for analysis again:
   stage checkpoints and then the processed record are removed while the message is delayed. A
   message that arrives while the record still exists is answered as already processed, so an
   interrupted reprocess leaves the case as it was. If the time from just before the send until
-  removal finished came close to (or exceeded) the delay, a follow-up reference is sent; duplicate
-  references never start a second execution.
+  the claim (below) was released came close to (or exceeded) the delay, a follow-up reference is
+  sent after the release, when the starter can accept it; duplicate references never start a
+  second execution.
 - rediscover: when the raw inputs have expired but the case is still inside the collection
   lookback window, the checkpoints and processed record are removed and the next scheduled run
   collects and analyses the case again.
@@ -31,9 +32,17 @@ changed the marker first makes the claim fail, and the case is skipped. With the
 processed record is checked again immediately before the checkpoints are removed, and every
 removal is conditional on the ETag that was read. Afterwards the original marker is put back.
 
-Removals are plain deletes, which add an S3 delete marker. Earlier versions are never deleted by
-version ID, so no older processed record or checkpoint can become current again; the previous
-processed version stays restorable until the bucket's noncurrent-version expiry.
+A claim is a lease, not a lock: a process that stalls for an hour (a suspended laptop, say) can
+find it taken over. So before every change the script checks that `workflow.json` is still its
+own claim (same version ID and ETag) and that the claim is younger than `CLAIM_SAFETY_MARGIN`,
+and otherwise stops without changing anything more.
+
+Removals are plain deletes, which add an S3 delete marker. If a removal stops part way, the
+script removes the delete markers it has just created (while its claim is verifiably held), which
+makes the checkpoints current again, or reports them with the exact commands to do so. No other
+version is ever deleted by version ID, so nothing older than what was current before the run can
+become current again; the previous processed version stays restorable until the bucket's
+noncurrent-version expiry.
 """
 
 from __future__ import annotations
@@ -43,6 +52,7 @@ import hashlib
 import json
 import re
 import secrets
+import shlex
 import sys
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -119,8 +129,14 @@ DEFAULT_MAX_CASES: Final = 100
 MAX_CASES_LIMIT: Final = 5000
 DEFAULT_DELAY_SECONDS: Final = 60
 MAX_DELAY_SECONDS: Final = 900  # the SQS per-message delay limit
-# A follow-up reference is sent when removal finished this close to (or after) the delay ending.
+# A follow-up reference is sent when the claim was released this close to (or after) the delay
+# ending.
 FOLLOW_UP_MARGIN_SECONDS: Final = 5
+# The Workflow Starter and Case Cleanup take over a reset claim once it is an hour old
+# (RESET_CLAIM_STALE_AFTER). The script makes no change under a claim older than this, so a
+# takeover can only overlap a change if the process stalls for most of an hour between its last
+# check and that one request.
+CLAIM_SAFETY_MARGIN: Final = timedelta(minutes=10)
 # Rediscovery needs the case to stay inside the next scheduled runs' creation window.
 REDISCOVERY_MARGIN: Final = timedelta(days=2)
 # An ownership marker whose execution does not exist yet may still be started by a starter.
@@ -161,6 +177,9 @@ NEEDS_CLAIM: Final = "s3:PutObject and s3:DeleteObject on the raw workflow.json"
 NEEDS_REMOVE: Final = (
     "s3:ListBucket on the raw bucket and s3:DeleteObject on the checkpoints and processed record"
 )
+NEEDS_UNDO: Final = "s3:DeleteObjectVersion on the raw checkpoints"
+PRECONDITION_CODES: Final = frozenset({"PreconditionFailed", "ConditionalRequestConflict"})
+HTTP_PRECONDITION: Final = frozenset({409, 412})
 
 ACTION_REQUEUE: Final = "requeue"
 ACTION_REDISCOVER: Final = "rediscover"
@@ -231,18 +250,24 @@ Safety:
   CaseInsightsCoreStack-<uniqueId> outputs in the configuration's Region. Each case is changed only
   under a conditional reset claim on its workflow.json, so two reprocesses of the same scope never
   change a case at the same time: the second skips every case the first has claimed or queued.
+  The claim expires after an hour. The script stops changing a case, and reports it as failed,
+  once its claim is older than a 10-minute safety margin or is no longer its own, so do not
+  suspend the computer or the process while it runs.
 
 Versioned objects and execution identity:
   The processed record and stage checkpoints are removed with plain deletes (S3 delete markers).
-  No version is deleted by version ID, so an older record cannot become current again. The
-  preview and report print the previous processed version ID, restorable until the bucket's
-  noncurrent-version expiry. Requeued cases use a fresh run ID and redrive ID, so the Workflow
-  Starter starts attempt 1 of a new run and never reuses a closed execution name.
+  No version is deleted by version ID except a delete marker this run has just created, to undo a
+  removal that stopped part way, so an older record cannot become current again. The preview and
+  report print the previous processed version ID, restorable until the bucket's noncurrent-version
+  expiry. Requeued cases use a fresh run ID and redrive ID, so the Workflow Starter starts attempt
+  1 of a new run and never reuses a closed execution name.
 
 Permissions:
   Besides object reads, reprocessing needs s3:ListBucket on the raw bucket (without it S3 answers
   403 instead of 404 for absent objects) and s3:GetObjectVersion on the raw communications.json.
-  A permission error is reported as such and the case is left unchanged; see docs/runbook.md.
+  A permission error in the preview changes nothing. If one stops a removal part way, the report
+  says exactly which checkpoints this run had hidden; the script restores them by removing its own
+  delete markers (s3:DeleteObjectVersion), or prints the commands to do so. See docs/runbook.md.
 
 Exit status: 0 done or nothing to do, 1 some cases failed, 2 invalid options or target,
 3 cancelled or not confirmed.
@@ -891,12 +916,86 @@ class ReprocessIds:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class Stopwatch:
+    """A start time on both the wall clock and the monotonic clock."""
+
+    wall: datetime
+    mono: float
+
+    def elapsed(self, now: datetime) -> timedelta:
+        """The larger of the wall-clock and monotonic time since the start.
+
+        The monotonic clock does not advance while the computer sleeps (on Linux and macOS),
+        and the wall clock can be set back, so neither alone bounds the real time that passed.
+        """
+        return max(now - self.wall, timedelta(seconds=monotonic() - self.mono))
+
+
+@dataclass(frozen=True, slots=True)
+class HeldClaim:
+    """This run's reset claim as stored, and when it was written."""
+
+    key: str
+    etag: str
+    version_id: str | None
+    started: Stopwatch
+
+
+class ClaimLostError(Exception):
+    """The reset claim can no longer be shown to be held; the case must not be changed further."""
+
+    def __init__(self, reason: str, *, taken_over: bool) -> None:
+        super().__init__(reason)
+        self.taken_over = taken_over
+
+
+@dataclass(slots=True)
+class Removal:
+    """What a removal changed so far: delete markers created, and deletes of unknown effect."""
+
+    markers: list[tuple[str, str]] = field(default_factory=list)  # (key, marker version ID)
+    uncertain: list[str] = field(default_factory=list)
+    record_uncertain: bool = False
+
+
+def _hide_if_unchanged(s3: S3Client, bucket: str, key: str, etag: str) -> str | None:
+    """Delete the current version of `key` while its ETag is `etag`.
+
+    Returns the version ID of the delete marker created ("" if S3 named none), or `None`,
+    deleting nothing, when the object changed or no longer exists.
+    """
+    try:
+        response = s3.delete_object(Bucket=bucket, Key=key, IfMatch=etag)
+    except ClientError as exc:
+        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if (
+            is_not_found_error(exc)
+            or _error_code(exc) in PRECONDITION_CODES
+            or status in HTTP_PRECONDITION
+        ):
+            return None
+        raise
+    return str(response.get("VersionId") or "")
+
+
+def _stage_names(keys: Sequence[str]) -> str:
+    return ", ".join(key.rsplit("/", 1)[-1].removesuffix(".json") for key in keys)
+
+
+def _plural(many: bool, one: str, several: str) -> str:
+    return several if many else one
+
+
 @dataclass(slots=True)
 class Outcome:
     planned: PlannedCase
     status: str
     detail: str
     messages: list[dict[str, Any]] = field(default_factory=list)
+    recovery: list[str] = field(default_factory=list)
+    sent: Stopwatch | None = None
+    taken_over: bool = False
 
 
 def summary_message(planned: PlannedCase, ids: ReprocessIds, redrive_id: str) -> dict[str, Any]:
@@ -918,19 +1017,22 @@ def summary_message(planned: PlannedCase, ids: ReprocessIds, redrive_id: str) ->
 class Executor:
     """Applies a confirmed plan one case at a time; see the module docstring for the order."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         deployment: Deployment,
         clients: Clients,
         ids: ReprocessIds,
         delay_seconds: int,
         now: Callable[[], datetime],
+        *,
+        profile: str | None = None,
     ) -> None:
         self.deployment = deployment
         self.clients = clients
         self.ids = ids
         self.delay_seconds = delay_seconds
         self.now = now
+        self.profile = profile
         self.running = running_cases(clients.sfn, deployment.state_machine_arn)
 
     def _send(self, message: dict[str, Any], delay: int) -> None:
@@ -939,6 +1041,9 @@ class Executor:
             MessageBody=json.dumps(message, sort_keys=True, separators=(",", ":")),
             DelaySeconds=delay,
         )
+
+    def _stopwatch(self) -> Stopwatch:
+        return Stopwatch(self.now(), monotonic())
 
     def _recheck(self, planned: PlannedCase) -> tuple[str | None, Ownership]:
         """Why the case can no longer be changed as previewed (or `None`), and its ownership."""
@@ -958,13 +1063,14 @@ class Executor:
             return None
         return _execution_reason(ownership.marker, self.deployment, self.clients, self.now())
 
-    def _claim(self, candidate: Candidate, ownership: Ownership) -> str | None:
+    def _claim(self, candidate: Candidate, ownership: Ownership) -> HeldClaim | None:
         """Replace exactly the checked `workflow.json` (or its absence) with a reset claim.
 
-        Returns the claim's ETag, or `None` when a starter, Case Cleanup or another reprocess
+        Returns the stored claim, or `None` when a starter, Case Cleanup or another reprocess
         changed the case's ownership since the check.
         """
-        claim = ResetClaim(candidate.account_id, candidate.display_id, self.now())
+        started = self._stopwatch()
+        claim = ResetClaim(candidate.account_id, candidate.display_id, started.wall)
         try:
             written = write_json(
                 self.clients.s3,
@@ -981,7 +1087,36 @@ class Executor:
             if is_not_found_error(exc):
                 return None
             raise
-        return written.etag
+        return HeldClaim(claim.key, written.etag, written.version_id, started)
+
+    def _fence(self, claim: HeldClaim) -> None:
+        """Raise `ClaimLostError` unless the claim is still this run's and well inside its life.
+
+        Called before every change under the claim. The claim is identified by its version ID as
+        well as its ETag: a reprocess that took over an expired claim puts the identical
+        document back when it finishes.
+        """
+        try:
+            current = _head(self.clients.s3, self.deployment.raw_bucket, claim.key)
+        except (ClientError, BotoCoreError) as exc:
+            reason = f"the reprocess claim could not be verified ({_describe(exc, NEEDS_READ)})"
+            raise ClaimLostError(reason, taken_over=False) from None
+        if (
+            current is None
+            or current[1] != claim.etag
+            or (claim.version_id is not None and current[0] != claim.version_id)
+        ):
+            raise ClaimLostError(
+                "the reprocess claim on workflow.json was taken over by another process",
+                taken_over=True,
+            )
+        if claim.started.elapsed(self.now()) > CLAIM_SAFETY_MARGIN:
+            minutes = int(CLAIM_SAFETY_MARGIN.total_seconds()) // 60
+            raise ClaimLostError(
+                f"the reprocess claim is older than the {minutes}-minute safety margin (was the "
+                "process or computer suspended?)",
+                taken_over=False,
+            )
 
     def _release(self, candidate: Candidate, ownership: Ownership, claim_etag: str) -> str | None:
         """Put the checked `workflow.json` back in place of the claim; why that failed, if it did.
@@ -1012,18 +1147,6 @@ class Executor:
             return _describe(exc, NEEDS_CLAIM)
         return None
 
-    def _remove_checkpoints(self, candidate: Candidate) -> bool:
-        """Delete the current checkpoints, each only while unchanged; False if one changed."""
-        s3, bucket = self.clients.s3, self.deployment.raw_bucket
-        for stage in STAGES:
-            key = checkpoint_key(candidate.account_id, candidate.display_id, stage)
-            current = _head(s3, bucket, key)
-            if current is None:
-                continue
-            if not delete_if_unchanged(s3, bucket, key, current[1]) and _head(s3, bucket, key):
-                return False
-        return True
-
     def apply(self, planned: PlannedCase) -> Outcome:
         try:
             return self._apply(planned)
@@ -1041,7 +1164,7 @@ class Executor:
         if reason is not None:
             return Outcome(planned, "skipped", reason)
         try:
-            claim_etag = self._claim(candidate, ownership)
+            claim = self._claim(candidate, ownership)
         except (ClientError, BotoCoreError) as exc:
             return Outcome(
                 planned,
@@ -1049,27 +1172,33 @@ class Executor:
                 f"the reprocess claim was not written ({_describe(exc, NEEDS_CLAIM)}); "
                 "nothing changed",
             )
-        if claim_etag is None:
+        if claim is None:
             return Outcome(
                 planned,
                 "skipped",
                 "the case's ownership changed since the check (a starter, Case Cleanup or "
                 "another reprocess); record kept",
             )
+        return self._apply_and_release(planned, ownership, claim)
+
+    def _apply_and_release(
+        self, planned: PlannedCase, ownership: Ownership, claim: HeldClaim
+    ) -> Outcome:
+        candidate = planned.candidate
         try:
-            outcome = self._apply_claimed(planned, ownership)
+            outcome = self._apply_claimed(planned, ownership, claim)
         except (ClientError, BotoCoreError, S3JsonError) as exc:
             outcome = Outcome(planned, "failed", f"{_error_code(exc)}; see the detail above")
-        release_error = self._release(candidate, ownership, claim_etag)
+        if outcome.taken_over:
+            return outcome  # workflow.json belongs to someone else now; leave it alone
+        release_error = self._release(candidate, ownership, claim.etag)
         if release_error is not None:
-            outcome.status = "failed"
-            outcome.detail += (
-                f"; the reprocess claim on workflow.json was not released ({release_error}), so "
-                "the Workflow Starter waits until it is an hour old"
-            )
-        return outcome
+            return self._unreleased(outcome, release_error)
+        return self._after_release(outcome)
 
-    def _apply_claimed(self, planned: PlannedCase, ownership: Ownership) -> Outcome:
+    def _apply_claimed(
+        self, planned: PlannedCase, ownership: Ownership, claim: HeldClaim
+    ) -> Outcome:
         try:
             reason = self._recheck_claimed(planned, ownership)
         except ClientError as exc:
@@ -1079,10 +1208,20 @@ class Executor:
         if reason is not None:
             return Outcome(planned, "skipped", reason)
         messages: list[dict[str, Any]] = []
-        # SQS can accept the message, and start its delay, long before the response arrives.
-        send_started = monotonic()
+        sent: Stopwatch | None = None
         if planned.action == ACTION_REQUEUE:
+            try:
+                self._fence(claim)
+            except ClaimLostError as exc:
+                return Outcome(
+                    planned,
+                    "failed",
+                    f"stopped before any change: {exc}; nothing changed",
+                    taken_over=exc.taken_over,
+                )
             message = summary_message(planned, self.ids, self.ids.redrive_id)
+            # SQS can accept the message, and start its delay, long before the response arrives.
+            sent = self._stopwatch()
             try:
                 self._send(message, self.delay_seconds)
             except (ClientError, BotoCoreError) as exc:
@@ -1092,44 +1231,287 @@ class Executor:
                     f"summary reference not sent ({_error_code(exc)}); nothing changed",
                 )
             messages.append(message)
-        return self._remove(planned, messages, send_started)
+        outcome = self._remove(planned, messages, claim)
+        outcome.sent = sent
+        return outcome
 
     def _remove(
-        self, planned: PlannedCase, messages: list[dict[str, Any]], send_started: float
+        self, planned: PlannedCase, messages: list[dict[str, Any]], claim: HeldClaim
     ) -> Outcome:
+        removal = Removal()
         try:
-            reason = self._delete_case(planned.candidate)
+            reason = self._delete_case(planned.candidate, claim, removal)
+        except ClaimLostError as exc:
+            return self._stopped(planned, messages, removal, exc)
         except (ClientError, BotoCoreError) as exc:
-            return Outcome(
-                planned,
-                "failed",
-                f"removal failed ({_describe(exc, NEEDS_REMOVE)}); the processed record was kept "
-                "and any queued reference is answered as already processed",
-                messages,
-            )
+            failure = f"removal failed ({_describe(exc, NEEDS_REMOVE)})"
+            return self._removal_failed(planned, messages, removal, claim, failure)
         if reason is not None:
-            return Outcome(planned, "skipped", reason, messages)
+            return self._partial(planned, "skipped", reason, messages, removal, claim=claim)
         if planned.action == ACTION_REDISCOVER:
             return Outcome(
                 planned, "rediscover", "record removed; the next scheduled run collects the case"
             )
-        if monotonic() - send_started >= self.delay_seconds - FOLLOW_UP_MARGIN_SECONDS:
-            # The first reference may have arrived before the record was removed.
-            return self._follow_up(planned, messages)
         return Outcome(planned, "requeued", "record removed; new execution queued", messages)
 
-    def _delete_case(self, candidate: Candidate) -> str | None:
-        """Remove the checkpoints, then the processed record; the reason when either changed."""
-        s3, processed = self.clients.s3, self.deployment.processed_bucket
+    def _delete_case(self, candidate: Candidate, claim: HeldClaim, removal: Removal) -> str | None:
+        """Hide the checkpoints, then the processed record; the reason when either changed.
+
+        Every delete is preceded by a fence check, and every delete marker created is recorded
+        in `removal`, so a run that stops part way can say exactly what it changed.
+        """
+        s3, raw, processed = (
+            self.clients.s3,
+            self.deployment.raw_bucket,
+            self.deployment.processed_bucket,
+        )
         # Checked again right before the first delete, so a record rewritten in the meantime
         # keeps the checkpoints it was made from.
         if _head_version(s3, processed, candidate.key) != candidate.version_id:
             return RECORD_CHANGED
-        if not self._remove_checkpoints(candidate):
-            return "a stage checkpoint changed during reprocessing; record kept"
-        if not delete_if_unchanged(s3, processed, candidate.key, candidate.etag):
-            return RECORD_CHANGED
-        return None
+        for stage in STAGES:
+            key = checkpoint_key(candidate.account_id, candidate.display_id, stage)
+            current = _head(s3, raw, key)
+            if current is None:
+                continue
+            self._fence(claim)
+            try:
+                marker = _hide_if_unchanged(s3, raw, key, current[1])
+            except (ClientError, BotoCoreError) as exc:
+                if not _is_access_denied(exc):
+                    removal.uncertain.append(key)
+                raise
+            if marker is None:
+                if _head(s3, raw, key) is not None:
+                    return "a stage checkpoint changed during reprocessing; record kept"
+                continue
+            if marker:
+                removal.markers.append((key, marker))
+            else:  # pragma: no cover - versioned buckets always name the delete marker
+                removal.uncertain.append(key)
+        self._fence(claim)
+        try:
+            deleted = _hide_if_unchanged(s3, processed, candidate.key, candidate.etag)
+        except (ClientError, BotoCoreError) as exc:
+            removal.record_uncertain = not _is_access_denied(exc)
+            raise
+        return RECORD_CHANGED if deleted is None else None
+
+    def _stopped(
+        self,
+        planned: PlannedCase,
+        messages: list[dict[str, Any]],
+        removal: Removal,
+        lost: ClaimLostError,
+    ) -> Outcome:
+        """The claim was lost (or could not be verified) during removal: change nothing more."""
+        if not removal.markers and not removal.uncertain:
+            detail = (
+                f"stopped before removing anything: {lost}; the processed record and checkpoints "
+                "are unchanged"
+            )
+            if messages:
+                detail += ", and the queued reference is answered as already processed"
+            return Outcome(planned, "failed", detail, messages, taken_over=lost.taken_over)
+        outcome = self._partial(
+            planned,
+            "failed",
+            f"stopped during removal: {lost}; the processed record was kept",
+            messages,
+            removal,
+            claim=None,
+        )
+        outcome.taken_over = lost.taken_over
+        return outcome
+
+    def _removal_failed(
+        self,
+        planned: PlannedCase,
+        messages: list[dict[str, Any]],
+        removal: Removal,
+        claim: HeldClaim,
+        failure: str,
+    ) -> Outcome:
+        if removal.record_uncertain:
+            # The processed-record delete may have taken effect; only S3 can say.
+            try:
+                self._fence(claim)
+                current = _head_version(
+                    self.clients.s3, self.deployment.processed_bucket, planned.candidate.key
+                )
+            except (ClaimLostError, ClientError, BotoCoreError):
+                current = None
+            if current != planned.candidate.version_id:
+                return self._partial(
+                    planned,
+                    "failed",
+                    f"{failure}; the processed record may have been removed",
+                    messages,
+                    removal,
+                    claim=None,
+                    not_restored="a new execution of the case would reuse restored checkpoints",
+                )
+        return self._partial(
+            planned,
+            "failed",
+            f"{failure}; the processed record was kept",
+            messages,
+            removal,
+            claim=claim,
+        )
+
+    def _partial(  # noqa: PLR0913
+        self,
+        planned: PlannedCase,
+        status: str,
+        detail: str,
+        messages: list[dict[str, Any]],
+        removal: Removal,
+        *,
+        claim: HeldClaim | None,
+        not_restored: str = "the claim can no longer be shown to be held",
+    ) -> Outcome:
+        """Report, and while `claim` is verifiably held undo, a removal that stopped part way.
+
+        Undoing removes this run's own delete markers, which makes the checkpoint versions that
+        were current before the run current again. Without a verified claim, or permission, the
+        report lists the delete markers and the exact commands to remove them instead.
+        """
+        restored: list[str] = []
+        problem = not_restored
+        if claim is not None:
+            for key, marker in removal.markers:
+                try:
+                    self._fence(claim)
+                    self.clients.s3.delete_object(
+                        Bucket=self.deployment.raw_bucket, Key=key, VersionId=marker
+                    )
+                except ClaimLostError as exc:
+                    problem = str(exc)
+                    break
+                except (ClientError, BotoCoreError) as exc:
+                    problem = f"restoring them failed ({_describe(exc, NEEDS_UNDO)})"
+                    break
+                restored.append(key)
+        hidden = removal.markers[len(restored) :]
+        parts = [detail]
+        if restored:
+            many = len(restored) > 1
+            parts.append(
+                f"the {_stage_names(restored)} {_plural(many, 'checkpoint', 'checkpoints')} this "
+                f"run had removed {_plural(many, 'was', 'were')} restored (by removing the delete "
+                f"{_plural(many, 'marker', 'markers')} it created)"
+            )
+        if hidden:
+            many = len(hidden) > 1
+            parts.append(
+                f"the {_stage_names([key for key, _ in hidden])} "
+                + _plural(
+                    many,
+                    "checkpoint is hidden by a delete marker",
+                    "checkpoints are hidden by delete markers",
+                )
+                + f" this run created and {_plural(many, 'was', 'were')} not restored because "
+                f"{problem}; see the recovery steps below"
+            )
+        if removal.uncertain:
+            parts.append(
+                f"the delete of the {_stage_names(removal.uncertain)} checkpoint failed and may "
+                "have taken effect; see the recovery steps below"
+            )
+        if messages and not removal.record_uncertain:
+            parts.append("any queued reference is answered as already processed")
+        recovery = self._recovery(planned, hidden, removal.uncertain)
+        return Outcome(planned, status, "; ".join(parts), messages, recovery)
+
+    def _cli(self, *words: str) -> str:
+        """An AWS CLI command for the deployment's Region and the profile in use, shell-quoted."""
+        command = ["aws", *words, "--region", self.deployment.config.region]
+        if self.profile:
+            command += ["--profile", self.profile]
+        return shlex.join(command)
+
+    def _recovery(
+        self, planned: PlannedCase, hidden: list[tuple[str, str]], uncertain: list[str]
+    ) -> list[str]:
+        if not hidden and not uncertain:
+            return []
+        candidate = planned.candidate
+        raw = self.deployment.raw_bucket
+        lines = [
+            f"Recovery for {candidate.account_id} {candidate.display_id}: restore its checkpoints "
+            f"only while the processed record is still version {candidate.version_id} and "
+            "workflow.json is not a reset claim (check both with the first two commands), so no "
+            "other reprocess or execution is using the case. Removing a delete marker needs "
+            f"{NEEDS_UNDO}.",
+            self._cli(
+                "s3api",
+                "head-object",
+                "--bucket",
+                self.deployment.processed_bucket,
+                "--key",
+                candidate.key,
+                "--query",
+                "VersionId",
+            ),
+            self._cli(
+                "s3api",
+                "get-object",
+                "--bucket",
+                raw,
+                "--key",
+                marker_key(candidate.account_id, candidate.display_id),
+                "/dev/stdout",
+            ),
+        ]
+        lines += [
+            self._cli("s3api", "delete-object", "--bucket", raw, "--key", key, "--version-id", m)
+            for key, m in hidden
+        ]
+        if uncertain:
+            lines.append(
+                "If the latest entry listed below is a delete marker this run created, remove it "
+                "with delete-object --version-id <its VersionId> as above:"
+            )
+            lines += [
+                self._cli("s3api", "list-object-versions", "--bucket", raw, "--prefix", key)
+                for key in uncertain
+            ]
+        return lines
+
+    def _unreleased(self, outcome: Outcome, release_error: str) -> Outcome:
+        """The claim stays until it is an hour old; say what that means for this case."""
+        planned = outcome.planned
+        removed = outcome.status in {"requeued", "rediscover"}
+        outcome.status = "failed"
+        outcome.detail += (
+            f"; the reprocess claim on workflow.json was not released ({release_error})"
+        )
+        if removed and planned.action == ACTION_REQUEUE:
+            follow_up = summary_message(planned, self.ids, f"{self.ids.redrive_id}-f")
+            outcome.detail += (
+                ". Until the claim is released or an hour old, the Workflow Starter fails the "
+                "queued reference, which can move it to the summary dead-letter queue. Once the "
+                "claim is released or an hour old, send this message to the summary queue: "
+                f"{json.dumps(follow_up, sort_keys=True)}"
+            )
+        else:
+            outcome.detail += (
+                ", so the Workflow Starter and Case Cleanup leave the case alone until the claim "
+                "is an hour old"
+            )
+        return outcome
+
+    def _after_release(self, outcome: Outcome) -> Outcome:
+        """Send the follow-up reference, if needed, now that the starter can accept it."""
+        if outcome.status != "requeued" or outcome.sent is None:
+            return outcome
+        # Time until the claim was released: a first copy delivered before then was answered
+        # as already processed or failed under the claim, and is not an effective reference.
+        due = timedelta(seconds=self.delay_seconds - FOLLOW_UP_MARGIN_SECONDS)
+        if outcome.sent.elapsed(self.now()) < due:
+            return outcome
+        return self._follow_up(outcome.planned, outcome.messages)
 
     def _follow_up(self, planned: PlannedCase, messages: list[dict[str, Any]]) -> Outcome:
         follow_up = summary_message(planned, self.ids, f"{self.ids.redrive_id}-f")
@@ -1145,7 +1527,13 @@ class Executor:
                 messages,
             )
         return Outcome(
-            planned, "requeued", "record removed; new execution queued", [*messages, follow_up]
+            planned,
+            "requeued",
+            "record removed; new execution queued, with a follow-up reference sent after the "
+            "claim was released, because the first may have been delivered before then (if a "
+            f"copy of the first, redrive ID {self.ids.redrive_id}, is in the summary dead-letter "
+            "queue, it is a harmless duplicate)",
+            [*messages, follow_up],
         )
 
 
@@ -1203,6 +1591,8 @@ def print_report(outcomes: list[Outcome], ids: ReprocessIds) -> None:
             f"{outcome.status:<11} {c.account_id} {c.display_id} previous version "
             f"{c.version_id}: {outcome.detail}"
         )
+        for line in outcome.recovery:
+            print(f"    {line}")
     counts: dict[str, int] = {}
     for outcome in outcomes:
         counts[outcome.status] = counts.get(outcome.status, 0) + 1
@@ -1281,7 +1671,7 @@ def run(args: argparse.Namespace) -> int:
     if not confirmed(token, args.confirm, len(actionable)):
         return EXIT_CANCELLED
     ids = ReprocessIds.new(now())
-    executor = Executor(deployment, clients, ids, args.delay_seconds, now)
+    executor = Executor(deployment, clients, ids, args.delay_seconds, now, profile=args.profile)
     outcomes = [executor.apply(p) for p in actionable]
     print_report(outcomes, ids)
     return EXIT_FAILED if any(o.status == "failed" for o in outcomes) else EXIT_OK

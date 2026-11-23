@@ -12,6 +12,7 @@ import os
 import pty
 import re
 import select
+import shlex
 import subprocess
 import sys
 import time
@@ -100,7 +101,7 @@ elif (service, operation) == ("sqs", "get-queue-attributes"):
                              if k in options["attribute-names"]}}}}
 elif (service, operation) == ("sqs", "list-message-move-tasks"):
     tasks = state.get("tasks_after_start" if started else "tasks", [])
-    reply = {{"Results": tasks[: int(options["max-results"][0])]}}
+    reply = {{"Results": tasks[: int(options.get("max-results", ["10"])[0])]}}
 elif (service, operation) == ("sqs", "start-message-move-task"):
     open(os.environ["FAKE_AWS_STATE"] + ".started", "w").close()
     # SQS accepted the task, but the caller never sees a usable acknowledgement.
@@ -699,6 +700,47 @@ def test_an_unconfirmed_start_is_reported_as_unknown_not_as_nothing_moved(
         f"ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible --region {REGION}"
     ) in result.out
     assert result.writes() == ["sqs start-message-move-task"]
+
+
+@pytest.mark.parametrize("start_outcome", ["lost", "started"])
+def test_printed_commands_use_the_selected_profile_and_region(
+    harness: Harness, start_outcome: str
+) -> None:
+    profile = "case operations"  # a name that needs quoting in a shell command
+    token = harness.token(*TARGET, "--profile", profile)
+    if start_outcome == "lost":
+        harness.state["start_outcome"] = "lost"
+
+    result = harness.run(*TARGET, "--profile", profile, "--confirm", token)
+
+    labels = ("Progress:", "DLQ depth:") if start_outcome == "lost" else ("Progress:", "Cancel:")
+    assert result.code == (1 if start_outcome == "lost" else 0)
+    commands = [
+        line.split(":", 1)[1].strip() for line in result.out.splitlines() if line.startswith(labels)
+    ]
+    assert len(commands) == 2
+    for command in commands:
+        words = shlex.split(command)
+        assert words[0] == "aws"
+        assert option(words, "--profile") == [profile]
+        assert option(words, "--region") == [REGION]
+    if start_outcome == "started":
+        return
+    # The UNKNOWN-path inspection commands run as printed, with the same credentials.
+    for command in commands:
+        harness.reset()
+        completed = subprocess.run(  # noqa: S603 - the printed command, against the stub
+            ["bash", "-c", command],  # noqa: S607
+            env=harness.environment(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        [call] = harness.calls()
+        assert option(call, "--profile") == [profile]
+        assert option(call, "--region") == [REGION]
 
 
 def test_a_started_task_whose_status_cannot_be_read_is_not_reported_as_success(
