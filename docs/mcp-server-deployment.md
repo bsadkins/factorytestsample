@@ -184,7 +184,7 @@ The tools are tested locally against an SQLite-backed stand-in for Athena, botoc
 ## Finding the endpoint URL
 
 ```bash
-aws cloudformation describe-stacks \
+aws cloudformation describe-stacks --region <region> \
   --stack-name CaseInsightsMcpStack-<uniqueId> \
   --query 'Stacks[0].Outputs'
 ```

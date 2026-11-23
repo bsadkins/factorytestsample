@@ -49,7 +49,7 @@ The stack has these outputs:
    npm run verify
    npx cdk diff --all -c env=prod
    npx cdk deploy --all -c env=prod --require-approval broadening
-   aws cloudformation describe-stacks --stack-name CaseInsightsAnalyticsStack-<uniqueId> \
+   aws cloudformation describe-stacks --region <region> --stack-name CaseInsightsAnalyticsStack-<uniqueId> \
      --query 'Stacks[0].Outputs' --output table
    ```
 
@@ -287,14 +287,14 @@ In the Athena console, choose the workgroup `CaseInsights-<uniqueId>`, the data 
 From the AWS CLI:
 
 ```bash
-QUERY_ID=$(aws athena start-query-execution \
+QUERY_ID=$(aws athena start-query-execution --region <region> \
   --work-group CaseInsights-<uniqueId> \
   --query-execution-context Database=case_insights_<uniqueId> \
   --query-string "SELECT rca_category, count(*) AS cases FROM case_summary GROUP BY 1 ORDER BY 2 DESC" \
   --query 'QueryExecutionId' --output text)
-aws athena get-query-execution --query-execution-id "$QUERY_ID" \
+aws athena get-query-execution --region <region> --query-execution-id "$QUERY_ID" \
   --query 'QueryExecution.[Status.State,Status.StateChangeReason,Statistics.DataScannedInBytes]' --output text
-aws athena get-query-results --query-execution-id "$QUERY_ID" --output table
+aws athena get-query-results --region <region> --query-execution-id "$QUERY_ID" --output table
 ```
 
 No `--result-configuration` is needed; the workgroup supplies and enforces it.

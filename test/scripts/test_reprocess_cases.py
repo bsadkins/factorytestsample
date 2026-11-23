@@ -455,6 +455,10 @@ def test_help_defines_date_field_timezone_bounds_versions_and_identity() -> None
             "between 1 and 5000",
         ),
         (["--env", "../prod", "--from", "2026-01-01", "--to", "2026-01-31"], "--env must be"),
+        (
+            ["--env", "test", "--from", "2026-01-01", "--to", "9999-12-31"],
+            "--to must be 9999-12-30 or earlier",
+        ),
     ],
 )
 def test_invalid_options_fail_before_any_aws_client_exists(args: list[str], message: str) -> None:
@@ -462,7 +466,27 @@ def test_invalid_options_fail_before_any_aws_client_exists(args: list[str], mess
     result = run_cli(*args)
     assert result.returncode == 2
     assert message in result.stderr
+    assert "Traceback" not in result.stderr
     assert result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("start", "end"), [("2026-01-01", "9999-12-31"), ("9999-12-31", "9999-12-31")]
+)
+def test_the_last_representable_day_is_refused_before_any_aws_call(
+    env: Env, start: str, end: str
+) -> None:
+    # The exclusive end is midnight after --to, which does not exist after 9999-12-31.
+    seeded = env.seed("1001")
+
+    code, out, err = env.run("--from", start, "--to", end, "--dry-run")
+
+    assert code == 2
+    assert "error: --to must be 9999-12-30 or earlier. Nothing was changed." in err
+    assert out == ""
+    assert env.regions == []
+    assert env.calls == []
+    assert env.unchanged(seeded)
 
 
 def test_invalid_configuration_is_rejected_without_aws_calls(env: Env, tmp_path: Path) -> None:

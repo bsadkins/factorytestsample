@@ -341,6 +341,10 @@ def check_options(args: argparse.Namespace) -> None:
         raise UsageError("--env must be a configuration name such as dev or prod")
     if args.start > args.end:
         raise UsageError("--from must not be after --to")
+    if args.end == date.max:
+        # The exclusive end of the range is midnight after --to, which date.max does not have.
+        last = (date.max - timedelta(days=1)).isoformat()
+        raise UsageError(f"--to must be {last} or earlier")
     if args.display_ids and len(args.account_ids) != 1:
         raise UsageError("--case requires exactly one --account-id")
     if len(args.account_ids) > MAX_SCOPE_VALUES or len(args.display_ids) > MAX_SCOPE_VALUES:

@@ -340,7 +340,7 @@ None of these checks has been run, because nothing has been deployed:
 - [ ] `query_athena` rejects a non-`SELECT` statement (for example `DROP TABLE case_summary`) with `INVALID_ARGUMENTS`, and a stacked statement is rejected.
 - [ ] A 32,769-byte body returns `413` from WAF and requests above the per-IP rate return `429`.
 - [ ] Requests to each bucket and to the alarm topic without TLS are denied.
-- [ ] `aws cloudformation list-stack-instances --stack-set-name CaseInsights-MemberRole-<uniqueId> --call-as SELF` shows every instance `CURRENT`, and the collector roles can assume `Support-Case-Analysis-Role-<uniqueId>` while a role outside the organisation cannot.
+- [ ] `aws cloudformation list-stack-instances --region <region> --stack-set-name CaseInsights-MemberRole-<uniqueId> --call-as SELF` shows every instance `CURRENT`, and the collector roles can assume `Support-Case-Analysis-Role-<uniqueId>` while a role outside the organisation cannot.
 - [ ] The prod alarm email subscription is confirmed and a test notification arrives.
 - [ ] Bedrock invocation succeeds through the global profile and invoking any other model is denied.
 - [ ] Log groups, Step Functions logs and MCP access logs contain no case content after a real run.

@@ -33,7 +33,7 @@ Three decisions differ from earlier designs and are reflected throughout:
 | AWS Organizations | All features enabled; deployment from the management account itself (a delegated administrator is not supported) |
 | AWS Support plan | Business, Enterprise On-Ramp or Enterprise Support on each member account whose cases you want. The AWS Support API refuses other accounts with `SubscriptionRequiredException`; they are skipped and counted, not failed |
 | StackSets trusted access | Enabled for AWS Organizations before the first deployment (see [Step 4](#step-4-prepare-the-account-once)) |
-| Amazon Bedrock | Access to the configured Anthropic model in the deployment Region, including the Anthropic first-time use (FTU) form and the AWS Marketplace subscription where required |
+| Amazon Bedrock | Access to the configured Anthropic model in the deployment Region, including the Anthropic first-time use (FTU) form (console, or `aws bedrock put-use-case-for-model-access`; see [Step 4](#step-4-prepare-the-account-once)) and the AWS Marketplace subscription where required |
 | Network | The first `npm ci`, `pip install` and synthesis need access to the npm registry and the Python package index; wheels are then cached in `.cache/pip` |
 
 Docker, Finch and AWS credentials are not needed for local verification.
@@ -119,7 +119,32 @@ These steps need an administrator of the management account. None of them is per
 
    The last command must report `ENABLED`. `activate-organizations-access` is the CloudFormation API for the same setting and also creates the service-linked role StackSets needs; running both is harmless. Without trusted access the MemberRole stack fails to create the StackSet.
 
-2. **Enable Amazon Bedrock model access.** In the Amazon Bedrock console in `region`, open the model catalogue entry for the configured Anthropic model and complete the first-time use (FTU) form if it is requested. The account also needs a valid payment method for the AWS Marketplace subscription that is created on first use. IAM cannot complete either step; until both are done, analysis fails with access errors (see [troubleshooting](troubleshooting.md)). Global inference profiles can route requests to any AWS commercial Region; see [security](security.md#amazon-bedrock-and-global-cross-region-inference).
+2. **Enable Amazon Bedrock model access.** Both supported models (Claude Haiku 4.5 and Claude Sonnet 4.5) require the Anthropic first-time use (FTU) form, which is submitted once per account, or once in the organisation's management account for every account in the organisation, and covers all commercial Regions except opt-in Regions, where it must be submitted again. The account also needs a valid payment method for the AWS Marketplace subscription that Amazon Bedrock creates on the first invocation, and the principal making that first invocation needs `aws-marketplace:Subscribe`, `aws-marketplace:Unsubscribe` and `aws-marketplace:ViewSubscriptions`. The stacks cannot complete either step; until both are done, analysis fails with access errors (see [troubleshooting](troubleshooting.md)). Submit the form in one of two ways:
+
+   - **Console.** In the Amazon Bedrock console in `region`, open the model catalogue entry for the configured Anthropic model and complete the form when it is requested.
+   - **CLI or API.** Call `PutUseCaseForModelAccess` with the form answers. Your organisation supplies the answers; this repository does not provide them. Write them to a JSON file outside the repository, using the fields of the official form (`intendedUsers` is `"0"` for internal, `"1"` for external or `"2"` for both):
+
+     ```json
+     {
+       "companyName": "<company-name>",
+       "companyWebsite": "<company-website>",
+       "intendedUsers": "0",
+       "industryOption": "<industry>",
+       "otherIndustryOption": "<other-industry-or-empty>",
+       "useCases": "<description-of-intended-use>"
+     }
+     ```
+
+     Then submit it and read it back with AWS CLI 2.27.42 or later (`fileb://` sends the file as the binary form data, so no manual Base64 encoding is needed):
+
+     ```bash
+     aws bedrock put-use-case-for-model-access --region <region> --form-data fileb://ftu-form.json
+     aws bedrock get-use-case-for-model-access --region <region>
+     ```
+
+     The caller needs `bedrock:PutUseCaseForModelAccess` (and `bedrock:GetUseCaseForModelAccess` to read it back), the official guide attaches the `AmazonBedrockFullAccess` managed policy for these steps. The agreement can stay pending for a while after a successful submission, during which invocations still return `AccessDeniedException`; AWS sends an email when it is ready. The field list, limits and the `GetFoundationModelAvailability` status check are in [Manage model access using SDK and CLI](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html#model-access-modify) and the [`PutUseCaseForModelAccess` API reference](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_PutUseCaseForModelAccess.html). Delete the form file afterwards if your organisation treats the answers as internal.
+
+   Neither path has been exercised during development; it is listed in [Deferred live verification](#deferred-live-verification). Global inference profiles can route requests to any AWS commercial Region; see [security](security.md#amazon-bedrock-and-global-cross-region-inference). The official overview is [Access Amazon Bedrock foundation models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html).
 
 3. **Check API Gateway logging ownership** (only when `enableMcp` is `true`). The CloudWatch role used for API Gateway logs is one setting per account and Region:
 
@@ -132,10 +157,10 @@ These steps need an administrator of the management account. None of them is per
 4. **Bootstrap the CDK** once per account and Region:
 
    ```bash
-   npx cdk bootstrap aws://<managementAccountId>/<region>
+   npx cdk bootstrap aws://<managementAccountId>/<region> -c env=prod
    ```
 
-   Review the CloudFormation execution policy the bootstrap stack uses (by default `AdministratorAccess`) as described in [permissions](permissions.md#cloudformation-execution-role).
+   The CDK synthesises the app before it bootstraps, so the command needs the same `-c env=<env>` context as a deployment (`-c env=dev` works equally well; the context only selects which configuration is validated). Without it the app stops with a configuration error before anything is created. Review the CloudFormation execution policy the bootstrap stack uses (by default `AdministratorAccess`) as described in [permissions](permissions.md#cloudformation-execution-role).
 
 ## Step 5: Review and deploy
 
@@ -165,12 +190,12 @@ aws sns list-subscriptions-by-topic --region <region> \
 ## Step 7: Validate the deployment
 
 ```bash
-aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
+aws cloudformation list-stacks --region <region> --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
   --query "StackSummaries[?starts_with(StackName,'CaseInsights')].StackName"
-aws cloudformation list-stack-instances --stack-set-name CaseInsights-MemberRole-<uniqueId> \
+aws cloudformation list-stack-instances --region <region> --stack-set-name CaseInsights-MemberRole-<uniqueId> \
   --call-as SELF --query 'Summaries[].[Account,Status]' --output table
-aws lambda invoke --function-name Lambda-AccountLookup-<uniqueId> /dev/stdout
-aws glue start-crawler --name case-insights-partition-crawler-<uniqueId>
+aws lambda invoke --region <region> --function-name Lambda-AccountLookup-<uniqueId> /dev/stdout
+aws glue start-crawler --region <region> --name case-insights-partition-crawler-<uniqueId>
 # Athena workgroup CaseInsights-<uniqueId>:
 # SELECT RCA_Category, count(*) FROM case_summary GROUP BY 1 ORDER BY 2 DESC;
 ```
@@ -180,15 +205,15 @@ What to expect:
 1. Every stack of the environment is listed (`CaseInsightsCoreStack-<uniqueId>`, `CaseInsightsMemberRoleStack-<uniqueId>` and, when enabled, the Analytics, MCP and shared API logging stacks).
 2. Every targeted member account has a stack instance with status `CURRENT`. `OUTDATED` with a failure reason usually means trusted access or the target IDs are wrong; see [troubleshooting](troubleshooting.md).
 3. The account lookup invocation returns `runId`, `accountListKey`, `accountsSelected` and `created`, and starts a run. Follow it on the dashboard `CaseInsights-<uniqueId>` as described in [usage](usage.md#following-progress). The run is complete when `DailyRunCompleted` appears.
-4. Once processed records exist, the crawler adds their partitions (it takes a few minutes; check with `aws glue get-crawler --name case-insights-partition-crawler-<uniqueId> --query 'Crawler.State'`).
+4. Once processed records exist, the crawler adds their partitions (it takes a few minutes; check with `aws glue get-crawler --region <region> --name case-insights-partition-crawler-<uniqueId> --query 'Crawler.State'`).
 5. The Athena query returns one row per RCA category. Run it in the Athena console with workgroup `CaseInsights-<uniqueId>` and database `case_insights_<uniqueId>` (hyphens in `uniqueId` become underscores), or from the CLI:
 
    ```bash
-   aws athena start-query-execution --work-group CaseInsights-<uniqueId> \
+   aws athena start-query-execution --region <region> --work-group CaseInsights-<uniqueId> \
      --query-execution-context Database=case_insights_<uniqueId> \
      --query-string 'SELECT RCA_Category, count(*) FROM case_summary GROUP BY 1 ORDER BY 2 DESC' \
      --query QueryExecutionId --output text
-   aws athena get-query-results --query-execution-id <query-execution-id> --output table
+   aws athena get-query-results --region <region> --query-execution-id <query-execution-id> --output table
    ```
 
 6. Every dead-letter queue and terminal queue is empty, and no alarm is in `ALARM` (see [monitoring](monitoring.md)).
@@ -212,7 +237,7 @@ Only when `enableMcp` is `true`. Full details, the Claude Desktop set-up, awscur
 2. Get the endpoint (`McpEndpointUrl`, of the form `https://<api-id>.execute-api.<region>.amazonaws.com/v1/mcp`):
 
    ```bash
-   aws cloudformation describe-stacks --stack-name CaseInsightsMcpStack-<uniqueId> --query 'Stacks[0].Outputs'
+   aws cloudformation describe-stacks --region <region> --stack-name CaseInsightsMcpStack-<uniqueId> --query 'Stacks[0].Outputs'
    ```
 
 3. Create the Kiro configuration, then set `MCP_SERVER_URL` to the endpoint and `AWS_REGION` to its Region in `.kiro/settings/mcp.json` (add `AWS_PROFILE` to `env` to use a named profile):
@@ -263,7 +288,7 @@ After changing code, prompts or configuration:
 npm run verify && npx cdk deploy --all -c env=prod
 ```
 
-Run `npx cdk diff --all -c env=prod` first to review the change. Changing `uniqueId` creates a new, separate deployment rather than renaming the old one; see [Changing configuration safely](configuration.md#changing-configuration-safely). To collect from new accounts or OUs, add them to `memberRoleTargets` and deploy: the StackSet deploys the member role there. Accounts that join an existing target receive the role automatically.
+Run `npx cdk diff --all -c env=prod` first to review the change. Changing `uniqueId` creates a new, separate deployment rather than renaming the old one; see [Changing configuration safely](configuration.md#changing-configuration-safely). To collect from new accounts or OUs, add them to `memberRoleTargets` and deploy: the StackSet deploys the member role there. Accounts that join an existing target receive the role automatically. Step-by-step procedures for [a new OU or account](runbook.md#collect-from-a-new-organisational-unit-or-account), [quota changes](runbook.md#change-a-bedrock-or-lambda-quota), [model changes](runbook.md#change-the-bedrock-model) and [recovering a failed deployment](runbook.md#recover-from-a-failed-deployment-or-update) are in the runbook.
 
 ## Reprocess cases
 
@@ -285,7 +310,7 @@ npx cdk destroy --all -c env=prod
 The CDK deletes the stacks in reverse dependency order. Deleting the MemberRole stack deletes the StackSet, and CloudFormation removes its stack instances, and therefore every `Support-Case-Analysis-Role-<uniqueId>`, first. What remains and must be removed deliberately:
 
 - **Retained prod data.** In prod the four Core buckets (account-list, raw, processed and access-log), the Athena results bucket, the idempotency table (with deletion protection) and every log group are retained. They hold case data, so empty and delete them manually once you no longer need it. There is no customer managed KMS key to retain or schedule for deletion. Dev deletes all of these.
-- **StackSet instances.** Confirm that `aws cloudformation describe-stack-set --stack-set-name CaseInsights-MemberRole-<uniqueId>` reports `StackSetNotFoundException`. If the MemberRole stack failed to delete because instances remain, delete them with `aws cloudformation delete-stack-instances` for the same targets, then delete the StackSet and run the destroy command again.
+- **StackSet instances.** Confirm that `aws cloudformation describe-stack-set --region <region> --stack-set-name CaseInsights-MemberRole-<uniqueId>` reports `StackSetNotFoundException`. If the MemberRole stack failed to delete because instances remain, delete them with `aws cloudformation delete-stack-instances` for the same targets, then delete the StackSet and run the destroy command again.
 - **Shared API Gateway logging.** The logging role and account setting outlive every environment so that destroying one cannot break another's logs. Remove them by hand after every MCP environment in the account and Region is gone, following [Teardown and final clean-up](mcp-server-deployment.md#teardown-and-final-clean-up).
 - **Pipeline, trusted access and bootstrap.** Destroy the pipeline stack and its retained buckets if you deployed it, deactivate StackSets trusted access only if nothing else uses it, and keep the `CDKToolkit` stack if other CDK apps use the account.
 
@@ -298,6 +323,7 @@ None of these checks has been run; each needs a real AWS deployment, and local t
 - [ ] `npx cdk deploy --all -c env=dev` succeeds in a clean, bootstrapped account with trusted access, and a second `npx cdk diff --all -c env=dev` reports no differences.
 - [ ] The StackSet instances reach `CURRENT` and the member role exists with the expected trust.
 - [ ] A manual run processes real cases through Bedrock, writes processed records, leaves every dead-letter queue empty and emits `DailyRunCompleted`.
+- [ ] The Anthropic FTU form is accepted through the console or `aws bedrock put-use-case-for-model-access`, and `aws bedrock get-use-case-for-model-access` returns it.
 - [ ] The alarm email subscription is confirmed and a test notification arrives.
 - [ ] The crawler adds partitions and the Athena query returns valid categories.
 - [ ] Kiro lists the eight tools and each tool runs once against the real dev Athena workgroup; unsigned requests receive 403.

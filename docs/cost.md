@@ -99,7 +99,7 @@ The crawler `case-insights-partition-crawler-<uniqueId>` runs once a day (`sched
 
 ### Amazon Athena
 
-Athena charges about $5 per TB scanned, with a 10 MB minimum per query. Processed records are a few KB each, so a query over even 10,000 cases scans well under 100 MB and costs a fraction of a cent. The workgroup `CaseInsights-<uniqueId>` cancels any query that scans more than `operations.athena.bytesScannedCutoffPerQuery` (default 10 GiB, about $0.05), so a single runaway query cannot cost more than that. MCP Athena tools run in the same workgroup. Results are stored in the results bucket and expire after `operations.athena.resultsRetentionDays`.
+Athena charges about $5 per TB scanned, with a 10 MB minimum per query. Processed records are a few KB each, so a query over even 10,000 cases scans well under 100 MB and costs a fraction of a cent. The workgroup `CaseInsights-<uniqueId>` cancels any query that scans more than `operations.athena.bytesScannedCutoffPerQuery` (default 10 GiB, about $0.05). The cutoff is a control, not a hard cost cap: Athena checks it while the query runs, so a cancelled query can scan up to about the cutoff before it stops. Cancelled queries are billed for the data they scanned, so each runaway query still costs up to about $0.05 at the default, and the cutoff does not limit how many queries run or the monthly total. MCP Athena tools run in the same workgroup. Results are stored in the results bucket and expire after `operations.athena.resultsRetentionDays`.
 
 ### Amazon API Gateway (MCP only)
 
@@ -135,10 +135,10 @@ Only with `-c pipeline=true`; see [pipeline](pipeline.md).
 | Component | Approximate price | Notes |
 | --- | --- | --- |
 | CodePipeline | V2 pipeline: about $0.002 per action execution minute, with 100 free action minutes a month per account | The manual approval `PromoteToProd` is not billed, however long it waits. There is no per-pipeline monthly fee for V2 |
-| CodeBuild | About $0.01 per build minute for the `Synth` step (medium compute, `npm run verify` plus synth) and about $0.005 per minute for small compute (self-mutation and asset publishing) | A release is of the order of 20 to 40 build minutes, so a few tens of cents |
+| CodeBuild | About $0.01 per build minute for the `Synth` step (medium compute, `npm run verify` plus synth) and about $0.005 per minute for small compute (self-mutation and asset publishing) | A release is of the order of 20 to 40 build minutes, so a few tens of cents; a failed or retried release adds its own minutes |
 | Artefact bucket and its access-log bucket | S3 Standard; artefacts expire after 90 days, logs after 365 days | Cents |
 
-A handful of releases a month costs well under $5.
+Each release costs roughly $0.20 to $0.50, so the monthly cost depends on how many releases run. For example, five releases a month cost roughly $1 to $2.50 and twenty cost roughly $4 to $10; every commit to `main` starts a release, so frequent commits cost proportionally more.
 
 ## Illustrative monthly scenario
 
@@ -172,7 +172,7 @@ What the scenario shows:
 - **CloudWatch** is the next largest fixed block, about $8. Without the free tier (for example when other workloads in the account already use it) it is about $1.50 higher. A second environment in the same account adds its own alarms, metrics and dashboard.
 - **Bedrock** is the main variable cost and scales linearly with cases and conversation length: 1,000 cases a month adds about $10, and Sonnet 4.5 roughly triples every Bedrock line.
 - **First backfill.** The first run collects every resolved case created in the last `lookbackMonths` months. At 300 cases a month with the default 12 months, that is about 3,600 cases, roughly $35 of Bedrock with Haiku 4.5 or about $110 with Sonnet 4.5, once.
-- The optional pipeline is not included; add a few dollars at most if you use it.
+- The optional pipeline is not included. It adds roughly $0.20 to $0.50 per release (see [Optional pipeline](#optional-pipeline)), for example about $1 to $2.50 for five releases a month.
 
 ## Cost controls
 
@@ -185,7 +185,7 @@ What the scenario shows:
 | `enableMcp` | Turning it off removes the WAF web ACL, API Gateway, the MCP function and its four alarms, about $10 a month in the scenario. Destroy the MCP stack explicitly; see [Changing configuration safely](configuration.md) |
 | `enableAnalytics` | Turning it off removes the crawler, Glue catalogue, workgroup and results bucket (it requires MCP to be off first) |
 | `schedules.crawler` | Each crawl bills at least 10 minutes; a less frequent schedule lowers Glue cost but delays when new records become queryable |
-| `operations.athena.bytesScannedCutoffPerQuery` (default 10 GiB) | Upper bound on the scan cost of any single query in the workgroup |
+| `operations.athena.bytesScannedCutoffPerQuery` (default 10 GiB) | Cancels any query in the workgroup that scans more than this. It is a per-query control, not a hard cost cap: a cancelled query is still billed for the data it scanned, and the number of queries is not limited |
 | `rawRetentionDays`, `logRetentionDays`, `operations.storage.noncurrentVersionRetentionDays`, `operations.storage.accessLogRetentionDays`, `operations.athena.resultsRetentionDays` | Bound storage in S3 and CloudWatch Logs. Shorter retention costs less but removes evidence and recovery inputs sooner; see [configuration](configuration.md) for the constraints |
 | `operations.mcp.wafRateLimitPer5Minutes`, `throttleRateLimit`, `throttleBurstLimit` | Limit how fast MCP requests, and therefore MCP Bedrock and Athena calls, can arrive |
 | Opt-in reprocessing | `scripts/reprocess-cases.py` re-analyses committed cases and pays the Bedrock cost again; select the narrowest date range you need |

@@ -21,10 +21,10 @@ These steps need broad permissions in the management account and are not perform
 1. **CDK bootstrap.** Run once per account and Region:
 
    ```bash
-   npx cdk bootstrap aws://<account-id>/<region>
+   npx cdk bootstrap aws://<account-id>/<region> -c env=<env>
    ```
 
-   This creates the `CDKToolkit` stack with the default qualifier `hnb659fds` and the roles `cdk-hnb659fds-deploy-role-<account-id>-<region>`, `cdk-hnb659fds-file-publishing-role-<account-id>-<region>`, `cdk-hnb659fds-lookup-role-<account-id>-<region>`, `cdk-hnb659fds-image-publishing-role-<account-id>-<region>` and `cdk-hnb659fds-cfn-exec-role-<account-id>-<region>`. The application does not use the image publishing role, because it has no container assets. By default the CloudFormation execution role has `AdministratorAccess`; see [CloudFormation execution role](#cloudformation-execution-role).
+   Run it from the repository root with any valid environment (`-c env=dev` or `-c env=prod`): the CDK synthesises the app before bootstrapping, and the app stops without an environment. This creates the `CDKToolkit` stack with the default qualifier `hnb659fds` and the roles `cdk-hnb659fds-deploy-role-<account-id>-<region>`, `cdk-hnb659fds-file-publishing-role-<account-id>-<region>`, `cdk-hnb659fds-lookup-role-<account-id>-<region>`, `cdk-hnb659fds-image-publishing-role-<account-id>-<region>` and `cdk-hnb659fds-cfn-exec-role-<account-id>-<region>`. The application does not use the image publishing role, because it has no container assets. By default the CloudFormation execution role has `AdministratorAccess`; see [CloudFormation execution role](#cloudformation-execution-role).
 
 2. **StackSets trusted access.** The member role StackSet is service-managed, so CloudFormation StackSets must have trusted access to AWS Organizations. Activate it from the management account (or in the CloudFormation console under StackSets) and check the result:
 
@@ -36,7 +36,7 @@ These steps need broad permissions in the management account and are not perform
 
    The StackSet is called as `SELF`, so the stacks must be deployed from the management account itself, not from a delegated administrator account.
 
-3. **Amazon Bedrock model access.** Anthropic models can require a one-time first-time-use (FTU) form and an AWS Marketplace subscription with a valid payment method on the account. IAM cannot complete or waive either. The function roles hold `aws-marketplace:Subscribe` for the configured model's product only, so that the first invocation can complete the automatic subscription; the FTU form must still be submitted, for example in the Amazon Bedrock console.
+3. **Amazon Bedrock model access.** Anthropic models can require a one-time first-time-use (FTU) form and an AWS Marketplace subscription with a valid payment method on the account. IAM cannot complete or waive either. The function roles hold `aws-marketplace:Subscribe` for the configured model's product only, so that the first invocation can complete the automatic subscription; the FTU form must still be submitted, in the Amazon Bedrock console or with `PutUseCaseForModelAccess` (`aws bedrock put-use-case-for-model-access`), which needs `bedrock:PutUseCaseForModelAccess`; see [Step 4 of the installation](installation.md#step-4-prepare-the-account-once).
 
 4. **API Gateway logging ownership** (only with MCP). Decide between managed and existing mode as described in [Shared API Gateway logging prerequisite](mcp-server-deployment.md#shared-api-gateway-logging-prerequisite).
 

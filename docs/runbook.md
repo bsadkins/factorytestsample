@@ -1,6 +1,6 @@
 # Alarm runbook
 
-This runbook lists every alarm the application creates (23 without MCP, 27 with MCP, all in the Core stack), with first diagnosis and repair steps, and the [recovery tools](#recovery-tools) for dead-letter queue redrive and opt-in reprocessing. The alarm inventory here is checked against the synthesised alarms by `test/cdk/constructs/observability.test.ts` and `test/cdk/stacks/mcp-stack.test.ts`. Thresholds, metrics and the dashboard are described in [Monitoring](monitoring.md), log fields and Logs Insights queries in [Logging](logging.md), and symptoms that do not raise an alarm in [Troubleshooting](troubleshooting.md).
+This runbook lists every alarm the application creates (23 without MCP, 27 with MCP, all in the Core stack), with first diagnosis and repair steps, the [operational procedures](#operational-procedures) for adding an OU, changing quotas, changing the model and recovering a failed deployment, and the [recovery tools](#recovery-tools) for dead-letter queue redrive and opt-in reprocessing. The alarm inventory here is checked against the synthesised alarms by `test/cdk/constructs/observability.test.ts` and `test/cdk/stacks/mcp-stack.test.ts`. Thresholds, metrics and the dashboard are described in [Monitoring](monitoring.md), log fields and Logs Insights queries in [Logging](logging.md), and symptoms that do not raise an alarm in [Troubleshooting](troubleshooting.md).
 
 All alarms are named `CaseInsights-<uniqueId>-<purpose>` and notify the SNS topic `CaseInsights-Alarms-<uniqueId>`. When `alarmEmail` is set (it is required in prod), AWS sends a confirmation email to that address after deployment; nothing is delivered until the recipient selects the confirmation link. The dashboard `CaseInsights-<uniqueId>` shows every metric referenced below and the state of every alarm.
 
@@ -26,7 +26,7 @@ Metrics are in the `SupportCaseInsights` namespace with a single `service` dimen
 
 Each pipeline function has an alarm that fires when it reports one or more invocation errors (unhandled exceptions, timeouts or out-of-memory) in a five-minute period. Partial-batch failures that a consumer reports for individual messages are not invocation errors; those messages are retried by SQS and land in the stage's dead-letter queue when their receive count is exhausted.
 
-For every function: check the function's log group (`/aws/lambda/<function name>`) for `ERROR` entries and the `error_type` field, check recent deployments and configuration changes, and check service quotas (Lambda concurrency, S3, SQS, Step Functions, Bedrock).
+For every function: check the function's log group (`/aws/lambda/<function name>`) for `ERROR` entries and the `error_type` field, check recent deployments and configuration changes (a failed or partial deployment is covered in [Recover from a failed deployment or update](#recover-from-a-failed-deployment-or-update)), and check service quotas (Lambda concurrency, S3, SQS, Step Functions, Bedrock) as in [Change a Bedrock or Lambda quota](#change-a-bedrock-or-lambda-quota).
 
 ### LambdaErrors-AccountLookup
 
@@ -38,7 +38,7 @@ For every function: check the function's log group (`/aws/lambda/<function name>
 
 ### LambdaErrors-CaseRetrieval
 
-`Lambda-CaseRetrieval-<uniqueId>` failed for a whole batch. Check for errors assuming `Support-Case-Analysis-Role-<uniqueId>` (StackSet instance missing in a new account or OU), Support API throttling, or raw-bucket write errors. Accounts without a Business, Enterprise On-Ramp or Enterprise Support plan are skipped, not errors.
+`Lambda-CaseRetrieval-<uniqueId>` failed for a whole batch. Check for errors assuming `Support-Case-Analysis-Role-<uniqueId>` (StackSet instance missing in a new account or OU; see [Collect from a new organisational unit or account](#collect-from-a-new-organisational-unit-or-account)), Support API throttling, or raw-bucket write errors. Accounts without a Business, Enterprise On-Ramp or Enterprise Support plan are skipped, not errors.
 
 ### LambdaErrors-CaseAnnotation
 
@@ -76,7 +76,7 @@ One or more `CaseAnalysis-<uniqueId>` executions failed. Each failed attempt sho
 
 ### WorkflowExecutionsTimedOut
 
-Executions exceeded `operations.workflow.executionTimeoutMinutes`. A whole-execution timeout bypasses the task error handling, so HandleFailure does not run. Run Completion (hourly) and Case Cleanup (daily) preserve a pending failure-delivery marker under `account_number=<id>/case_number=<displayId>/failure-deliveries/<executionName>.json` and send a `WorkflowExecutionClosed` record to the workflow failure queue. Check for a large backlog with a small `bedrockMaxConcurrency` (executions wait for stage capacity) and consider raising the timeout or the concurrency cap.
+Executions exceeded `operations.workflow.executionTimeoutMinutes`. A whole-execution timeout bypasses the task error handling, so HandleFailure does not run. Run Completion (hourly) and Case Cleanup (daily) preserve a pending failure-delivery marker under `account_number=<id>/case_number=<displayId>/failure-deliveries/<executionName>.json` and send a `WorkflowExecutionClosed` record to the workflow failure queue. Check for a large backlog with a small `bedrockMaxConcurrency` (executions wait for stage capacity). Raise `operations.workflow.executionTimeoutMinutes` (keeping it below `operations.cleanup.graceHours` x 60), or raise the concurrency cap within the Bedrock quota as described in [Change a Bedrock or Lambda quota](#change-a-bedrock-or-lambda-quota), then deploy.
 
 ### WorkflowExecutionsAborted
 
@@ -111,6 +111,152 @@ Annotated case references the workflow starter could not start. Fix the cause an
 
 Schedule deliveries or asynchronous invocations of account lookup or account reader that exhausted their retries. Each message includes the original event. Fix the cause (see [LambdaErrors-AccountLookup](#lambdaerrors-accountlookup) and [LambdaErrors-AccountReader](#lambdaerrors-accountreader)) and invoke account lookup manually to start a fresh run.
 
+## Operational procedures
+
+These procedures change the deployment itself. Each one edits `config/<env>.json` or the account, then runs the normal review and deployment. Run them from the repository root with credentials for the management account. Replace `<env>`, `<uniqueId>` and `<region>` with the values from `config/<env>.json`. Try each change in dev before prod. If the [optional pipeline](pipeline.md) deploys your environments, commit the configuration change to `main` instead of running `npx cdk deploy`. The pipeline then deploys dev, and prod after approval. None of these procedures has been run against a real account.
+
+### Collect from a new organisational unit or account
+
+`memberRoleTargets` accepts only the organisation root (`r-...`) and OU IDs (`ou-...`). An OU target includes its child OUs. An account that joins a targeted OU later receives the member role automatically, so it needs no change here. To collect from a new OU:
+
+1. Find the OU ID, then list its accounts. Organizations commands need no Region:
+
+   ```bash
+   aws organizations list-roots --query 'Roots[].Id' --output text
+   aws organizations list-organizational-units-for-parent --parent-id <parent-id> \
+     --query 'OrganizationalUnits[].[Id,Name]' --output table
+   aws organizations list-accounts-for-parent --parent-id <ou-id> \
+     --query 'Accounts[].[Id,Name,Status]' --output table
+   ```
+
+2. Check the prerequisites in the new accounts. Each account needs a Business, Enterprise On-Ramp or Enterprise Support plan; accounts without one are skipped and counted under `AccountsSkippedSubscriptionRequired`. No service control policy may deny `iam:CreateRole` to the StackSet (needed to create the role) or `sts:AssumeRole` and the AWS Support API to the member role (see [Accounts skipped: AccessDenied](troubleshooting.md#accounts-skipped-accessdenied)).
+3. Add the OU ID to `memberRoleTargets` in `config/<env>.json`. Keep the existing entries. A target that you remove loses its member roles.
+4. Review and deploy:
+
+   ```bash
+   npm run verify
+   npx cdk diff --all -c env=<env>
+   npx cdk deploy --all -c env=<env> --require-approval broadening
+   ```
+
+   The diff should change only the deployment targets of the StackSet `CaseInsights-MemberRole-<uniqueId>` in `CaseInsightsMemberRoleStack-<uniqueId>`.
+5. Confirm that every new account has a `CURRENT` instance:
+
+   ```bash
+   aws cloudformation list-stack-instances --region <region> \
+     --stack-set-name CaseInsights-MemberRole-<uniqueId> --call-as SELF \
+     --query 'Summaries[].[Account,Status,StackInstanceStatus.DetailedStatus]' --output table
+   ```
+
+   The StackSet tolerates failures in up to 10% of accounts, so the stack deployment can succeed while some instances fail. If an instance is `OUTDATED` or `FAILED`, follow the StackSet steps in [Recover from a failed deployment or update](#recover-from-a-failed-deployment-or-update).
+6. After the next daily run, check that `AccountsSkippedAccessDenied` does not count the new accounts. Their first run collects up to `lookbackMonths` of resolved cases. A large OU therefore causes a one-off backlog and Bedrock cost, like the first backfill (see [cost](cost.md#illustrative-monthly-scenario)).
+
+To add a single account, move it into a targeted OU in AWS Organizations. The member role is created there automatically. An account outside every target is never collected.
+
+### Change a Bedrock or Lambda quota
+
+The analysis stages make at most `bedrockMaxConcurrency` concurrent Bedrock calls (1 to 50) through the global inference profile in `bedrockModelId`. The MCP function reserves a further 20 concurrent executions when MCP is enabled. Change the quota first, then the configuration:
+
+1. Look up the current Bedrock quotas for the configured model. The tokens-per-minute and requests-per-minute quotas for global cross-Region inference are the ones that throttle the application:
+
+   ```bash
+   aws service-quotas list-service-quotas --region <region> --service-code bedrock \
+     --query "Quotas[?contains(QuotaName, 'Claude Haiku 4.5')].[QuotaName,QuotaCode,Value,Adjustable]" --output table
+   ```
+
+   Use `Claude Sonnet 4.5` in the filter for the Sonnet model.
+2. Request an increase for an adjustable quota, then follow the request until it is approved. If the quota is not adjustable, open a case with AWS Support:
+
+   ```bash
+   aws service-quotas request-service-quota-increase --region <region> --service-code bedrock \
+     --quota-code <quota-code> --desired-value <value>
+   aws service-quotas list-requested-service-quota-change-history --region <region> --service-code bedrock \
+     --query 'RequestedQuotas[].[QuotaName,DesiredValue,Status]' --output table
+   ```
+
+3. Check that Lambda has room for the reserved concurrency. Lambda keeps at least 100 concurrent executions unreserved, so the account's `ConcurrentExecutions` must be at least `bedrockMaxConcurrency` plus 20 (with MCP) plus 100, plus any reserved concurrency of other functions. Raise the Lambda quota `L-B99A9384` (concurrent executions) the same way, with `--service-code lambda`, if needed:
+
+   ```bash
+   aws lambda get-account-settings --region <region> \
+     --query 'AccountLimit.[ConcurrentExecutions,UnreservedConcurrentExecutions]' --output text
+   ```
+
+4. Once the new quota is in place, change `bedrockMaxConcurrency` in `config/<env>.json`. To start analyses faster, you can also raise `operations.workflow.starterMaxConcurrency` (2 to 50). Keep `operations.workflow.executionTimeoutMinutes` below `operations.cleanup.graceHours` x 60. Validation rejects any other combination (see [configuration](configuration.md)).
+5. Run `npm run verify`, `npx cdk diff --all -c env=<env>` and `npx cdk deploy --all -c env=<env>`. The diff changes the reserved concurrency of `Lambda-CaseAnalysisStages-<uniqueId>` and, if you changed it, the event source of the workflow starter.
+6. Watch `BedrockThrottles` and the *Bedrock tokens* widget on the dashboard during the next run. If throttling rises, lower `bedrockMaxConcurrency` again. Throttled calls are retried, so a too-high setting slows analysis but loses no cases.
+
+To lower a quota, for example after a quota reduction by AWS, lower `bedrockMaxConcurrency` and deploy first.
+
+### Change the Bedrock model
+
+`bedrockModelId` accepts only `global.anthropic.claude-haiku-4-5-20251001-v1:0` (default) and `global.anthropic.claude-sonnet-4-5-20250929-v1:0`. Using another model needs a code change. Sonnet 4.5 costs roughly three times as much per token (see [cost](cost.md#amazon-bedrock)).
+
+1. Prepare the new model in the management account before you deploy. Complete its Anthropic first-time use form if the account has not submitted one, and confirm a valid payment method for its AWS Marketplace subscription (see [Step 4 of the installation](installation.md#step-4-prepare-the-account-once)). Check its quotas as in [Change a Bedrock or Lambda quota](#change-a-bedrock-or-lambda-quota). Confirm that the profile is offered in the Region:
+
+   ```bash
+   aws bedrock list-inference-profiles --region <region> \
+     --query "inferenceProfileSummaries[].inferenceProfileId" --output text
+   ```
+
+2. Change `bedrockModelId` in `config/<env>.json`.
+3. Run `npm run verify`, then `npx cdk diff --all -c env=<env>`. Expect changes to the Bedrock policy of the stages and MCP function roles and to their model setting. Deploy with `npx cdk deploy --all -c env=<env> --require-approval broadening`.
+4. Watch the next run. `AccessDeniedException` failures in the [Bedrock failures query](logging.md#7-bedrock-failures-by-error-code) mean that model access or the subscription is still missing. Fix them, and the next run retries the affected cases.
+5. Committed cases keep their `Model_Id` and are not analysed again. Stage checkpoints written by the old model are ignored. To analyse earlier cases with the new model, use [Reprocess committed cases](#reprocess-committed-cases) with `--dry-run` first, and choose the narrowest date range you need, because each case incurs Bedrock charges again.
+
+To go back, set the previous `bedrockModelId` and deploy again. Cases committed in the meantime keep the model that analysed them.
+
+### Recover from a failed deployment or update
+
+CloudFormation rolls a failed update back to the previous version of the stack, so the previous application normally keeps running. Committed cases and processed records are not affected by a rollback.
+
+1. Find the failing stack and the first failed resource. The `npx cdk deploy` output names the stack; use its full name, for example `CaseInsightsCoreStack-<uniqueId>`:
+
+   ```bash
+   aws cloudformation describe-stacks --region <region> --stack-name <stack-name> \
+     --query 'Stacks[0].[StackStatus,StackStatusReason]' --output text
+   aws cloudformation describe-stack-events --region <region> --stack-name <stack-name> --max-items 100 \
+     --query "StackEvents[?ends_with(ResourceStatus, 'FAILED')].[Timestamp,LogicalResourceId,ResourceStatusReason]" --output table
+   ```
+
+   The oldest failed event is the cause; the later ones are usually cancelled resources. [Troubleshooting](troubleshooting.md#deployment) lists the common causes.
+2. Act on the stack status:
+
+   | Status | Meaning | Action |
+   | --- | --- | --- |
+   | `UPDATE_ROLLBACK_COMPLETE` | The update failed and the previous version is back in place | Fix the cause and deploy again. To return the repository to the deployed version instead, check out the last deployed commit and run `npm run verify` and `npx cdk deploy --all -c env=<env>`, so the code and the deployment agree |
+   | `UPDATE_ROLLBACK_FAILED` | CloudFormation could not restore a resource, often one that was changed or deleted outside CloudFormation | Fix that resource, then run `aws cloudformation continue-update-rollback --region <region> --stack-name <stack-name>`. Add `--resources-to-skip <logical-id>` only for a resource you have checked is already in the intended state, because a skipped resource is no longer in step with the template |
+   | `ROLLBACK_COMPLETE` or `ROLLBACK_FAILED` | The first creation failed. The stack cannot be updated | Delete the stack and deploy again. In dev, run `npx cdk destroy <stack-name> -c env=dev`. In prod, run `aws cloudformation delete-stack --region <region> --stack-name <stack-name>`. Prod keeps its buckets, table and log groups, so a new creation can fail with *already exists*. A prod stack whose first creation failed has processed no cases. Check that the named resource holds no data before you delete it. Never delete retained resources of a prod stack that has run |
+   | `UPDATE_IN_PROGRESS` for much longer than usual | A resource is waiting, for example on a StackSet operation | Wait. To give up, run `aws cloudformation cancel-update-stack --region <region> --stack-name <stack-name>`, which starts a rollback |
+
+3. **Member role StackSet.** `CaseInsightsMemberRoleStack-<uniqueId>` can succeed while instances fail in some accounts, because the StackSet tolerates failures in up to 10% of accounts. List recent operations and the accounts that failed:
+
+   ```bash
+   aws cloudformation list-stack-set-operations --region <region> \
+     --stack-set-name CaseInsights-MemberRole-<uniqueId> --call-as SELF --max-items 5 \
+     --query 'Summaries[].[OperationId,Action,Status,StatusReason]' --output table
+   aws cloudformation list-stack-set-operation-results --region <region> \
+     --stack-set-name CaseInsights-MemberRole-<uniqueId> --operation-id <operation-id> --call-as SELF \
+     --query "Summaries[?Status!='SUCCEEDED'].[Account,Status,StatusReason]" --output table
+   ```
+
+   Typical causes are a service control policy that denies `iam:CreateRole`, or a role with the same name created by hand. After fixing the cause, apply the current template to the affected OU again. This command does not change the template:
+
+   ```bash
+   aws cloudformation update-stack-instances --region <region> \
+     --stack-set-name CaseInsights-MemberRole-<uniqueId> --call-as SELF \
+     --deployment-targets OrganizationalUnitIds=<ou-id> --regions <region>
+   ```
+
+4. **Pipeline.** A failed `Build` stage deploys nothing. Fix it with a new commit on `main`, which starts a new release. A failed `Dev` or `Prod` stage leaves that environment in one of the states above. Recover the stack first, then retry the failed actions of the same release:
+
+   ```bash
+   aws codepipeline list-pipeline-executions --region <region> --pipeline-name <pipelineName> --max-items 5 \
+     --query 'pipelineExecutionSummaries[].[pipelineExecutionId,status,startTime]' --output table
+   aws codepipeline retry-stage-execution --region <region> --pipeline-name <pipelineName> \
+     --stage-name <stage-name> --pipeline-execution-id <pipeline-execution-id> --retry-mode FAILED_ACTIONS
+   ```
+
+5. Validate the recovered environment as in [Step 7 of the installation](installation.md#step-7-validate-the-deployment). Check that every stack is `CREATE_COMPLETE` or `UPDATE_COMPLETE` and that no alarm is in `ALARM`.
 ## Recovery tools
 
 Two scripts change pipeline state on purpose. Both check that they target the right deployment before reading anything, show what they would do, and change nothing until you confirm with the token from that preview. Both run from the repository root with credentials for the management account, in the Region of `config/<env>.json`. Neither script deletes any S3 object version, writes to AWS Support, or calls Bedrock.
@@ -120,7 +266,8 @@ Two scripts change pipeline state on purpose. Both check that they target the ri
 | Messages in a stage dead-letter queue (active accounts, annotation or summary) after the cause is fixed | `scripts/redrive-dlq.sh` |
 | A record on the workflow failure queue to retry before the next scheduled run | Send its case reference with a new `redriveId` to the summary queue (see [QueueMessages-WorkflowFailures](#queuemessages-workflowfailures)) |
 | A discovery failure | Invoke account lookup (see [QueueMessages-AccountDiscoveryFailures](#queuemessages-accountdiscoveryfailures)) |
-| Committed cases to analyse again, for example after a prompt or model change | `scripts/reprocess-cases.py` |
+| Committed cases to analyse again, for example after a prompt or model change | `scripts/reprocess-cases.py` (see also [Change the Bedrock model](#change-the-bedrock-model)) |
+| A deployment or update that failed or left StackSet instances `OUTDATED` | [Recover from a failed deployment or update](#recover-from-a-failed-deployment-or-update) |
 
 Redrive and the failure-record retry never analyse a committed case again: the starter, every stage and case retrieval answer a reference to a case with a processed record as already processed. Reprocessing is the only deliberate exception.
 
@@ -174,7 +321,7 @@ Permissions: `sts:GetCallerIdentity`; `sqs:GetQueueUrl` and `sqs:GetQueueAttribu
 Selection:
 
 - **Date field.** `--date-field timeCreated` (default) uses the Support case creation time stored in the processed record; `--date-field Case_Retrieval_Date` uses the time the pipeline retrieved the case for the committed analysis.
-- **Time zone and bounds.** Values are converted to UTC. `--from` and `--to` are UTC calendar days and both are inclusive: the range is `[--from 00:00:00Z, day after --to 00:00:00Z)`. A record at `2026-03-31T23:59:59Z` is inside `--to 2026-03-31`; one at `2026-04-01T00:00:00Z` is not.
+- **Time zone and bounds.** Values are converted to UTC. `--from` and `--to` are UTC calendar days and both are inclusive: the range is `[--from 00:00:00Z, day after --to 00:00:00Z)`. A record at `2026-03-31T23:59:59Z` is inside `--to 2026-03-31`; one at `2026-04-01T00:00:00Z` is not. The latest accepted `--to` is `9999-12-30`; a later day has no following midnight, so the script refuses it with exit code 2 before contacting AWS.
 - **No implicit scope.** Both dates are required and must be valid; a reversed range is refused. There is no "all records" mode, and a range that matches nothing changes nothing. `--account-id` (repeatable) and `--case` (with exactly one `--account-id`) narrow the scope further. Plans that would change more than `--max-cases` cases (default 100, at most 5000) are refused.
 - **Targets.** The credentials must belong to `managementAccountId`. Buckets, the summary queue and the state machine come from the `RawBucketName`, `ProcessedBucketName`, `CaseSummaryQueueUrl` and `CaseAnalysisStateMachineArn` outputs of `CaseInsightsCoreStack-<uniqueId>`; the queue and state machine must carry this deployment's names, and both buckets must have versioning enabled.
 
@@ -198,7 +345,7 @@ After confirmation, each case is handled on its own:
 
 A reference that arrives while the processed record still exists is answered as already processed, so a run that stops before removing a record leaves that case as it was. If a follow-up reference cannot be sent, the report prints the exact message to send to the summary queue. If the script is killed while it holds a claim, the reset claim stays in `workflow.json`. The starter waits until the claim is an hour old and then takes it over, and Case Cleanup also treats it as abandoned after an hour. If the script is killed after removing a record but before a needed follow-up, the case has no processed record and may have no pending reference: send its case reference to the summary queue with a new `redriveId`, or let Case Cleanup and the next scheduled run collect it again while it is inside the lookback window. The report lists every case as `requeued`, `rediscover`, `skipped` or `failed`, with its previous processed version ID, and exits 1 when any case failed. A queued reference only starts a new execution: check the CaseAnalysis executions, the workflow failure queue and the processed record for the result.
 
-Versioned objects: the processed record and checkpoints are removed with plain deletes, which add S3 delete markers. No version is deleted by version ID, so an older record can never become current again. The previous processed version stays restorable until `operations.storage.noncurrentVersionRetentionDays` expires it: to restore one, copy that version over the current key (`aws s3api copy-object --copy-source '<bucket>/<key>?versionId=<id>' --bucket <bucket> --key <key>`). Restoring is a separate, manual operation with its own permissions, which the reprocess role does not need: `s3:ListBucketVersions` on the processed bucket to find the version (`aws s3api list-object-versions --bucket <bucket> --prefix <key>`), `s3:GetObjectVersion` on the source version (and `s3:GetObjectVersionTagging` if it has tags), and `s3:PutObject` on the key. Until a case is committed again it has no processed record, so Athena and the MCP server do not return it, and Case Cleanup may reset it like any other uncommitted case once its inputs are older than the cleanup grace; the next scheduled run then collects it again while it is inside the lookback window.
+Versioned objects: the processed record and checkpoints are removed with plain deletes, which add S3 delete markers. No version is deleted by version ID, so an older record can never become current again. The previous processed version stays restorable until `operations.storage.noncurrentVersionRetentionDays` expires it: to restore one, copy that version over the current key (`aws s3api copy-object --region <region> --copy-source '<bucket>/<key>?versionId=<id>' --bucket <bucket> --key <key>`). Restoring is a separate, manual operation with its own permissions, which the reprocess role does not need: `s3:ListBucketVersions` on the processed bucket to find the version (`aws s3api list-object-versions --region <region> --bucket <bucket> --prefix <key>`), `s3:GetObjectVersion` on the source version (and `s3:GetObjectVersionTagging` if it has tags), and `s3:PutObject` on the key. Until a case is committed again it has no processed record, so Athena and the MCP server do not return it, and Case Cleanup may reset it like any other uncommitted case once its inputs are older than the cleanup grace; the next scheduled run then collects it again while it is inside the lookback window.
 
 ```text
 $ .venv/bin/python scripts/reprocess-cases.py --env dev --from 2026-03-01 --to 2026-03-31 --dry-run
