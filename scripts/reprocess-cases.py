@@ -164,6 +164,7 @@ MAX_SCOPE_VALUES: Final = 100
 RESET_IN_PROGRESS: Final = "a Case Cleanup reset or another reprocess is in progress"
 RECORD_CHANGED: Final = "the processed record changed during reprocessing; record kept"
 HTTP_FORBIDDEN: Final = 403
+HTTP_SERVER_ERROR: Final = 500
 ACCESS_DENIED_CODES: Final = frozenset(
     {"AccessDenied", "AccessDeniedException", "403", "Forbidden"}
 )
@@ -265,6 +266,8 @@ Versioned objects and execution identity:
 Permissions:
   Besides object reads, reprocessing needs s3:ListBucket on the raw bucket (without it S3 answers
   403 instead of 404 for absent objects) and s3:GetObjectVersion on the raw communications.json.
+  Manual recovery from an uncertain checkpoint delete also needs s3:ListBucketVersions on the raw
+  bucket, optionally restricted with s3:prefix to account_number=*/case_number=*/checkpoints/*.
   A permission error in the preview changes nothing. If one stops a removal part way, the report
   says exactly which checkpoints this run had hidden; the script restores them by removing its own
   delete markers (s3:DeleteObjectVersion), or prints the commands to do so. See docs/runbook.md.
@@ -429,10 +432,13 @@ def create_clients(profile: str | None, region: str) -> Clients:
     """AWS clients in the deployment's Region from the standard credential provider chain."""
     session = boto3.Session(profile_name=profile, region_name=region)
     config = Config(retries={"mode": "standard", "max_attempts": 5})
+    # Never retry a conditional delete automatically: if S3 applied it and the response was
+    # lost, the retry's 404/412 would otherwise look like proof that nothing was removed.
+    s3_config = Config(retries={"mode": "standard", "total_max_attempts": 1})
     return Clients(
         sts=session.client("sts", config=config),
         cloudformation=session.client("cloudformation", config=config),
-        s3=session.client("s3", config=config),
+        s3=session.client("s3", config=s3_config),
         sqs=session.client("sqs", config=config),
         sfn=session.client("stepfunctions", config=config),
     )
@@ -690,6 +696,18 @@ def _is_access_denied(exc: Exception) -> bool:
         return False
     status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
     return status == HTTP_FORBIDDEN or _error_code(exc) in ACCESS_DENIED_CODES
+
+
+def _delivery_unconfirmed(exc: Exception) -> bool:
+    """Whether an SQS error can follow acceptance; credential and API refusals cannot."""
+    if isinstance(exc, (NoCredentialsError, PartialCredentialsError)):
+        return False
+    if isinstance(exc, BotoCoreError):
+        return True
+    if not isinstance(exc, ClientError):
+        return False
+    status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    return isinstance(status, int) and status >= HTTP_SERVER_ERROR
 
 
 def _describe(exc: Exception, needs: str) -> str:
@@ -1225,6 +1243,16 @@ class Executor:
             try:
                 self._send(message, self.delay_seconds)
             except (ClientError, BotoCoreError) as exc:
+                if _delivery_unconfirmed(exc):
+                    return Outcome(
+                        planned,
+                        "failed",
+                        f"UNCONFIRMED delivery of the summary reference ({_error_code(exc)}); "
+                        "no checkpoints or processed record were removed. SQS may have accepted "
+                        "it, so check the CaseAnalysis execution and processed record before "
+                        "resending this same message to the summary queue: "
+                        f"{json.dumps(message, sort_keys=True)}",
+                    )
                 return Outcome(
                     planned,
                     "failed",
@@ -1247,7 +1275,15 @@ class Executor:
             failure = f"removal failed ({_describe(exc, NEEDS_REMOVE)})"
             return self._removal_failed(planned, messages, removal, claim, failure)
         if reason is not None:
-            return self._partial(planned, "skipped", reason, messages, removal, claim=claim)
+            status = "failed" if removal.record_uncertain else "skipped"
+            return self._partial(
+                planned,
+                status,
+                reason,
+                messages,
+                removal,
+                claim=None if removal.record_uncertain else claim,
+            )
         if planned.action == ACTION_REDISCOVER:
             return Outcome(
                 planned, "rediscover", "record removed; the next scheduled run collects the case"
@@ -1295,7 +1331,17 @@ class Executor:
         except (ClientError, BotoCoreError) as exc:
             removal.record_uncertain = not _is_access_denied(exc)
             raise
-        return RECORD_CHANGED if deleted is None else None
+        if deleted is not None:
+            return None
+        # A direct conditional refusal is not ambiguous once the current state is read. Never
+        # call the old record kept when that read shows it is no longer current.
+        if _head_version(s3, processed, candidate.key) == candidate.version_id:
+            return RECORD_CHANGED
+        removal.record_uncertain = True
+        return (
+            "UNCONFIRMED processed-record deletion: the previous version is no longer current; "
+            "see the recovery steps below"
+        )
 
     def _stopped(
         self,
@@ -1333,19 +1379,30 @@ class Executor:
         failure: str,
     ) -> Outcome:
         if removal.record_uncertain:
-            # The processed-record delete may have taken effect; only S3 can say.
+            # The processed-record delete may have taken effect; only S3 can say. A confirmed
+            # intact original resolves the ambiguity; every other result remains UNCONFIRMED.
+            checked = True
             try:
                 self._fence(claim)
                 current = _head_version(
                     self.clients.s3, self.deployment.processed_bucket, planned.candidate.key
                 )
             except (ClaimLostError, ClientError, BotoCoreError):
+                checked = False
                 current = None
-            if current != planned.candidate.version_id:
+            if checked and current == planned.candidate.version_id:
+                removal.record_uncertain = False
+            else:
+                state = (
+                    "the previous version is not current"
+                    if checked
+                    else "the current state could not be checked"
+                )
                 return self._partial(
                     planned,
                     "failed",
-                    f"{failure}; the processed record may have been removed",
+                    f"{failure}; UNCONFIRMED processed-record deletion ({state}); it may have "
+                    "been removed",
                     messages,
                     removal,
                     claim=None,
@@ -1421,7 +1478,14 @@ class Executor:
             )
         if messages and not removal.record_uncertain:
             parts.append("any queued reference is answered as already processed")
-        recovery = self._recovery(planned, hidden, removal.uncertain)
+        elif messages:
+            parts.append(
+                "a queued reference may already have started an execution; check the CaseAnalysis "
+                "execution and processed record before resending it"
+            )
+        recovery = self._recovery(
+            planned, hidden, removal.uncertain, record_uncertain=removal.record_uncertain
+        )
         return Outcome(planned, status, "; ".join(parts), messages, recovery)
 
     def _cli(self, *words: str) -> str:
@@ -1432,13 +1496,36 @@ class Executor:
         return shlex.join(command)
 
     def _recovery(
-        self, planned: PlannedCase, hidden: list[tuple[str, str]], uncertain: list[str]
+        self,
+        planned: PlannedCase,
+        hidden: list[tuple[str, str]],
+        uncertain: list[str],
+        *,
+        record_uncertain: bool = False,
     ) -> list[str]:
-        if not hidden and not uncertain:
-            return []
         candidate = planned.candidate
         raw = self.deployment.raw_bucket
-        lines = [
+        lines: list[str] = []
+        if record_uncertain:
+            lines.append(
+                f"Recovery for {candidate.account_id} {candidate.display_id}: the processed-record "
+                "deletion is UNCONFIRMED. Check its CaseAnalysis execution and current processed "
+                "record before resending any reference or restoring the previous version. "
+                "Listing the versions below needs s3:ListBucketVersions on the processed bucket."
+            )
+            lines.append(
+                self._cli(
+                    "s3api",
+                    "list-object-versions",
+                    "--bucket",
+                    self.deployment.processed_bucket,
+                    "--prefix",
+                    candidate.key,
+                )
+            )
+        if not hidden and not uncertain:
+            return lines
+        lines += [
             f"Recovery for {candidate.account_id} {candidate.display_id}: restore its checkpoints "
             f"only while the processed record is still version {candidate.version_id} and "
             "workflow.json is not a reset claim (check both with the first two commands), so no "
@@ -1470,8 +1557,11 @@ class Executor:
         ]
         if uncertain:
             lines.append(
-                "If the latest entry listed below is a delete marker this run created, remove it "
-                "with delete-object --version-id <its VersionId> as above:"
+                "Listing the versions below needs s3:ListBucketVersions on the raw bucket, "
+                "optionally restricted with s3:prefix to "
+                "account_number=*/case_number=*/checkpoints/*. If the latest entry is a delete "
+                "marker this run created, remove it with delete-object --version-id <its "
+                "VersionId> as above:"
             )
             lines += [
                 self._cli("s3api", "list-object-versions", "--bucket", raw, "--prefix", key)
@@ -1518,6 +1608,17 @@ class Executor:
         try:
             self._send(follow_up, 0)
         except (ClientError, BotoCoreError) as exc:
+            if _delivery_unconfirmed(exc):
+                return Outcome(
+                    planned,
+                    "failed",
+                    f"record removed; UNCONFIRMED delivery of the follow-up reference "
+                    f"({_error_code(exc)}). SQS may have accepted it and started an execution. "
+                    "Check the CaseAnalysis execution and processed record before resending "
+                    "this same message to the summary queue: "
+                    f"{json.dumps(follow_up, sort_keys=True)}",
+                    messages,
+                )
             return Outcome(
                 planned,
                 "failed",

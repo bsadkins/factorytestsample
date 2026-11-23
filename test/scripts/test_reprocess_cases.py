@@ -24,7 +24,8 @@ from typing import Any
 
 import boto3
 import pytest
-from botocore.exceptions import ClientError
+from botocore.config import Config
+from botocore.exceptions import ClientError, ReadTimeoutError
 from botocore.stub import Stubber
 from common.case_refs import SummaryRef, communications_key
 from common.checkpoints import STAGES, checkpoint_key
@@ -312,7 +313,11 @@ def env(
 ) -> Iterator[Env]:
     del aws_env
     with mock_aws():
-        s3 = boto3.client("s3", region_name=REGION)
+        s3 = boto3.client(
+            "s3",
+            region_name=REGION,
+            config=Config(retries={"mode": "standard", "total_max_attempts": 1}),
+        )
         sqs = boto3.client("sqs", region_name=REGION)
         for bucket in (RAW, PROCESSED):
             s3.create_bucket(Bucket=bucket)
@@ -363,6 +368,15 @@ def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 # --- help and option validation ----------------------------------------------------------------
+
+
+def test_real_s3_client_disables_automatic_retries_for_conditional_deletes(
+    script: ModuleType, aws_env: None
+) -> None:
+    del aws_env
+    clients = script.create_clients(None, REGION)
+    assert clients.s3.meta.config.retries == {"mode": "standard", "total_max_attempts": 1}
+    assert clients.sqs.meta.config.retries["total_max_attempts"] == 6
 
 
 def test_help_defines_date_field_timezone_bounds_versions_and_identity() -> None:
@@ -1106,6 +1120,90 @@ def test_follow_up_send_failure_prints_the_reference_to_send(env: Env, clock: Cl
     assert SummaryRef.parse(printed).display_id == "4001"
 
 
+def _lose_first_delete_response(
+    env: Env, matches: Callable[[dict[str, Any]], bool], attempts: list[int]
+) -> None:
+    """Apply a conditional delete in moto, then lose its first SDK response."""
+
+    matched: list[dict[str, Any] | None] = []
+    operator = boto3.client("s3", region_name=REGION)
+
+    def match_request(params: dict[str, Any], **_: Any) -> None:  # noqa: ANN401
+        matched.append(params if matches(params) else None)
+
+    def apply_then_lose_acknowledgement(**_: Any) -> None:  # noqa: ANN401
+        if not matched:
+            if attempts:
+                attempts.append(1)  # an SDK retry reuses the original client params
+            return
+        request = matched.pop()
+        if request is None or attempts:
+            return
+        attempts.append(1)
+        operator.delete_object(**request)
+        raise ReadTimeoutError(endpoint_url="https://s3.us-east-1.amazonaws.com")
+
+    env.s3.meta.events.register("provide-client-params.s3.DeleteObject", match_request)
+    env.s3.meta.events.register("before-send.s3.DeleteObject", apply_then_lose_acknowledgement)
+
+
+def test_an_ambiguous_checkpoint_delete_stays_in_the_uncertain_recovery_ledger(
+    env: Env,
+) -> None:
+    env.seed("4051")
+    window = ("--from", "2026-01-01", "--to", "2026-12-31")
+    token = env.token(*window)
+    summary = checkpoint_key(MEMBER_A, "4051", STAGES[0])
+    attempts: list[int] = []
+    _lose_first_delete_response(
+        env, lambda p: p.get("Key") == summary and "VersionId" not in p, attempts
+    )
+    _deny(
+        env,
+        "DeleteObject",
+        lambda p: p.get("Key") == checkpoint_key(MEMBER_A, "4051", STAGES[1]),
+        "AccessDenied",
+    )
+
+    code, out, _ = env.run(*window, "--confirm", token)
+
+    assert code == 1
+    assert attempts == [1], "a lost delete response must not cause an automatic retry"
+    assert env.removed(RAW, summary)
+    line = _report_line(out, "4051")
+    assert f"the delete of the {STAGES[0]} checkpoint failed and may have taken effect" in line
+    [listing] = _commands(out, "aws s3api list-object-versions")
+    assert _flag(listing, "--bucket") == RAW
+    assert _flag(listing, "--prefix") == summary
+
+
+def test_an_ambiguous_processed_delete_is_neither_skipped_nor_reported_kept(
+    env: Env,
+) -> None:
+    seeded = env.seed("4052", raw=False, checkpoints=False)
+    window = ("--from", "2026-01-01", "--to", "2026-12-31")
+    token = env.token(*window)
+    attempts: list[int] = []
+    _lose_first_delete_response(
+        env,
+        lambda p: p.get("Bucket") == PROCESSED and p.get("Key") == seeded.key,
+        attempts,
+    )
+
+    code, out, _ = env.run(*window, "--confirm", token)
+
+    assert code == 1
+    assert attempts == [1], "a lost delete response must not cause an automatic retry"
+    assert env.removed(PROCESSED, seeded.key)
+    line = _report_line(out, "4052")
+    assert line.startswith("failed ")
+    assert "UNCONFIRMED processed-record deletion" in line
+    assert "record kept" not in line
+    [listing] = _commands(out, "aws s3api list-object-versions")
+    assert _flag(listing, "--bucket") == PROCESSED
+    assert _flag(listing, "--prefix") == seeded.key
+
+
 def test_a_record_replaced_during_reprocessing_is_kept(env: Env) -> None:
     seeded = env.seed("4101")
     window = ("--from", "2026-01-01", "--to", "2026-12-31")
@@ -1629,6 +1727,43 @@ def test_a_follow_up_reference_is_delivered_only_after_the_claim_is_released(
         assert [json.loads(m["Body"])["redriveId"] for m in dead] == [first["redriveId"]]
         assert "harmless duplicate" in line
     assert env.sqs.receive_message(QueueUrl=env.queue_url).get("Messages", []) == []
+
+
+@pytest.mark.usefixtures("starter_clock")
+def test_an_accepted_follow_up_with_a_lost_acknowledgement_is_unconfirmed(
+    env: Env,
+) -> None:
+    seeded = env.seed("7402")
+    _one_receive_redrive_policy(env)
+    window = ("--from", "2026-01-01", "--to", "2026-12-31", "--delay-seconds", "0")
+    token = env.token(*window)
+    outcomes: list[str] = []
+    sends: list[int] = []
+
+    def consume_then_lose_follow_up_acknowledgement(**_: Any) -> None:  # noqa: ANN401
+        sends.append(1)
+        if len(sends) == 1:
+            _poll_starter(env, outcomes)  # the delayed copy is answered as already processed
+            return
+        if len(sends) == 2:
+            _poll_starter(env, outcomes)  # the follow-up really starts the execution
+        raise ReadTimeoutError(endpoint_url="https://sqs.us-east-1.amazonaws.com")
+
+    env.sqs.meta.events.register(
+        "after-call.sqs.SendMessage", consume_then_lose_follow_up_acknowledgement
+    )
+    code, out, _ = env.run(*window, "--confirm", token)
+
+    assert outcomes == ["alreadyProcessed", "started"]
+    assert len(env.sfn.started()) == 1
+    assert env.removed(PROCESSED, seeded.key)
+    assert code == 1
+    line = _report_line(out, "7402")
+    assert "UNCONFIRMED delivery" in line
+    assert "CaseAnalysis execution" in line
+    assert "processed record" in line
+    assert "before resending" in line
+    assert "follow-up reference was not sent" not in line
 
 
 def test_output_keys_match_the_core_stack_outputs(script: ModuleType) -> None:

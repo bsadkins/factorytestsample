@@ -132,6 +132,19 @@ def test_runbook_has_the_operational_procedures(heading: str) -> None:
     assert heading in lines
 
 
+def test_uncertain_checkpoint_recovery_documents_raw_version_listing_permission() -> None:
+    runbook = (REPO_ROOT / "docs" / "runbook.md").read_text(encoding="utf-8")
+    permissions = runbook.rsplit("Permissions:", 1)[1].split("## Failure records", 1)[0]
+    assert "s3:ListBucketVersions" in permissions
+    assert "account_number=*/case_number=*/checkpoints/*" in permissions
+    assert "s3:prefix" in permissions
+    summary = (REPO_ROOT / "docs" / "permissions.md").read_text(encoding="utf-8")
+    reprocess = next(
+        line for line in summary.splitlines() if "| Reprocess committed cases |" in line
+    )
+    assert "s3:ListBucketVersions" in reprocess
+
+
 LINK = re.compile(r"\]\(([^)\s]+)\)")
 FENCE = re.compile(r"^\s*(```|~~~)")
 
