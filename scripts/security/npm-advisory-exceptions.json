@@ -7,13 +7,6 @@
       "locations": ["node_modules/aws-cdk-lib/node_modules/minimatch"],
       "reason": "Bundled inside aws-cdk-lib 2.276.0, the latest release, so npm overrides cannot replace it (the top-level minimatch is overridden to 11.0.8). aws-cdk-lib only matches glob patterns supplied by this repository's code or the CDK CLI operator (asset excludes, bundling-stack selection, construct selectors) during local synthesis; no untrusted input reaches it and it is never deployed to AWS. Remove when aws-cdk-lib bundles minimatch >= 11.0.1.",
       "reviewBy": "2027-02-13"
-    },
-    {
-      "advisory": "GHSA-fc5q-39xc-vjpf",
-      "name": "picomatch",
-      "locations": ["node_modules/anymatch/node_modules/picomatch", "node_modules/picomatch"],
-      "reason": "No patched picomatch release exists (the advisory covers every version through 4.0.7, the latest, and lists no fixed version). Both copies are development-only: Jest (jest-util, jest-haste-map, jest-message-util, anymatch, fdir) and typescript-eslint (tinyglobby) use them to match glob patterns taken from this repository's Jest, ESLint and TypeScript configuration or the developer's own command line. No untrusted glob pattern reaches them and they are never bundled into Lambda assets or deployed. Remove when a fixed picomatch release is available.",
-      "reviewBy": "2027-01-18"
     }
   ]
 }
