@@ -191,7 +191,7 @@ To lower a quota, for example after a quota reduction by AWS, lower `bedrockMaxC
 
 `bedrockModelId` accepts only `global.anthropic.claude-haiku-4-5-20251001-v1:0` (default) and `global.anthropic.claude-sonnet-4-5-20250929-v1:0`. Using another model needs a code change. Sonnet 4.5 costs roughly three times as much per token (see [cost](cost.md#amazon-bedrock)).
 
-1. Prepare the new model in the management account before you deploy. Complete its Anthropic first-time use form if the account has not submitted one, and confirm a valid payment method for its AWS Marketplace subscription (see [Step 4 of the installation](installation.md#step-4-prepare-the-account-once)). Check its quotas as in [Change a Bedrock or Lambda quota](#change-a-bedrock-or-lambda-quota). Confirm that the profile is offered in the Region:
+1. Prepare the new model in the management account before you deploy. Complete its Anthropic first-time use form if the account has not submitted one, confirm a valid payment method for its AWS Marketplace subscription, and have a separately authorised operator with `aws-marketplace:Subscribe`, `aws-marketplace:Unsubscribe` and `aws-marketplace:ViewSubscriptions` invoke it once, because the runtime roles cannot start the first subscription (see [Step 4 of the installation](installation.md#step-4-prepare-the-account-once)). Check its quotas as in [Change a Bedrock or Lambda quota](#change-a-bedrock-or-lambda-quota). Confirm that the profile is offered in the Region:
 
    ```bash
    aws bedrock list-inference-profiles --region <region> \

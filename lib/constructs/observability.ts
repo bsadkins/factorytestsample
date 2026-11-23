@@ -131,7 +131,7 @@ export class Observability extends Construct {
     acknowledgeNagFinding(
       this.alarmTopic,
       'AwsSolutions-SNS2',
-      "Approved exception: CloudWatch alarms cannot publish to a topic encrypted with the AWS managed key alias/aws/sns, and the design uses no customer managed KMS key, so this topic has no at-rest encryption. It enforces TLS and only this deployment's alarms may publish. Notifications carry no case content but do carry operational metadata: the account ID, Region, alarm names, descriptions and states, metric values and resource names.",
+      "Approved exception: CloudWatch alarms cannot publish to a topic encrypted with the AWS managed key alias/aws/sns, and the design uses no customer managed KMS key, so this topic has no at-rest encryption. The topic policy denies sns:Publish without TLS and allows CloudWatch to publish only for this deployment's alarms. Notifications carry no case content but do carry operational metadata: the account ID, Region, alarm names, descriptions and states, metric values and resource names.",
     );
     if (config.alarmEmail !== undefined) {
       // The recipient must confirm the subscription before notifications are delivered.

@@ -6,7 +6,7 @@ This guide describes every IAM permission involved in Support Case Insights: wha
 
 | Principal | Where | Purpose |
 | --- | --- | --- |
-| Administrator | Management account | One-time setup: CDK bootstrap, StackSets trusted access, Bedrock model access, API Gateway logging ownership |
+| Administrator | Management account | One-time setup: CDK bootstrap, StackSets trusted access, Bedrock model activation (with the AWS Marketplace permissions the runtime roles lack), API Gateway logging ownership |
 | Deployer | Management account | Runs `npx cdk diff`, `deploy` and `destroy` through the CDK bootstrap roles |
 | CDK bootstrap roles | Management account | Publish assets and run CloudFormation on the deployer's behalf |
 | Lambda, Step Functions, Scheduler, Glue and API Gateway service roles | Management account | Run the application; one role per function or service |
@@ -36,7 +36,7 @@ These steps need broad permissions in the management account and are not perform
 
    The StackSet is called as `SELF`, so the stacks must be deployed from the management account itself, not from a delegated administrator account.
 
-3. **Amazon Bedrock model access.** Anthropic models can require a one-time first-time-use (FTU) form and an AWS Marketplace subscription with a valid payment method on the account. IAM cannot complete or waive either. The function roles hold `aws-marketplace:Subscribe` for the configured model's product only, so that the first invocation can complete the automatic subscription; the FTU form must still be submitted, in the Amazon Bedrock console or with `PutUseCaseForModelAccess` (`aws bedrock put-use-case-for-model-access`), which needs `bedrock:PutUseCaseForModelAccess`; see [Step 4 of the installation](installation.md#step-4-prepare-the-account-once).
+3. **Amazon Bedrock model access.** A separately authorised operator activates the configured model in the management account before the first workload run. Anthropic models can require the one-time Anthropic first-time use (FTU) form, and the account needs a valid payment method for the AWS Marketplace subscription that Amazon Bedrock starts on the model's first invocation; IAM cannot complete or waive either. The operator's identity needs permission to invoke the configured model plus `aws-marketplace:Subscribe`, `aws-marketplace:Unsubscribe` and `aws-marketplace:ViewSubscriptions` ([model access permissions](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html#model-access-permissions)); only `aws-marketplace:Subscribe` can be scoped to the model's product with the `aws-marketplace:ProductId` condition key. The function roles are least-privilege runtime roles: they hold `aws-marketplace:Subscribe` for the configured model's product and `aws-marketplace:ViewSubscriptions`, and hold no `aws-marketplace:Unsubscribe`, so they are not sufficient to complete the first subscription. The FTU form is submitted in the Amazon Bedrock console or with `PutUseCaseForModelAccess` (`aws bedrock put-use-case-for-model-access`), which needs `bedrock:PutUseCaseForModelAccess`; see [Step 4 of the installation](installation.md#step-4-prepare-the-account-once).
 
 4. **API Gateway logging ownership** (only with MCP). Decide between managed and existing mode as described in [Shared API Gateway logging prerequisite](mcp-server-deployment.md#shared-api-gateway-logging-prerequisite).
 
@@ -255,6 +255,8 @@ The Case Analysis Stages role and the MCP function role each have the same Bedro
 
 The three allows are the policy AWS documents for global cross-Region inference profiles: the foundation model can be invoked only through the approved profile, which may route a request to any AWS commercial Region. The application never calls the foundation model directly.
 
+The two AWS Marketplace statements are runtime grants, not an activation policy. The policy holds no `aws-marketplace:Unsubscribe`, which AWS requires of the identity that starts a model's first subscription, so the model is activated beforehand by a separately authorised operator (see item 3 of [One-time setup by an administrator](#one-time-setup-by-an-administrator)).
+
 ### Analytics crawler role
 
 Trusted by `glue.amazonaws.com`.
@@ -388,7 +390,7 @@ The dev app (Core, MemberRole, Analytics, MCP and the shared logging stack) has 
 | `AwsSolutions-IAM5` (wildcards) | 61 | X-Ray and `organizations:ListAccounts` support no resource-level permissions; member account IDs, run IDs, account IDs and case IDs in S3 keys and execution names are discovered at run time, so keys are scoped to fixed prefixes and file names; CDK Lambda grants include versions (`:*`); Step Functions log delivery actions; Marketplace actions; the API Gateway logging role's log group prefix and `logs:DescribeLogGroups`; `glue:GetTables` for `SHOW TABLES` |
 | `AwsSolutions-L1` (latest runtime) | 11 | Python 3.12 is the approved runtime, because the layer is built from hash-locked cp312 wheels |
 | `AwsSolutions-SQS3` (no dead-letter queue) | 2 | `WorkflowFailures` and `AccountDiscoveryFailures` are terminal queues with no consumer |
-| `AwsSolutions-SNS2` (topic not encrypted) | 1 | CloudWatch alarms cannot publish to a topic encrypted with `alias/aws/sns`, and the design excludes customer managed KMS keys; the topic enforces TLS, and notifications carry no case content but do carry operational metadata (account ID, Region, alarm names and states, metric values, resource names) |
+| `AwsSolutions-SNS2` (topic not encrypted) | 1 | CloudWatch alarms cannot publish to a topic encrypted with `alias/aws/sns`, and the design excludes customer managed KMS keys; the topic policy denies publishing without TLS, and notifications carry no case content but do carry operational metadata (account ID, Region, alarm names and states, metric values, resource names) |
 | `AwsSolutions-GL1` (crawler log encryption) | 1 | Needs a customer managed KMS key; crawler logs hold only object paths and partition names |
 | `AwsSolutions-IAM4` (AWS managed policy) | 1 | The CDK bucket notification helper uses `AWSLambdaBasicExecutionRole` |
 | `AwsSolutions-APIG2` (request validation) | 1 | The MCP function validates the JSON-RPC envelope, body size and every tool argument |

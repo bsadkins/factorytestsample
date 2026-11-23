@@ -56,9 +56,13 @@ export interface BedrockInvokePolicyProps {
  * - InvokeModel on the global inference profile and, only through that profile, the Regional and
  *   global foundation-model ARNs (the three-part policy AWS documents for global cross-Region inference);
  * - an explicit deny of every other model, profile or invocation resource;
- * - AWS Marketplace Subscribe only for the approved products, so the first invocation can complete
- *   the automatic subscription, plus ViewSubscriptions, which supports no resource or product scoping.
- * IAM cannot submit or waive Anthropic's first-time-use form; that remains an account prerequisite.
+ * - AWS Marketplace Subscribe only for the approved products, plus ViewSubscriptions, which supports
+ *   no resource or product scoping.
+ * These runtime grants hold no Unsubscribe, so they are not sufficient to complete a model's first
+ * AWS Marketplace subscription: AWS requires Subscribe, Unsubscribe and ViewSubscriptions of the
+ * identity that starts it. A separately authorised operator activates the model first, with those
+ * permissions, a valid payment method and Anthropic's first-time-use form, which IAM cannot submit
+ * or waive.
  */
 export class BedrockInvokePolicy extends Construct {
   public readonly policy: Policy;

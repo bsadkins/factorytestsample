@@ -124,7 +124,7 @@ The three EventBridge Scheduler schedules are in the `default` schedule group, u
 
 | Resource | Name | Notes |
 | --- | --- | --- |
-| SNS topic | `CaseInsights-Alarms-<uniqueId>` | Not encrypted at rest (see [Encryption at rest](#encryption-at-rest)). Denies publishing without TLS; only `cloudwatch.amazonaws.com` may publish, for alarms named `CaseInsights-<uniqueId>-*` in this account |
+| SNS topic | `CaseInsights-Alarms-<uniqueId>` | Not encrypted at rest (see [Encryption at rest](#encryption-at-rest)). Its policy denies `sns:Publish` without TLS and allows `cloudwatch.amazonaws.com` to publish only for alarms named `CaseInsights-<uniqueId>-*` in this account; principals in the account whose own IAM policies allow `sns:Publish` can also publish over TLS |
 | Email subscription | `alarmEmail` | Only when `alarmEmail` is set (required in prod). Must be confirmed by the recipient |
 | CloudWatch alarms | `CaseInsights-<uniqueId>-<purpose>` | 23 Core alarms, plus 4 MCP alarms when `enableMcp` is `true` (27 in the shipped dev, 23 in prod). Every alarm is described in [runbook](runbook.md) |
 | Dashboard | `CaseInsights-<uniqueId>` | See [monitoring](monitoring.md) |
@@ -265,7 +265,7 @@ The application creates no customer managed KMS keys, and no KMS permissions are
 | SQS queues | SSE-SQS |
 | DynamoDB idempotency table | Default encryption with an AWS owned key |
 | CloudWatch Logs | CloudWatch Logs default service-side encryption |
-| Alarm topic `CaseInsights-Alarms-<uniqueId>` | **Not encrypted at rest.** CloudWatch alarms can publish to an encrypted topic only when it uses a customer managed KMS key, which the approved design excludes. The topic enforces TLS and accepts publishing only from CloudWatch for this deployment's alarms. Notifications contain no case content, but they do contain operational metadata (alarm names and descriptions, states, metric values, the account ID, the Region and resource names), and that metadata leaves the account through the confirmed email subscriptions |
+| Alarm topic `CaseInsights-Alarms-<uniqueId>` | **Not encrypted at rest.** CloudWatch alarms can publish to an encrypted topic only when it uses a customer managed KMS key, which the approved design excludes. The topic policy denies publishing without TLS and allows CloudWatch to publish only for this deployment's alarms; it does not block principals in the account whose own IAM policies allow publishing. Notifications contain no case content, but they do contain operational metadata (alarm names and descriptions, states, metric values, the account ID, the Region and resource names), and that metadata leaves the account through the confirmed email subscriptions |
 
 See [security](security.md) for the full data protection description.
 

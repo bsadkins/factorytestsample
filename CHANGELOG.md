@@ -26,7 +26,7 @@ First version of Support Case Insights. Nothing in this release has been deploye
 
 ### Security
 
-- All data stores use AWS managed or AWS owned encryption (SSE-S3, SSE-SQS, DynamoDB default encryption, CloudWatch Logs default encryption, Athena `SSE_S3`); no customer managed KMS keys are used. The alarm topic is not encrypted at rest, by explicit approval, because CloudWatch alarms can publish to an encrypted topic only with a customer managed KMS key; it enforces TLS and carries no case content. See [Security](docs/security.md#alarm-sns-topic-exception).
+- All data stores use AWS managed or AWS owned encryption (SSE-S3, SSE-SQS, DynamoDB default encryption, CloudWatch Logs default encryption, Athena `SSE_S3`); no customer managed KMS keys are used. The alarm topic is not encrypted at rest, by explicit approval, because CloudWatch alarms can publish to an encrypted topic only with a customer managed KMS key; its policy denies publishing without TLS, and it carries no case content. See [Security](docs/security.md#alarm-sns-topic-exception).
 
 [Unreleased]: https://github.com/bsadkins/factorytestsample/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/bsadkins/factorytestsample/releases/tag/v0.1.0

@@ -191,7 +191,7 @@ describe('Observability', () => {
     expect(actions.filter((action) => /Delete|StartExecution|StopExecution|RedriveExecution/.test(String(action)))).toEqual([]);
   });
 
-  test('the alarm topic enforces TLS and subscribes the configured email address', () => {
+  test('the alarm topic denies publishing without TLS and subscribes the configured email address', () => {
     const { core, template } = coreTemplate({ alarmEmail: 'ops@example.com' });
     const names = resourceNames(core.config);
     template.hasResourceProperties('AWS::SNS::Topic', { TopicName: names.alarmTopic, KmsMasterKeyId: Match.absent() });
@@ -206,7 +206,7 @@ describe('Observability', () => {
     template.resourceCountIs('AWS::KMS::Key', 0);
   });
 
-  test.each(['dev', 'prod'] as const)('%s: only CloudWatch alarms of this deployment may publish to the alarm topic, always over TLS', (env) => {
+  test.each(['dev', 'prod'] as const)('%s: the alarm topic policy denies publishing without TLS and grants CloudWatch publishing only for alarms of this deployment', (env) => {
     const { core } = addCaseInsightsStacks(testApp(), { env, configDir: FIXTURE_CONFIG_DIR });
     const template = Template.fromStack(core);
     const { region, managementAccountId } = core.config;
@@ -516,5 +516,8 @@ describe('Observability', () => {
     for (const phrase of ['alias/aws/sns', 'customer managed KMS key', 'TLS', 'no case content', 'account ID', 'Region', 'alarm names', 'states', 'metric values', 'resource names']) {
       expect(reason).toContain(phrase);
     }
+    // The policy denies only non-TLS publishes and does not exclude identity-authorised publishers.
+    expect(reason).toContain('denies sns:Publish without TLS');
+    expect(reason).not.toContain('may publish');
   });
 });

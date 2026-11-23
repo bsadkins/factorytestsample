@@ -386,7 +386,7 @@ Step Functions execution data is not logged (see [Logging](logging.md)); the inp
 | Name | `CaseInsights-Alarms-<uniqueId>` |
 | Display name | `Support Case Insights alarms (<uniqueId>)` |
 | Subscription | One email subscription to `alarmEmail`, when set. `alarmEmail` is required in prod by the configuration schema and optional in dev. |
-| Publishers | `cloudwatch.amazonaws.com`, allowed `sns:Publish` only for alarms whose ARN matches `arn:aws:cloudwatch:<region>:<account-id>:alarm:CaseInsights-<uniqueId>-*` and only from the deployment account (`aws:SourceAccount`) |
+| Publishers | The topic policy allows `cloudwatch.amazonaws.com` to call `sns:Publish` only for alarms whose ARN matches `arn:aws:cloudwatch:<region>:<account-id>:alarm:CaseInsights-<uniqueId>-*` and only from the deployment account (`aws:SourceAccount`). It grants no other principal access, but principals in the deployment account whose own IAM policies allow `sns:Publish` on the topic can still publish over TLS |
 | Transport | A deny statement (`AllowPublishThroughSSLOnly`) refuses `sns:Publish` when `aws:SecureTransport` is false |
 
 AWS sends a confirmation email to `alarmEmail` after the first deployment. Nothing is delivered until the recipient selects the confirmation link. Check the subscription state with:
@@ -405,7 +405,7 @@ The alarm topic `CaseInsights-Alarms-<uniqueId>` is **not** encrypted at rest. T
 
 - CloudWatch alarms can publish to an encrypted topic only when the topic uses a customer managed KMS key whose key policy lets CloudWatch use it. The AWS managed key `alias/aws/sns` does not allow CloudWatch to publish, and this solution uses no customer managed KMS keys.
 - Notifications contain no case content: metrics are counts and durations with a `service` or resource-name dimension, and no case identifier or case text is part of any alarm. They do contain operational metadata: alarm names and descriptions, old and new states and the state-change reason, metric names, thresholds and values, the AWS account ID, the Region and resource names such as function and queue names. That metadata leaves the account through the confirmed email subscriptions.
-- The topic policy denies any request that does not use TLS, and only `cloudwatch.amazonaws.com` may publish, for this account's alarms named `CaseInsights-<uniqueId>-*`.
+- The topic policy denies `sns:Publish` without TLS and allows `cloudwatch.amazonaws.com` to publish only for this account's alarms named `CaseInsights-<uniqueId>-*`. It does not stop principals in the account whose own IAM policies allow `sns:Publish` on the topic from publishing over TLS; review such grants.
 
 The SNS acknowledgement applies to this topic alone. The storage and queue encryption used by the pipeline is described in [Security](security.md). If your organisation requires encryption at rest for every SNS topic, the change needed is a customer managed KMS key whose key policy allows CloudWatch to use it, set as the topic's key; this repository does not implement that.
 

@@ -56,6 +56,16 @@ def test_analyze_with_bedrock_uses_configured_approved_profile(model_id: str) ->
     kit.bedrock.assert_consumed()
 
 
+def test_analyze_with_bedrock_starts_no_athena_query() -> None:
+    kit = make_kit(dataset())
+    kit.bedrock.reply("Answer from the supplied rows only.")
+    result = call(kit, "analyze_with_bedrock", {"question": "Summarise.", "data": "a,b\n1,2"})
+    assert result["analysis"] == "Answer from the supplied rows only."
+    assert len(kit.bedrock.requests) == 1
+    assert kit.athena.calls == []
+    kit.bedrock.assert_consumed()
+
+
 def test_analyze_with_bedrock_without_data() -> None:
     kit = make_kit()
     kit.bedrock.reply("Answer.")
