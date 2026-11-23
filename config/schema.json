@@ -3,7 +3,7 @@
   "$id": "https://github.com/bsadkins/factorytestsample/config/schema.json",
   "title": "Support Case Insights environment configuration",
   "description": "Configuration for config/<env>.json. The CDK app validates every file against this schema, applies the defaults shown here, then applies the cross-field rules listed in $comment before any stack is synthesised.",
-  "$comment": "Cross-field rules enforced by lib/config/load.ts in addition to this schema: operations.queues.visibilityTimeoutSeconds (when set) >= 6 x operations.functions.consumerTimeoutSeconds; operations.cleanup.graceHours x 60 > operations.workflow.executionTimeoutMinutes; rawRetentionDays x 24 > operations.cleanup.graceHours; every cron schedule uses '?' in exactly one of day-of-month or day-of-week, and each field is valid for EventBridge Scheduler and AWS Glue (minutes 0-59, hours 0-23, day-of-month 1-31 or L, LW, nW, month 1-12 or JAN-DEC, day-of-week 1-7 or SUN-SAT or L, nL, n#k with k 1-5, year 1970-2199; lists, ranges and /increments of these values); apiGatewayLogging.existingRoleArn is in managementAccountId. When synthesising one environment, the app also reads the other config/<env>.json (if present) and rejects different apiGatewayLogging settings for environments in the same account and Region.",
+  "$comment": "Cross-field rules enforced by lib/config/load.ts in addition to this schema: operations.queues.visibilityTimeoutSeconds (when set) >= 6 x operations.functions.consumerTimeoutSeconds; operations.cleanup.graceHours x 60 > operations.workflow.executionTimeoutMinutes; rawRetentionDays x 24 > operations.cleanup.graceHours; every cron schedule uses '?' in exactly one of day-of-month or day-of-week, and each field is valid for EventBridge Scheduler and AWS Glue (minutes 0-59, hours 0-23, day-of-month 1-31 or L, LW, nW, month 1-12 or JAN-DEC, day-of-week 1-7 or SUN-SAT or L, nL, n#k with k 1-5, year 1970-2199; lists, ranges and /increments of these values); schedules.crawler leaves at least 5 minutes between consecutive runs, as AWS Glue requires; apiGatewayLogging.existingRoleArn is in managementAccountId. When synthesising one environment, the app also reads the other config/<env>.json (if present) and rejects different apiGatewayLogging settings for environments in the same account and Region.",
   "type": "object",
   "additionalProperties": false,
   "required": ["uniqueId", "orgId", "managementAccountId", "environment", "memberRoleTargets"],
@@ -175,7 +175,7 @@
         },
         "crawler": {
           "$ref": "#/$defs/cron",
-          "description": "Daily Glue crawler run that refreshes Athena partitions (Analytics only).",
+          "description": "Daily Glue crawler run that refreshes Athena partitions (Analytics only). Runs must be at least 5 minutes apart.",
           "default": "cron(0 9 * * ? *)"
         }
       }

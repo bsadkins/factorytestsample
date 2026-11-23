@@ -2,7 +2,7 @@
  * Field rules for the cron expressions accepted by EventBridge Scheduler and AWS Glue:
  * cron(minutes hours day-of-month month day-of-week year), all in UTC.
  */
-interface CronField {
+export interface CronField {
   readonly name: string;
   readonly min: number;
   readonly max: number;
@@ -13,11 +13,11 @@ interface CronField {
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'] as const;
 const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
 
-const MINUTES: CronField = { name: 'minutes', min: 0, max: 59 };
-const HOURS: CronField = { name: 'hours', min: 0, max: 23 };
-const DAY_OF_MONTH: CronField = { name: 'day-of-month', min: 1, max: 31 };
+export const MINUTES: CronField = { name: 'minutes', min: 0, max: 59 };
+export const HOURS: CronField = { name: 'hours', min: 0, max: 23 };
+export const DAY_OF_MONTH: CronField = { name: 'day-of-month', min: 1, max: 31 };
 const MONTH: CronField = { name: 'month', min: 1, max: 12, names: MONTHS };
-const DAY_OF_WEEK: CronField = { name: 'day-of-week', min: 1, max: 7, names: WEEKDAYS };
+export const DAY_OF_WEEK: CronField = { name: 'day-of-week', min: 1, max: 7, names: WEEKDAYS };
 const YEAR: CronField = { name: 'year', min: 1970, max: 2199 };
 
 /** Maximum occurrence N in day-of-week "D#N" (the Nth weekday D of the month). */
@@ -72,6 +72,31 @@ function checkElement(field: CronField, element: string, alone: boolean): void {
   if (to !== undefined) {
     parseValue(field, to);
   }
+}
+
+/**
+ * Every value a list already accepted by checkList selects, in ascending order. A range whose start
+ * is after its end wraps past the field maximum.
+ */
+export function expandList(field: CronField, value: string): number[] {
+  const span = field.max - field.min + 1;
+  const selected = new Set<number>();
+  for (const element of value.split(',')) {
+    const [base = '', increment] = element.split('/');
+    const step = increment === undefined ? 1 : Number(increment);
+    let from = field.min;
+    let to = field.max;
+    if (base !== '*') {
+      const [start = '', end] = base.split('-');
+      from = parseValue(field, start);
+      to = end !== undefined ? parseValue(field, end) : increment === undefined ? from : field.max;
+    }
+    const length = (to - from + span) % span;
+    for (let offset = 0; offset <= length; offset += step) {
+      selected.add(field.min + ((from - field.min + offset) % span));
+    }
+  }
+  return [...selected].sort((a, b) => a - b);
 }
 
 function checkList(field: CronField, value: string): void {

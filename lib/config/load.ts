@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { glueCrawlerCadenceIssues } from './crawler-cadence';
 import { cronExpressionIssues } from './cron';
 import { type CaseInsightsConfig, ENVIRONMENT_NAMES, type EnvironmentName, type ScheduleConfig } from './types';
 import { CONFIG_DIR, CONFIG_SCHEMA_PATH, ConfigValidationError, readJsonFile, validateAgainstSchema } from './schema-validator';
@@ -18,6 +19,9 @@ function semanticIssues(config: CaseInsightsConfig): string[] {
 
   for (const name of Object.keys(config.schedules) as (keyof ScheduleConfig)[]) {
     issues.push(...cronExpressionIssues(config.schedules[name]).map((issue) => `/schedules/${name} ${issue}`));
+  }
+  if (cronExpressionIssues(config.schedules.crawler).length === 0) {
+    issues.push(...glueCrawlerCadenceIssues(config.schedules.crawler).map((issue) => `/schedules/crawler ${issue}`));
   }
 
   const minimumVisibility = functions.consumerTimeoutSeconds * VISIBILITY_TIMEOUT_MULTIPLIER;

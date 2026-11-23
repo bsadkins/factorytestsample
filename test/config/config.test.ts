@@ -300,6 +300,58 @@ describe('schedules', () => {
     const config = parseConfig(minimalConfig({ schedules: { accountLookup: expression, cleanup: expression, crawler: expression } }));
     expect(config.schedules).toEqual({ accountLookup: expression, cleanup: expression, crawler: expression });
   });
+
+  const glueMinimum = 'AWS Glue crawler schedules need at least 5 minutes between runs';
+
+  test.each([
+    ['every minute', 'cron(* * * * ? *)', '1 minute apart (00:00 and 00:01 UTC)'],
+    ['a one-minute increment', 'cron(0/1 * * * ? *)', '1 minute apart (00:00 and 00:01 UTC)'],
+    ['every minute of one hour', 'cron(* 9 ? * MON-FRI *)', '1 minute apart (09:00 and 09:01 UTC)'],
+    ['a range of adjacent minutes', 'cron(1-3 9 * * ? *)', '1 minute apart (09:01 and 09:02 UTC)'],
+    ['a list of adjacent minutes', 'cron(0,1 9 * * ? *)', '1 minute apart (09:00 and 09:01 UTC)'],
+    ['a list two minutes apart', 'cron(0,2 9 * * ? *)', '2 minutes apart (09:00 and 09:02 UTC)'],
+    ['a short gap later in the list', 'cron(0,30,32 9 * * ? *)', '2 minutes apart (09:30 and 09:32 UTC)'],
+    ['a four-minute increment', 'cron(0/4 9 * * ? *)', '4 minutes apart (09:00 and 09:04 UTC)'],
+    ['a stepped range', 'cron(10-20/3 9 * * ? *)', '3 minutes apart (09:10 and 09:13 UTC)'],
+    ['an increment that wraps into the next hour', 'cron(0/7 * * * ? *)', '4 minutes apart (00:56 and 01:00 UTC)'],
+    ['a late minute before the next scheduled hour', 'cron(0,57 9-10 * * ? *)', '3 minutes apart (09:57 and 10:00 UTC)'],
+    ['a late minute before midnight', 'cron(0,58 0,23 * * ? *)', '2 minutes apart (23:58 and 00:00 UTC the next day)'],
+    ['midnight between adjacent weekdays', 'cron(0,58 0,23 ? * SAT,SUN *)', '2 minutes apart (23:58 and 00:00 UTC the next day)'],
+    ['midnight between the end and start of a month', 'cron(0,58 0,23 1,31 * ? *)', '2 minutes apart (23:58 and 00:00 UTC the next day)'],
+  ])('rejects a crawler schedule with %s', (_name, crawler, gap) => {
+    expect(issuesFor(minimalConfig({ enableAnalytics: true, schedules: { crawler } }))).toEqual([
+      `/schedules/crawler runs ${gap}; ${glueMinimum}`,
+    ]);
+  });
+
+  test.each([
+    'cron(0/5 * * * ? *)',
+    'cron(*/5 * * * ? *)',
+    'cron(0/15 * * * ? *)',
+    'cron(3/5 * * * ? *)',
+    'cron(0,55 9-10 * * ? *)',
+    'cron(0,58 0,23 1 * ? *)',
+    'cron(0,58 0,23 ? * MON,WED *)',
+    'cron(0,58 0,23 L * ? *)',
+    'cron(0,58 0,23 ? * 6#3 *)',
+  ])('accepts the crawler schedule %s', (crawler) => {
+    expect(parseConfig(minimalConfig({ enableAnalytics: true, schedules: { crawler } })).schedules.crawler).toBe(crawler);
+  });
+
+  test('accepts the shipped crawler default', () => {
+    expect(parseConfig(minimalConfig({ enableAnalytics: true })).schedules.crawler).toBe('cron(0 9 * * ? *)');
+  });
+
+  test('accepts one-minute EventBridge Scheduler schedules', () => {
+    const schedules = { accountLookup: 'cron(0/1 * * * ? *)', cleanup: 'cron(0,1 22 * * ? *)' };
+    expect(parseConfig(minimalConfig({ schedules })).schedules).toEqual({ ...schedules, crawler: 'cron(0 9 * * ? *)' });
+  });
+
+  test('reports only field errors for a crawler schedule with an invalid field', () => {
+    expect(issuesFor(minimalConfig({ schedules: { crawler: 'cron(0,1,60 9 * * ? *)' } }))).toEqual([
+      '/schedules/crawler minutes field "0,1,60" is invalid: expected 0-59, got "60"',
+    ]);
+  });
 });
 
 describe('MCP reserved concurrency', () => {

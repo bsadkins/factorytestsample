@@ -111,6 +111,8 @@ Read [Shared API Gateway logging prerequisite](mcp-server-deployment.md#shared-a
 
 Each value is a six-field AWS cron expression, `cron(minutes hours day-of-month month day-of-week year)`, evaluated in UTC. The schema accepts only `cron(...)`, not `rate(...)`, and one of day-of-month or day-of-week must be `?`. Each field must hold values EventBridge Scheduler and AWS Glue accept: minutes 0-59, hours 0-23, day-of-month 1-31 (or `L`, `LW`, `<day>W`), month 1-12 or `JAN`-`DEC`, day-of-week 1-7 or `SUN`-`SAT` (or `L`, `<day>L`, `<day>#<1-5>`) and year 1970-2199, as single values, comma-separated lists, ranges (`MON-FRI`) or increments (`0/15`, `*/5`).
 
+AWS Glue does not run a crawler more often than every 5 minutes, so `schedules.crawler` must leave at least 5 minutes between consecutive runs. The loader rejects every minute (`*`, `0/1`), lists, ranges and increments that put runs closer together (`0,2`, `1-3`, `0/4`), and late minutes that come within 5 minutes of the next scheduled hour (`0/7` runs at :56 and then :00) or, on consecutive days, of the next day's first run. `0/5`, `0/15` and the default are accepted. The EventBridge Scheduler schedules `accountLookup` and `cleanup` have no such minimum and accept one-minute cadences.
+
 | Field | Default | Runs | Effect |
 | --- | --- | --- | --- |
 | `schedules.accountLookup` | `cron(0 0 * * ? *)` (00:00 UTC daily) | EventBridge Scheduler schedule `CaseInsights-AccountLookup-<uniqueId>` | Starts each daily run by listing member accounts |
@@ -185,6 +187,7 @@ These rules are checked after schema validation. Every message below was produce
 | --- | --- |
 | Each cron schedule uses `?` in exactly one of day-of-month and day-of-week | `/schedules/accountLookup must use "?" in exactly one of day-of-month or day-of-week` |
 | Each cron field is in range for its position | `/schedules/accountLookup minutes field "99" is invalid: expected 0-59, got "99"` |
+| `schedules.crawler` leaves at least 5 minutes between runs | `/schedules/crawler runs 2 minutes apart (09:00 and 09:02 UTC); AWS Glue crawler schedules need at least 5 minutes between runs` |
 | `operations.queues.visibilityTimeoutSeconds`, when set, is at least 6 x `consumerTimeoutSeconds` | `/operations/queues/visibilityTimeoutSeconds (600) must be at least 6 x consumerTimeoutSeconds (1800)` |
 | `operations.cleanup.graceHours` x 60 exceeds `workflow.executionTimeoutMinutes` | `/operations/cleanup/graceHours (1h) must exceed workflow.executionTimeoutMinutes (60min) so cleanup never targets running work` |
 | `rawRetentionDays` x 24 exceeds `operations.cleanup.graceHours` | `/rawRetentionDays (7d) must exceed operations.cleanup.graceHours (200h) so raw inputs do not expire before cleanup can reconcile them` |
